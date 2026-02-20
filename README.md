@@ -1,8 +1,22 @@
 # Barnaby
 
-Barnaby is a desktop Electron app for running and coordinating multiple local AI agent panels.
+Barnaby is a desktop AI agent runtime that lets you use your existing AI subscriptions (ChatGPT, Claude, Gemini) as autonomous coding agents.
+
+No API keys.
+No usage billing.
+Just your subscriptions — unlocked.
 
 Website: https://barnaby.build
+
+## Screenshots
+
+### Dark
+
+![Barnaby dark screenshot](docs/screenshots/barnaby-dark.png)
+
+### Light
+
+![Barnaby light screenshot](docs/screenshots/barnaby-light.png)
 
 ## Overview
 

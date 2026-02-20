@@ -124,6 +124,7 @@ type ChatHistoryEntry = {
 type ApplicationSettings = {
   restoreSessionOnStartup: boolean
   themePresetId: string
+  responseStyle: 'concise' | 'standard' | 'detailed'
 }
 
 type ThemePreset = {
@@ -502,6 +503,59 @@ function isLikelyThinkingUpdate(content: string): boolean {
 
   return false
 }
+
+function filterMessagesForPresentation(
+  messages: ChatMessage[],
+  responseStyle: 'concise' | 'standard' | 'detailed',
+): ChatMessage[] {
+  if (responseStyle === 'detailed') return messages
+  if (responseStyle === 'concise') {
+    return messages.filter((m) => !(m.role === 'assistant' && isLikelyThinkingUpdate(m.content)))
+  }
+  const next: ChatMessage[] = []
+  for (let i = 0; i < messages.length; i += 1) {
+    const current = messages[i]
+    const isThinking = current.role === 'assistant' && isLikelyThinkingUpdate(current.content)
+    if (!isThinking) {
+      next.push(current)
+      continue
+    }
+
+    // Group consecutive thinking updates and keep only the latest one
+    // when there is no final assistant response in the same turn.
+    let endOfThinkingRun = i
+    while (
+      endOfThinkingRun + 1 < messages.length &&
+      messages[endOfThinkingRun + 1].role === 'assistant' &&
+      isLikelyThinkingUpdate(messages[endOfThinkingRun + 1].content)
+    ) {
+      endOfThinkingRun += 1
+    }
+
+    let turnBoundary = endOfThinkingRun + 1
+    while (turnBoundary < messages.length && messages[turnBoundary].role !== 'user') {
+      turnBoundary += 1
+    }
+    const hasFinalAssistantInTurn = messages
+      .slice(endOfThinkingRun + 1, turnBoundary)
+      .some((m) => m.role === 'assistant' && !isLikelyThinkingUpdate(m.content))
+
+    if (!hasFinalAssistantInTurn) {
+      const latestThinking = messages[endOfThinkingRun]
+      const prev = next[next.length - 1]
+      const isDuplicate =
+        prev &&
+        prev.role === 'assistant' &&
+        isLikelyThinkingUpdate(prev.content) &&
+        prev.content.trim() === latestThinking.content.trim()
+      if (!isDuplicate) {
+        next.push(latestThinking)
+      }
+    }
+    i = endOfThinkingRun
+  }
+  return next
+}
 const THEME_STORAGE_KEY = 'agentorchestrator.theme'
 const WORKSPACE_STORAGE_KEY = 'agentorchestrator.workspaceRoot'
 const WORKSPACE_LIST_STORAGE_KEY = 'agentorchestrator.workspaceList'
@@ -785,7 +839,13 @@ function getInitialChatHistory(): ChatHistoryEntry[] {
 function getInitialApplicationSettings(): ApplicationSettings {
   try {
     const raw = globalThis.localStorage?.getItem(APP_SETTINGS_STORAGE_KEY)
-    if (!raw) return { restoreSessionOnStartup: true, themePresetId: DEFAULT_THEME_PRESET_ID }
+    if (!raw) {
+      return {
+        restoreSessionOnStartup: true,
+        themePresetId: DEFAULT_THEME_PRESET_ID,
+        responseStyle: 'standard',
+      }
+    }
     const parsed = JSON.parse(raw) as Partial<ApplicationSettings>
     return {
       restoreSessionOnStartup:
@@ -794,9 +854,17 @@ function getInitialApplicationSettings(): ApplicationSettings {
         typeof parsed?.themePresetId === 'string' && parsed.themePresetId
           ? parsed.themePresetId
           : DEFAULT_THEME_PRESET_ID,
+      responseStyle:
+        parsed?.responseStyle === 'concise' || parsed?.responseStyle === 'standard' || parsed?.responseStyle === 'detailed'
+          ? parsed.responseStyle
+          : 'standard',
     }
   } catch {
-    return { restoreSessionOnStartup: true, themePresetId: DEFAULT_THEME_PRESET_ID }
+    return {
+      restoreSessionOnStartup: true,
+      themePresetId: DEFAULT_THEME_PRESET_ID,
+      responseStyle: 'standard',
+    }
   }
 }
 
@@ -1367,10 +1435,12 @@ export default function App() {
   const appStateHydratedRef = useRef(false)
   const appStateSaveTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
   const workspaceSnapshotsRef = useRef<Record<string, WorkspaceUiSnapshot>>({})
+  const startupReadyNotifiedRef = useRef(false)
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('vertical')
   const [showWorkspaceWindow, setShowWorkspaceWindow] = useState(true)
   const [appStateHydrated, setAppStateHydrated] = useState(false)
+  const [workspaceBootstrapComplete, setWorkspaceBootstrapComplete] = useState(false)
   const [pendingWorkspaceSwitch, setPendingWorkspaceSwitch] = useState<{
     targetRoot: string
     source: 'menu' | 'picker' | 'dropdown' | 'workspace-create'
@@ -1388,7 +1458,8 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
     localStorage.setItem(THEME_STORAGE_KEY, theme)
-  }, [theme])
+    void api.setWindowTheme?.(theme).catch(() => {})
+  }, [api, theme])
 
   useEffect(() => {
     const root = document.documentElement
@@ -2010,6 +2081,7 @@ export default function App() {
 
   useEffect(() => {
     if (!appStateHydrated) return
+    setWorkspaceBootstrapComplete(false)
     let disposed = false
     const bootstrapWorkspace = async () => {
       const preferredRoot = workspaceRootRef.current?.trim()
@@ -2035,11 +2107,26 @@ export default function App() {
       }
     }
 
-    void bootstrapWorkspace()
+    void (async () => {
+      try {
+        await bootstrapWorkspace()
+      } finally {
+        if (!disposed) setWorkspaceBootstrapComplete(true)
+      }
+    })()
     return () => {
       disposed = true
     }
   }, [appStateHydrated])
+
+  useEffect(() => {
+    if (startupReadyNotifiedRef.current) return
+    if (!appStateHydrated) return
+    if (!workspaceBootstrapComplete) return
+    if (workspaceTreeLoading || gitStatusLoading) return
+    startupReadyNotifiedRef.current = true
+    void api.notifyRendererReady?.().catch(() => {})
+  }, [api, appStateHydrated, workspaceBootstrapComplete, workspaceTreeLoading, gitStatusLoading])
 
   useEffect(
     () => () => {
@@ -4563,6 +4650,63 @@ export default function App() {
                 </div>
               </section>
 
+              <section className="space-y-3">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Responses</div>
+                <div className="space-y-2 text-sm text-neutral-700 dark:text-neutral-300">
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="response-style"
+                      checked={applicationSettings.responseStyle === 'concise'}
+                      onChange={() =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          responseStyle: 'concise',
+                        }))
+                      }
+                    />
+                    <span>
+                      <span className="font-medium">Concise</span>
+                      <span className="block text-xs text-neutral-500 dark:text-neutral-400">Show direct answers only; hide progress traces.</span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="response-style"
+                      checked={applicationSettings.responseStyle === 'standard'}
+                      onChange={() =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          responseStyle: 'standard',
+                        }))
+                      }
+                    />
+                    <span>
+                      <span className="font-medium">Standard</span>
+                      <span className="block text-xs text-neutral-500 dark:text-neutral-400">Hide repetitive progress; keep useful in-turn context.</span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="response-style"
+                      checked={applicationSettings.responseStyle === 'detailed'}
+                      onChange={() =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          responseStyle: 'detailed',
+                        }))
+                      }
+                    />
+                    <span>
+                      <span className="font-medium">Detailed</span>
+                      <span className="block text-xs text-neutral-500 dark:text-neutral-400">Show all progress and intermediary reasoning updates.</span>
+                    </span>
+                  </label>
+                </div>
+              </section>
+
               <section className="space-y-2">
                 <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Diagnostics</div>
                 <div className="text-xs text-neutral-600 dark:text-neutral-400">
@@ -5035,21 +5179,29 @@ export default function App() {
     const panelFontSizePx = 14 * w.fontScale
     const panelLineHeightPx = 24 * w.fontScale
     const panelTextStyle = { fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }
+    const activity = panelActivityById[w.id]
+    const msSinceLastActivity = activity ? activityClock - activity.lastEventAt : Number.POSITIVE_INFINITY
+    const isRunning = isBusy
+    const isQueued = !isRunning && queueCount > 0
+    const isFinalComplete = !isRunning && !isQueued && activity?.lastEventLabel === 'Turn complete'
+    const hasRecentActivity = msSinceLastActivity < 4000
+    const activityDotClass = isRunning
+      ? 'bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.15)]'
+      : isQueued
+        ? 'bg-amber-500'
+        : isFinalComplete
+          ? 'bg-emerald-500'
+      : hasRecentActivity
+        ? 'bg-sky-500/90'
+        : 'bg-neutral-300 dark:bg-neutral-700'
+    const activityLabel = isRunning ? 'running' : isQueued ? 'queued' : isFinalComplete ? 'done' : hasRecentActivity ? 'recent' : 'idle'
     const sendTitle = isBusy
       ? hasInput
         ? `Queue message${queueCount > 0 ? ` (${queueCount} queued)` : ''}`
         : 'Busy'
-      : 'Send'
-    const activity = panelActivityById[w.id]
-    const msSinceLastActivity = activity ? activityClock - activity.lastEventAt : Number.POSITIVE_INFINITY
-    const isRunning = isBusy
-    const hasRecentActivity = msSinceLastActivity < 4000
-    const activityDotClass = isRunning
-      ? 'bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.15)]'
-      : hasRecentActivity
-        ? 'bg-sky-500/90'
-        : 'bg-neutral-300 dark:bg-neutral-700'
-    const activityLabel = isRunning ? 'running' : hasRecentActivity ? 'recent' : 'idle'
+      : isFinalComplete && !hasInput
+        ? 'Done'
+        : 'Send'
     const secondsAgo = Number.isFinite(msSinceLastActivity) ? Math.max(0, Math.floor(msSinceLastActivity / 1000)) : null
     const activityTitle = activity
       ? `Activity: ${activityLabel}\nLast event: ${activity.lastEventLabel}\n${secondsAgo}s ago\nEvents seen: ${activity.totalEvents}`
@@ -5063,6 +5215,7 @@ export default function App() {
     const panelWorkspaceSettings =
       workspaceSettingsByPath[w.cwd] ?? workspaceSettingsByPath[workspaceRoot]
     const debugControlsVisible = Boolean(panelWorkspaceSettings?.debug)
+    const presentationMessages = filterMessagesForPresentation(w.messages, applicationSettings.responseStyle)
     const contextUsage = estimatePanelContextUsage(w)
     const contextUsagePercent = contextUsage ? Math.max(0, Number(contextUsage.usedPercent.toFixed(1))) : null
     const contextUsageBarClass =
@@ -5133,7 +5286,7 @@ export default function App() {
           className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 space-y-2.5 bg-neutral-50 dark:bg-neutral-950 min-h-0"
           style={panelTextStyle}
         >
-          {w.messages.length === 0 && (
+          {presentationMessages.length === 0 && (
             <div className="mx-auto mt-8 max-w-2xl rounded-2xl border border-dashed border-neutral-300 bg-white/90 px-5 py-5 text-sm shadow-sm dark:border-neutral-700 dark:bg-neutral-900/70">
               <div className="text-base font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
                 Start a new agent turn
@@ -5154,7 +5307,7 @@ export default function App() {
               </div>
             </div>
           )}
-          {w.messages.map((m) => {
+          {presentationMessages.map((m) => {
             let codeBlockIndex = 0
             const shouldCollapseThinking = m.role === 'assistant' && isLikelyThinkingUpdate(m.content)
             const thinkingOpen = thinkingOpenByMessageId[m.id] ?? false
@@ -5183,7 +5336,7 @@ export default function App() {
                     className="group rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-100/80 dark:bg-neutral-950/45"
                   >
                     <summary className="list-none cursor-pointer px-3 py-1.5 text-[10.5px] text-neutral-600 dark:text-neutral-400 flex items-center justify-between">
-                      <span>Thinking / progress updates</span>
+                      <span>Progress update</span>
                       <svg
                         width="12"
                         height="12"
@@ -5501,6 +5654,8 @@ export default function App() {
                   ? hasInput
                     ? 'border-neutral-400 bg-neutral-200 text-neutral-700 hover:bg-neutral-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-600'
                     : 'border-neutral-300 bg-neutral-200 text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400'
+                  : !hasInput && isFinalComplete
+                    ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
                   : hasInput
                     ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
                     : 'border-neutral-300 bg-neutral-100 text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-600',
@@ -5513,6 +5668,10 @@ export default function App() {
                 <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
                   <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeOpacity="0.28" strokeWidth="2" />
                   <path d="M10 3.5a6.5 6.5 0 0 1 6.5 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              ) : !hasInput && isFinalComplete ? (
+                <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                  <path d="M5.2 10.2L8.5 13.5L14.8 7.2" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               ) : (
                 <svg width="14" height="14" viewBox="0 0 20 20" fill="none">

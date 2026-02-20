@@ -1,5 +1,5 @@
-import { app, BrowserWindow, shell, ipcMain, Menu, dialog, screen } from 'electron'
-import { fileURLToPath } from 'node:url'
+import { app, BrowserWindow, shell, ipcMain, Menu, dialog, screen, nativeTheme } from 'electron'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -23,6 +23,7 @@ const RUNTIME_LOG_FILENAME = 'runtime.log'
 const MAX_PERSISTED_CHAT_HISTORY_ENTRIES = 200
 const MAX_EXPLORER_NODES = 2500
 const MAX_FILE_PREVIEW_BYTES = 1024 * 1024
+const STARTUP_SPLASH_TIMEOUT_MS = 30000
 const EXPLORER_ALWAYS_IGNORED_DIRECTORIES = new Set([
   '.git',
   'dist',
@@ -169,10 +170,16 @@ if (os.release().startsWith('6.1')) app.disableHardwareAcceleration()
 if (process.platform === 'win32') app.setAppUserModelId(app.getName())
 
 let win: BrowserWindow | null = null
+let splashWin: BrowserWindow | null = null
 let recentWorkspaces: string[] = []
 let editorMenuEnabled = false
 const preload = path.join(__dirname, '../preload/index.mjs')
 const indexHtml = path.join(RENDERER_DIST, 'index.html')
+let startupRevealTimer: ReturnType<typeof setTimeout> | null = null
+let mainWindowReadyToShow = false
+let rendererStartupReady = false
+let waitForRendererStartup = false
+let mainWindowRevealed = false
 
 const agentClients = new Map<string, AgentClient>()
 const workspaceLockInstanceId = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -198,6 +205,80 @@ function isDirectory(p: string) {
   } catch {
     return false
   }
+}
+
+function clearStartupRevealTimer() {
+  if (!startupRevealTimer) return
+  clearTimeout(startupRevealTimer)
+  startupRevealTimer = null
+}
+
+function closeSplashWindow() {
+  if (!splashWin) return
+  if (!splashWin.isDestroyed()) splashWin.close()
+  splashWin = null
+}
+
+function createSplashWindow() {
+  const splashImagePath = path.join(process.env.VITE_PUBLIC, 'splash.png')
+  if (!fs.existsSync(splashImagePath)) return null
+
+  const splash = new BrowserWindow({
+    width: 560,
+    height: 360,
+    center: true,
+    show: true,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    backgroundColor: '#0b0b0b',
+    autoHideMenuBar: true,
+  })
+  splash.setMenuBarVisibility(false)
+  const splashImageUrl = pathToFileURL(splashImagePath).toString()
+  const splashHtml = [
+    '<!doctype html>',
+    '<html>',
+    '<head>',
+    '<meta charset="utf-8" />',
+    '<meta name="viewport" content="width=device-width, initial-scale=1" />',
+    '<style>',
+    'html, body { margin: 0; width: 100%; height: 100%; background: #0b0b0b; overflow: hidden; }',
+    '.root { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }',
+    'img { max-width: 90%; max-height: 90%; object-fit: contain; user-select: none; -webkit-user-drag: none; }',
+    '</style>',
+    '</head>',
+    '<body>',
+    `<div class="root"><img src="${splashImageUrl}" alt="Barnaby splash" /></div>`,
+    '</body>',
+    '</html>',
+  ].join('')
+  void splash.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(splashHtml)}`).catch(() => {})
+  splash.on('closed', () => {
+    if (splashWin === splash) splashWin = null
+  })
+  return splash
+}
+
+function revealMainWindow() {
+  if (!win || mainWindowRevealed) return
+  mainWindowRevealed = true
+  clearStartupRevealTimer()
+  closeSplashWindow()
+  win.maximize()
+  win.show()
+}
+
+function maybeRevealMainWindow() {
+  if (!win) return
+  if (mainWindowRevealed) return
+  if (!mainWindowReadyToShow) return
+  if (waitForRendererStartup && !rendererStartupReady) return
+  revealMainWindow()
 }
 
 function copyDirectoryRecursive(sourceDir: string, destinationDir: string, skipNames = new Set<string>()) {
@@ -1214,6 +1295,24 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
 }
 
 async function createWindow() {
+  clearStartupRevealTimer()
+  closeSplashWindow()
+  mainWindowReadyToShow = false
+  rendererStartupReady = false
+  waitForRendererStartup = false
+  mainWindowRevealed = false
+
+  splashWin = createSplashWindow()
+  waitForRendererStartup = Boolean(splashWin)
+  if (!waitForRendererStartup) {
+    rendererStartupReady = true
+  } else {
+    startupRevealTimer = setTimeout(() => {
+      rendererStartupReady = true
+      maybeRevealMainWindow()
+    }, STARTUP_SPLASH_TIMEOUT_MS)
+  }
+
   const { width: workAreaWidth, height: workAreaHeight } = screen.getPrimaryDisplay().workAreaSize
   const startupWidth = Math.floor(workAreaWidth / 5)
   const startupHeight = Math.floor(workAreaHeight * 0.9)
@@ -1244,8 +1343,8 @@ async function createWindow() {
   }
 
   win.once('ready-to-show', () => {
-    win?.maximize()
-    win?.show()
+    mainWindowReadyToShow = true
+    maybeRevealMainWindow()
   })
 
   // Make all links open with the browser, not with the application
@@ -1271,6 +1370,8 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   win = null
+  closeSplashWindow()
+  clearStartupRevealTimer()
   releaseAllWorkspaceLocks()
   for (const client of agentClients.values()) {
     (client as { close: () => Promise<void> }).close().catch(() => {})
@@ -1280,6 +1381,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  closeSplashWindow()
+  clearStartupRevealTimer()
   releaseAllWorkspaceLocks()
   for (const client of agentClients.values()) {
     (client as { close: () => Promise<void> }).close().catch(() => {})
@@ -1381,6 +1484,21 @@ ipcMain.handle('agentorchestrator:loadAppState', async () => {
 
 ipcMain.handle('agentorchestrator:saveAppState', async (_evt, state: unknown) => {
   return writePersistedAppState(state)
+})
+
+ipcMain.handle('agentorchestrator:setWindowTheme', async (_evt, requestedTheme: unknown) => {
+  const themeSource =
+    requestedTheme === 'light' || requestedTheme === 'dark' || requestedTheme === 'system'
+      ? requestedTheme
+      : 'system'
+  nativeTheme.themeSource = themeSource
+  return { ok: true, themeSource, shouldUseDarkColors: nativeTheme.shouldUseDarkColors }
+})
+
+ipcMain.handle('agentorchestrator:rendererReady', async () => {
+  rendererStartupReady = true
+  maybeRevealMainWindow()
+  return { ok: true }
 })
 
 ipcMain.handle('agentorchestrator:getDiagnosticsInfo', async () => {

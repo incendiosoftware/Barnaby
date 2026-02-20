@@ -91,6 +91,16 @@ const api = {
       savedAt: number
     }>
   },
+  setWindowTheme(theme: 'light' | 'dark' | 'system') {
+    return ipcRenderer.invoke('agentorchestrator:setWindowTheme', theme) as Promise<{
+      ok: boolean
+      themeSource: 'light' | 'dark' | 'system'
+      shouldUseDarkColors: boolean
+    }>
+  },
+  notifyRendererReady() {
+    return ipcRenderer.invoke('agentorchestrator:rendererReady') as Promise<{ ok: boolean }>
+  },
   getDiagnosticsInfo() {
     return ipcRenderer.invoke('agentorchestrator:getDiagnosticsInfo') as Promise<{
       userDataPath: string

@@ -1,7 +1,7 @@
 {
   "name": "barnaby",
   "productName": "Barnaby",
-  "version": "0.0.56",
+  "version": "0.0.58",
   "main": "dist-electron/main/index.js",
   "description": "Barnaby: local agent loops without API keys.",
   "author": "stuart",

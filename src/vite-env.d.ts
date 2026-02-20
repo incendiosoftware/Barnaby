@@ -80,6 +80,12 @@ interface Window {
       path: string
       savedAt: number
     }>
+    setWindowTheme(theme: 'light' | 'dark' | 'system'): Promise<{
+      ok: boolean
+      themeSource: 'light' | 'dark' | 'system'
+      shouldUseDarkColors: boolean
+    }>
+    notifyRendererReady(): Promise<{ ok: boolean }>
     getDiagnosticsInfo(): Promise<{
       userDataPath: string
       storageDir: string

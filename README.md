@@ -1,11 +1,12 @@
-# Agent Orchestrator
+# Barnaby Agent Orchestrator
 
 Desktop Electron app for running and coordinating multiple local AI agent panels.
 
 ## Overview
 
-Agent Orchestrator provides:
+Barnaby provides:
 
+- Subscription based parallel agents, not expensive API
 - Multiple agent panels with split layouts (horizontal, vertical, grid)
 - Workspace selection and per-workspace defaults
 - Model setup and provider routing (Codex and Gemini)

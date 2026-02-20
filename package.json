@@ -1,0 +1,53 @@
+{
+  "name": "agent-orchestrator",
+  "productName": "Agent Orchestrator",
+  "version": "0.0.9",
+  "main": "dist-electron/main/index.js",
+  "description": "Agent Orchestrator: local agent loops without API keys.",
+  "author": "stuart",
+  "license": "MIT",
+  "private": true,
+  "debug": {
+    "env": {
+      "VITE_DEV_SERVER_URL": "http://127.0.0.1:7777/"
+    }
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build:dist": "tsc && vite build",
+    "build": "npm run build:dist && electron-builder",
+    "package:win": "npm run build:dist && electron-packager . FireHarness --platform=win32 --arch=x64 --out=release/0.0.1/packaged --overwrite --asar --prune=true --icon=public/favicon.ico",
+    "preview": "vite preview",
+    "pretest": "vite build --mode=test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@google/genai": "^1.42.0",
+    "electron-updater": "^6.3.9",
+    "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^4.6.4",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@electron/packager": "^19.0.5",
+    "@playwright/test": "^1.48.2",
+    "@tailwindcss/typography": "^0.5.19",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "autoprefixer": "^10.4.20",
+    "electron": "^33.2.0",
+    "electron-builder": "^26.8.1",
+    "postcss": "^8.4.49",
+    "postcss-import": "^16.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.4.2",
+    "vite": "^5.4.11",
+    "vite-plugin-electron": "^0.29.0",
+    "vite-plugin-electron-renderer": "^0.14.6",
+    "vitest": "^2.1.5"
+  }
+}

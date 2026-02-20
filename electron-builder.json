@@ -33,16 +33,16 @@
         ]
       }
     ],
-    "artifactName": "AgentOrchestrator_${version}_${arch}.${ext}"
+    "artifactName": "Barnaby_${version}_${arch}.${ext}"
   },
   "nsis": {
-    "artifactName": "AgentOrchestrator_${version}_setup.${ext}",
+    "artifactName": "Barnaby_${version}_setup.${ext}",
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": false
   },
   "portable": {
-    "artifactName": "AgentOrchestrator_${version}_portable.${ext}"
+    "artifactName": "Barnaby_${version}_portable.${ext}"
   }
 }

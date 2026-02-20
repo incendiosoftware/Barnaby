@@ -29,13 +29,89 @@ type WorkspaceTreeOptions = {
   includeNodeModules?: boolean
 }
 
+type ProviderName = 'codex' | 'gemini'
+type ProviderAuthStatus = {
+  provider: ProviderName
+  installed: boolean
+  authenticated: boolean
+  detail: string
+  checkedAt: number
+}
+
+type WorkspaceLockOwner = {
+  pid: number
+  hostname: string
+  acquiredAt: number
+  heartbeatAt: number
+}
+
+type WorkspaceLockAcquireResult =
+  | {
+      ok: true
+      workspaceRoot: string
+      lockFilePath: string
+    }
+  | {
+      ok: false
+      reason: 'invalid-workspace' | 'in-use' | 'error'
+      message: string
+      workspaceRoot: string
+      lockFilePath: string
+      owner?: WorkspaceLockOwner | null
+    }
+
 // --------- Expose a narrow API to the Renderer process ---------
 const api = {
   connect(agentWindowId: string, options: CodexConnectOptions) {
     return ipcRenderer.invoke('agentorchestrator:connect', agentWindowId, options) as Promise<{ threadId: string }>
   },
-  sendMessage(agentWindowId: string, text: string) {
-    return ipcRenderer.invoke('agentorchestrator:sendMessage', agentWindowId, text) as Promise<void>
+  sendMessage(agentWindowId: string, text: string, imagePaths?: string[]) {
+    return ipcRenderer.invoke('agentorchestrator:sendMessageEx', agentWindowId, {
+      text,
+      imagePaths: imagePaths ?? [],
+    }) as Promise<void>
+  },
+  loadChatHistory() {
+    return ipcRenderer.invoke('agentorchestrator:loadChatHistory') as Promise<unknown[]>
+  },
+  saveChatHistory(entries: unknown[]) {
+    return ipcRenderer.invoke('agentorchestrator:saveChatHistory', entries) as Promise<{
+      ok: boolean
+      count: number
+      path: string
+    }>
+  },
+  loadAppState() {
+    return ipcRenderer.invoke('agentorchestrator:loadAppState') as Promise<unknown | null>
+  },
+  saveAppState(state: unknown) {
+    return ipcRenderer.invoke('agentorchestrator:saveAppState', state) as Promise<{
+      ok: boolean
+      path: string
+      savedAt: number
+    }>
+  },
+  getDiagnosticsInfo() {
+    return ipcRenderer.invoke('agentorchestrator:getDiagnosticsInfo') as Promise<{
+      userDataPath: string
+      storageDir: string
+      chatHistoryPath: string
+      appStatePath: string
+      runtimeLogPath: string
+    }>
+  },
+  openRuntimeLog() {
+    return ipcRenderer.invoke('agentorchestrator:openRuntimeLog') as Promise<{
+      ok: boolean
+      path: string
+      error?: string
+    }>
+  },
+  openExternalUrl(url: string) {
+    return ipcRenderer.invoke('agentorchestrator:openExternalUrl', url) as Promise<{
+      ok: boolean
+      error?: string
+    }>
   },
   interrupt(agentWindowId: string) {
     return ipcRenderer.invoke('agentorchestrator:interrupt', agentWindowId) as Promise<void>
@@ -48,6 +124,18 @@ const api = {
   },
   writeWorkspaceConfig(folderPath: string) {
     return ipcRenderer.invoke('agentorchestrator:writeWorkspaceConfig', folderPath) as Promise<boolean>
+  },
+  claimWorkspace(workspaceRoot: string) {
+    return ipcRenderer.invoke('agentorchestrator:claimWorkspace', workspaceRoot) as Promise<WorkspaceLockAcquireResult>
+  },
+  releaseWorkspace(workspaceRoot: string) {
+    return ipcRenderer.invoke('agentorchestrator:releaseWorkspace', workspaceRoot) as Promise<boolean>
+  },
+  savePastedImage(dataUrl: string, mimeType?: string) {
+    return ipcRenderer.invoke('agentorchestrator:savePastedImage', dataUrl, mimeType) as Promise<{
+      path: string
+      mimeType: string
+    }>
   },
   listWorkspaceTree(workspaceRoot: string, options?: WorkspaceTreeOptions) {
     return ipcRenderer.invoke('agentorchestrator:listWorkspaceTree', workspaceRoot, options) as Promise<{
@@ -63,6 +151,23 @@ const api = {
       binary: boolean
       content: string
     }>
+  },
+  readWorkspaceTextFile(workspaceRoot: string, relativePath: string) {
+    return ipcRenderer.invoke('agentorchestrator:readWorkspaceTextFile', workspaceRoot, relativePath) as Promise<{
+      relativePath: string
+      size: number
+      binary: boolean
+      content: string
+    }>
+  },
+  writeWorkspaceFile(workspaceRoot: string, relativePath: string, content: string) {
+    return ipcRenderer.invoke('agentorchestrator:writeWorkspaceFile', workspaceRoot, relativePath, content) as Promise<{
+      relativePath: string
+      size: number
+    }>
+  },
+  pickWorkspaceSavePath(workspaceRoot: string, relativePath: string) {
+    return ipcRenderer.invoke('agentorchestrator:pickWorkspaceSavePath', workspaceRoot, relativePath) as Promise<string | null>
   },
   getGitStatus(workspaceRoot: string) {
     return ipcRenderer.invoke('agentorchestrator:getGitStatus', workspaceRoot) as Promise<{
@@ -89,6 +194,15 @@ const api = {
   },
   setRecentWorkspaces(list: string[]) {
     ipcRenderer.send('agentorchestrator:setRecentWorkspaces', list)
+  },
+  setEditorMenuState(enabled: boolean) {
+    ipcRenderer.send('agentorchestrator:setEditorMenuState', Boolean(enabled))
+  },
+  getProviderAuthStatus(provider: ProviderName) {
+    return ipcRenderer.invoke('agentorchestrator:getProviderAuthStatus', provider) as Promise<ProviderAuthStatus>
+  },
+  startProviderLogin(provider: ProviderName) {
+    return ipcRenderer.invoke('agentorchestrator:startProviderLogin', provider) as Promise<{ started: boolean; detail: string }>
   },
   onEvent(cb: (payload: { agentWindowId: string; evt: FireHarnessCodexEvent }) => void) {
     const listener = (_event: IpcRendererEvent, payload: { agentWindowId: string; evt: FireHarnessCodexEvent }) => cb(payload)

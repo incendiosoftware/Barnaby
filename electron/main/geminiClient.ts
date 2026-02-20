@@ -16,12 +16,40 @@ export class GeminiClient extends EventEmitter {
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeProc: ChildProcessWithoutNullStreams | null = null
 
+  private normalizeModelId(model: string) {
+    const legacyMap: Record<string, string> = {
+      'gemini-1.5-pro': 'gemini-2.0-flash',
+      'gemini-1.5-flash': 'gemini-2.0-flash',
+      'gemini-pro': 'gemini-2.0-flash',
+      'gemini-1.0-pro': 'gemini-2.0-flash',
+    }
+    return legacyMap[model] ?? model
+  }
+
+  private isModelNotFoundError(message: string) {
+    const lower = message.toLowerCase()
+    return (
+      lower.includes('modelnotfound') ||
+      lower.includes('requested entity was not found') ||
+      (lower.includes('not found') && lower.includes('model'))
+    )
+  }
+
   emitEvent(evt: GeminiClientEvent) {
     this.emit('event', evt)
   }
 
   async connect(options: GeminiConnectOptions) {
-    this.model = options.model || 'gemini-2.0-flash'
+    const requestedModel = options.model || 'gemini-2.0-flash'
+    const normalized = this.normalizeModelId(requestedModel)
+    this.model = normalized
+    if (normalized !== requestedModel) {
+      this.emitEvent({
+        type: 'status',
+        status: 'starting',
+        message: `Model ${requestedModel} is deprecated/unavailable. Using ${normalized}.`,
+      })
+    }
     this.emitEvent({ type: 'status', status: 'starting', message: 'Connecting to Gemini CLI...' })
     await this.assertGeminiCliAvailable()
     this.history = []
@@ -39,17 +67,17 @@ export class GeminiClient extends EventEmitter {
       'You are a coding assistant running inside Agent Orchestrator. Complete tasks fully. Do not stop after describing a plan - execute the plan and provide concrete outputs.'
     const prompt = this.buildPrompt(COMPLETION_SYSTEM)
 
-    try {
+    const runWithModel = async (modelId: string) => {
       let full = ''
-      await new Promise<void>((resolve, reject) => {
-        const args = ['-m', this.model, '-p', prompt]
+      await new Promise<string>((resolve, reject) => {
+        const args = ['-m', modelId, '-p', prompt]
         const proc =
           process.platform === 'win32'
             ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
-                stdio: ['ignore', 'pipe', 'pipe'],
+                stdio: ['pipe', 'pipe', 'pipe'],
                 windowsHide: true,
               })
-            : spawn('gemini', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+            : spawn('gemini', args, { stdio: ['pipe', 'pipe', 'pipe'] })
 
         this.activeProc = proc
         proc.stdout.setEncoding('utf8')
@@ -69,15 +97,45 @@ export class GeminiClient extends EventEmitter {
         proc.on('error', (err) => reject(err))
         proc.on('exit', (code) => {
           this.activeProc = null
-          if (code === 0) resolve()
+          if (code === 0) resolve(full)
           else reject(new Error(stderr.trim() || `Gemini CLI exited with code ${code ?? 'unknown'}`))
         })
       })
+      return full
+    }
+
+    try {
+      let full = await runWithModel(this.model)
+
+      // Auto-recover once if selected model no longer exists.
+      if (!full.trim()) {
+        // no-op: keep behavior unchanged
+      }
 
       this.history.push({ role: 'assistant', text: full.trim() || full })
       this.emitEvent({ type: 'assistantCompleted' })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
+      if (this.isModelNotFoundError(msg) && this.model !== 'gemini-2.0-flash') {
+        try {
+          this.emitEvent({
+            type: 'status',
+            status: 'starting',
+            message: `Model "${this.model}" not found. Retrying with gemini-2.0-flash...`,
+          })
+          this.model = 'gemini-2.0-flash'
+          const fallbackFull = await runWithModel(this.model)
+          this.history.push({ role: 'assistant', text: fallbackFull.trim() || fallbackFull })
+          this.emitEvent({ type: 'status', status: 'ready', message: `Connected (using ${this.model})` })
+          this.emitEvent({ type: 'assistantCompleted' })
+          return
+        } catch (retryErr: unknown) {
+          const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr)
+          this.emitEvent({ type: 'status', status: 'error', message: retryMsg })
+          this.emitEvent({ type: 'assistantCompleted' })
+          return
+        }
+      }
       this.emitEvent({ type: 'status', status: 'error', message: msg })
       this.emitEvent({ type: 'assistantCompleted' })
     }

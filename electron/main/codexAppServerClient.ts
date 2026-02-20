@@ -154,6 +154,24 @@ export class CodexAppServerClient extends EventEmitter {
     if (turnId && typeof turnId === 'string') this.activeTurnId = turnId
   }
 
+  async sendUserMessageWithImages(text: string, localImagePaths: string[]) {
+    if (!this.threadId) throw new Error('Not connected (no threadId).')
+    const trimmed = text.trim()
+    const imagePaths = (localImagePaths ?? []).filter((p) => typeof p === 'string' && p.trim())
+    if (!trimmed && imagePaths.length === 0) return
+
+    const input: Array<{ type: 'text'; text: string } | { type: 'localImage'; path: string }> = []
+    if (trimmed) input.push({ type: 'text', text: trimmed })
+    for (const path of imagePaths) input.push({ type: 'localImage', path })
+
+    const turnStart = await this.sendRequest('turn/start', {
+      threadId: this.threadId,
+      input,
+    })
+    const turnId = (turnStart as any)?.turn?.id
+    if (turnId && typeof turnId === 'string') this.activeTurnId = turnId
+  }
+
   async interruptActiveTurn() {
     if (!this.threadId || !this.activeTurnId) return
     await this.sendRequest('turn/interrupt', { threadId: this.threadId, turnId: this.activeTurnId })

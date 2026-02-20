@@ -1,6 +1,6 @@
 # Barnaby Agent Orchestrator
 
-Desktop Electron app for running and coordinating multiple local AI agent panels.
+Desktop Agent IDE app (React/Electron) for running and coordinating multiple local AI agent panels using subscriptions not API tokens.
 
 ## Overview
 

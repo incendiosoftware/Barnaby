@@ -38,6 +38,8 @@ npm run dev
 npm run build:dist
 ```
 
+`build:dist` automatically increments the app version on every run.
+
 This generates:
 
 - `dist/` (renderer)
@@ -49,7 +51,13 @@ This generates:
 npm run build
 ```
 
-This runs production build and packages installers/artifacts into `release/`.
+`build` now creates **portable-only** output (Windows) and increments version via `build:dist`.
+
+For full release artifacts (installer + portable), run:
+
+```sh
+npm run build:release
+```
 
 ## Project Structure
 

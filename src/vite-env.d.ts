@@ -22,6 +22,15 @@ type GitStatusEntry = {
   renamedFrom?: string
 }
 
+type ProviderName = 'codex' | 'gemini'
+type ProviderAuthStatus = {
+  provider: ProviderName
+  installed: boolean
+  authenticated: boolean
+  detail: string
+  checkedAt: number
+}
+
 interface Window {
   agentOrchestrator: {
     connect(
@@ -36,11 +45,15 @@ interface Window {
         modelConfig?: Record<string, string>
       },
     ): Promise<{ threadId: string }>
-    sendMessage(agentWindowId: string, text: string): Promise<void>
+    sendMessage(agentWindowId: string, text: string, imagePaths?: string[]): Promise<void>
     interrupt(agentWindowId: string): Promise<void>
     disconnect(agentWindowId: string): Promise<void>
     openFolderDialog(): Promise<string | null>
     writeWorkspaceConfig(folderPath: string): Promise<boolean>
+    savePastedImage(dataUrl: string, mimeType?: string): Promise<{
+      path: string
+      mimeType: string
+    }>
     listWorkspaceTree(workspaceRoot: string, options?: WorkspaceTreeOptions): Promise<{
       nodes: WorkspaceTreeNode[]
       truncated: boolean
@@ -52,6 +65,17 @@ interface Window {
       binary: boolean
       content: string
     }>
+    readWorkspaceTextFile(workspaceRoot: string, relativePath: string): Promise<{
+      relativePath: string
+      size: number
+      binary: boolean
+      content: string
+    }>
+    writeWorkspaceFile(workspaceRoot: string, relativePath: string, content: string): Promise<{
+      relativePath: string
+      size: number
+    }>
+    pickWorkspaceSavePath(workspaceRoot: string, relativePath: string): Promise<string | null>
     getGitStatus(workspaceRoot: string): Promise<{
       ok: boolean
       branch: string
@@ -66,6 +90,9 @@ interface Window {
       error?: string
     }>
     setRecentWorkspaces(list: string[]): void
+    setEditorMenuState(enabled: boolean): void
+    getProviderAuthStatus(provider: ProviderName): Promise<ProviderAuthStatus>
+    startProviderLogin(provider: ProviderName): Promise<{ started: boolean; detail: string }>
     onEvent(cb: (payload: { agentWindowId: string; evt: any }) => void): () => void
     onMenu(cb: (payload: { action: string; path?: string }) => void): () => void
   }

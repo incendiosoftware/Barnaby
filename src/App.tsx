@@ -6,7 +6,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 type Theme = 'light' | 'dark'
 type ChatRole = 'user' | 'assistant' | 'system'
 type MessageFormat = 'text' | 'markdown'
-type ChatMessage = { id: string; role: ChatRole; content: string; format?: MessageFormat }
+type PastedImageAttachment = { id: string; path: string; label: string; mimeType?: string }
+type ChatMessage = { id: string; role: ChatRole; content: string; format?: MessageFormat; attachments?: PastedImageAttachment[] }
 type PermissionMode = 'verify-first' | 'proceed-always'
 type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 
@@ -23,6 +24,7 @@ type AgentPanelState = {
   connected: boolean
   streaming: boolean
   messages: ChatMessage[]
+  attachments: PastedImageAttachment[]
   input: string
   pendingInputs: string[]
   fontScale: number
@@ -38,6 +40,7 @@ type WorkspaceSettings = {
   defaultModel: string
   permissionMode: PermissionMode
   sandbox: SandboxMode
+  debug: boolean
 }
 
 type WorkspaceTreeNode = {
@@ -81,9 +84,37 @@ type FilePreviewState = {
   error?: string
 }
 
+type EditorPanelState = {
+  id: string
+  workspaceRoot: string
+  relativePath: string
+  title: string
+  fontScale: number
+  content: string
+  size: number
+  loading: boolean
+  saving: boolean
+  dirty: boolean
+  binary: boolean
+  error?: string
+  savedAt?: number
+}
+
 type ExplorerPrefs = {
   showHiddenFiles: boolean
   showNodeModules: boolean
+}
+
+type ChatHistoryEntry = {
+  id: string
+  title: string
+  savedAt: number
+  workspaceRoot: string
+  model: string
+  permissionMode: PermissionMode
+  sandbox: SandboxMode
+  fontScale: number
+  messages: ChatMessage[]
 }
 
 type PanelActivityState = {
@@ -91,6 +122,13 @@ type PanelActivityState = {
   lastEventLabel: string
   totalEvents: number
   recent?: ActivityFeedItem[]
+}
+
+type PanelDebugEntry = {
+  id: string
+  at: number
+  stage: string
+  detail: string
 }
 
 type ActivityKind = 'approval' | 'command' | 'reasoning' | 'event'
@@ -113,11 +151,19 @@ type ModelInterface = {
   displayName: string
   provider: ModelProvider
   enabled: boolean
-  config?: Record<string, string> // e.g. apiKey for Gemini
+  config?: Record<string, string>
 }
 
 type ModelConfig = {
   interfaces: ModelInterface[]
+}
+
+type ProviderAuthStatus = {
+  provider: ModelProvider
+  installed: boolean
+  authenticated: boolean
+  detail: string
+  checkedAt: number
 }
 
 const DEFAULT_MODEL_INTERFACES: ModelInterface[] = [
@@ -130,6 +176,15 @@ const DEFAULT_MODEL_INTERFACES: ModelInterface[] = [
 
 const MAX_PANELS = 5
 const MAX_AUTO_CONTINUE = 3
+const MODAL_BACKDROP_CLASS = 'fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px] flex items-center justify-center p-4'
+const MODAL_CARD_CLASS = 'rounded-2xl border border-neutral-200/80 dark:border-neutral-800 bg-white/95 dark:bg-neutral-950 shadow-2xl'
+const UI_BUTTON_SECONDARY_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+const UI_BUTTON_PRIMARY_CLASS = 'px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-500'
+const UI_ICON_BUTTON_CLASS = 'h-9 w-9 inline-flex items-center justify-center rounded-lg border border-neutral-300 bg-white hover:bg-neutral-50 shadow-sm dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-800'
+const UI_TOOLBAR_ICON_BUTTON_CLASS = 'h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+const UI_INPUT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100'
+const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100'
 
 function looksIncomplete(content: string): boolean {
   const t = content.trim().toLowerCase()
@@ -154,12 +209,67 @@ function looksIncomplete(content: string): boolean {
   if (t.endsWith('...')) return true
   return false
 }
+
+function isLikelyThinkingUpdate(content: string): boolean {
+  const text = content.trim()
+  if (!text) return false
+  if (text.includes('```')) return false
+  if (/^#{1,6}\s/m.test(text)) return false
+  const lower = text.toLowerCase().replace(/\s+/g, ' ')
+  const markers = [
+    "i'll ",
+    'i will ',
+    "i'm ",
+    'i am ',
+    'let me ',
+    'next i',
+    'now i',
+    'working on',
+    'checking',
+    'verifying',
+    'reviewing',
+    'searching',
+    'scanning',
+    'applying',
+    'updating',
+    'editing',
+    'running',
+    'testing',
+    'implementing',
+    'i found ',
+    'i located ',
+    'i patched ',
+    'i fixed ',
+    'i am checking ',
+    "i'm checking ",
+  ]
+  if (markers.some((m) => lower.includes(m))) return true
+
+  if (
+    /^i\s/.test(lower) &&
+    /\b(checking|verifying|reviewing|scanning|searching|looking|working|patching|editing|updating|running|testing|implementing|applying|fixing|changing|replacing|adding|removing|wiring)\b/.test(lower)
+  ) {
+    return true
+  }
+
+  const lines = text.split(/\r?\n/).filter((line) => line.trim())
+  if (
+    lines.length >= 2 &&
+    /\b(i|i'm|i am|i'll|i will)\b/.test(lower) &&
+    /\b(next|then|now)\b/.test(lower)
+  ) {
+    return true
+  }
+
+  return false
+}
 const THEME_STORAGE_KEY = 'agentorchestrator.theme'
 const WORKSPACE_STORAGE_KEY = 'agentorchestrator.workspaceRoot'
 const WORKSPACE_LIST_STORAGE_KEY = 'agentorchestrator.workspaceList'
 const WORKSPACE_SETTINGS_STORAGE_KEY = 'agentorchestrator.workspaceSettings'
 const MODEL_CONFIG_STORAGE_KEY = 'agentorchestrator.modelConfig'
 const EXPLORER_PREFS_STORAGE_KEY = 'agentorchestrator.explorerPrefsByWorkspace'
+const CHAT_HISTORY_STORAGE_KEY = 'agentorchestrator.chatHistory'
 const MIN_FONT_SCALE = 0.75
 const MAX_FONT_SCALE = 1.5
 const FONT_SCALE_STEP = 0.05
@@ -168,9 +278,35 @@ const DEFAULT_EXPLORER_PREFS: ExplorerPrefs = { showHiddenFiles: false, showNode
 const CONNECT_TIMEOUT_MS = 15000
 const TURN_START_TIMEOUT_MS = 15000
 const STALL_WATCHDOG_MS = 30000
+const COLLAPSIBLE_CODE_MIN_LINES = 14
+const MAX_CHAT_HISTORY_ENTRIES = 80
+
+function getNextFontScale(current: number, deltaY: number) {
+  const direction = deltaY < 0 ? 1 : -1
+  return Math.max(MIN_FONT_SCALE, Math.min(MAX_FONT_SCALE, Number((current + direction * FONT_SCALE_STEP).toFixed(2))))
+}
+
+function isZoomWheelGesture(e: { ctrlKey: boolean; metaKey: boolean }) {
+  return e.ctrlKey || e.metaKey
+}
 
 function newId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function fileNameFromRelativePath(relativePath: string) {
+  const parts = relativePath.split('/')
+  return parts[parts.length - 1] || relativePath
+}
+
+function toLocalFileUrl(filePath: string) {
+  const normalized = String(filePath ?? '').replace(/\\/g, '/')
+  if (!normalized) return ''
+  if (/^file:\/\//i.test(normalized)) return normalized
+  if (normalized.startsWith('//')) return `file:${encodeURI(normalized)}`
+  if (/^[a-zA-Z]:\//.test(normalized)) return `file:///${encodeURI(normalized)}`
+  if (normalized.startsWith('/')) return `file://${encodeURI(normalized)}`
+  return encodeURI(normalized)
 }
 
 function getInitialTheme(): Theme {
@@ -209,13 +345,102 @@ function getInitialWorkspaceList(): string[] {
   }
 }
 
+function cloneChatMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) => ({
+    ...m,
+    attachments: m.attachments ? m.attachments.map((a) => ({ ...a })) : undefined,
+  }))
+}
+
+function parseHistoryMessages(raw: unknown): ChatMessage[] {
+  if (!Array.isArray(raw)) return []
+  const next: ChatMessage[] = []
+  for (const message of raw) {
+    if (!message || typeof message !== 'object') continue
+    const record = message as Partial<ChatMessage>
+    const role: ChatRole =
+      record.role === 'user' || record.role === 'assistant' || record.role === 'system'
+        ? record.role
+        : 'system'
+    const format: MessageFormat | undefined =
+      record.format === 'text' || record.format === 'markdown' ? record.format : undefined
+    const attachments = Array.isArray(record.attachments)
+      ? record.attachments
+        .filter((x): x is PastedImageAttachment => Boolean(x && typeof x === 'object'))
+        .map((x) => ({
+          id: typeof x.id === 'string' && x.id ? x.id : newId(),
+          path: typeof x.path === 'string' ? x.path : '',
+          label: typeof x.label === 'string' ? x.label : 'attachment',
+          mimeType: typeof x.mimeType === 'string' ? x.mimeType : undefined,
+        }))
+        .filter((x) => Boolean(x.path))
+      : undefined
+
+    next.push({
+      id: typeof record.id === 'string' && record.id ? record.id : newId(),
+      role,
+      content: typeof record.content === 'string' ? record.content : '',
+      format,
+      attachments: attachments && attachments.length > 0 ? attachments : undefined,
+    })
+  }
+  return next
+}
+
+function getInitialChatHistory(): ChatHistoryEntry[] {
+  try {
+    const raw = globalThis.localStorage?.getItem(CHAT_HISTORY_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    const entries: ChatHistoryEntry[] = []
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object') continue
+      const record = item as Partial<ChatHistoryEntry>
+      const messages = parseHistoryMessages(record.messages)
+      if (messages.length === 0) continue
+      const title = typeof record.title === 'string' && record.title.trim() ? record.title.trim() : 'Untitled chat'
+      const savedAt = typeof record.savedAt === 'number' ? record.savedAt : Date.now()
+      const sandbox: SandboxMode =
+        record.sandbox === 'read-only' || record.sandbox === 'workspace-write' || record.sandbox === 'danger-full-access'
+          ? record.sandbox
+          : 'workspace-write'
+      const permissionMode: PermissionMode = record.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
+      entries.push({
+        id: typeof record.id === 'string' && record.id ? record.id : newId(),
+        title,
+        savedAt,
+        workspaceRoot: typeof record.workspaceRoot === 'string' && record.workspaceRoot ? record.workspaceRoot : getInitialWorkspaceRoot(),
+        model: typeof record.model === 'string' && record.model ? record.model : DEFAULT_MODEL,
+        permissionMode,
+        sandbox,
+        fontScale: typeof record.fontScale === 'number' ? Math.max(MIN_FONT_SCALE, Math.min(MAX_FONT_SCALE, record.fontScale)) : 1,
+        messages,
+      })
+    }
+    return entries
+      .sort((a, b) => b.savedAt - a.savedAt)
+      .slice(0, MAX_CHAT_HISTORY_ENTRIES)
+  } catch {
+    return []
+  }
+}
+
+function formatHistoryOptionLabel(entry: ChatHistoryEntry): string {
+  const dt = new Date(entry.savedAt)
+  const when = Number.isFinite(dt.getTime())
+    ? dt.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : ''
+  return when ? `${entry.title} (${when})` : entry.title
+}
+
 function getConversationPrecis(panel: AgentPanelState): string {
   const firstUser = panel.messages.find((m) => m.role === 'user')
   if (!firstUser?.content?.trim()) return panel.title
   const text = firstUser.content.trim().replace(/\s+/g, ' ')
   const maxLen = 36
   if (text.length <= maxLen) return text
-  return text.slice(0, maxLen).trim() + 'Ã¢â‚¬Â¦'
+  return text.slice(0, maxLen).trim() + '...'
 }
 
 function toShortJson(value: unknown, maxLen = 280): string {
@@ -365,6 +590,7 @@ function makeDefaultPanel(id: string, cwd: string): AgentPanelState {
         format: 'text',
       },
     ],
+    attachments: [],
     input: '',
     pendingInputs: [],
     fontScale: 1,
@@ -375,17 +601,45 @@ function makeDefaultPanel(id: string, cwd: string): AgentPanelState {
 function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSettings> {
   try {
     const raw = globalThis.localStorage?.getItem(WORKSPACE_SETTINGS_STORAGE_KEY)
-    const parsed = raw ? (JSON.parse(raw) as Record<string, WorkspaceSettings>) : {}
-    const result: Record<string, WorkspaceSettings> = { ...parsed }
+    const parsed = raw ? (JSON.parse(raw) as Record<string, Partial<WorkspaceSettings>>) : {}
+    const result: Record<string, WorkspaceSettings> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      const path = typeof value?.path === 'string' && value.path.trim() ? value.path : key
+      if (!path) continue
+      result[path] = {
+        path,
+        defaultModel: typeof value?.defaultModel === 'string' && value.defaultModel ? value.defaultModel : DEFAULT_MODEL,
+        permissionMode: value?.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first',
+        sandbox:
+          value?.sandbox === 'read-only' || value?.sandbox === 'danger-full-access'
+            ? value.sandbox
+            : 'workspace-write',
+        debug: Boolean(value?.debug),
+      }
+    }
     for (const p of list) {
       if (!result[p]) {
-        result[p] = { path: p, defaultModel: DEFAULT_MODEL, permissionMode: 'verify-first', sandbox: 'workspace-write' }
+        result[p] = {
+          path: p,
+          defaultModel: DEFAULT_MODEL,
+          permissionMode: 'verify-first',
+          sandbox: 'workspace-write',
+          debug: false,
+        }
       }
     }
     return result
   } catch {
     const result: Record<string, WorkspaceSettings> = {}
-    for (const p of list) result[p] = { path: p, defaultModel: DEFAULT_MODEL, permissionMode: 'verify-first', sandbox: 'workspace-write' }
+    for (const p of list) {
+      result[p] = {
+        path: p,
+        defaultModel: DEFAULT_MODEL,
+        permissionMode: 'verify-first',
+        sandbox: 'workspace-write',
+        debug: false,
+      }
+    }
     return result
   }
 }
@@ -417,6 +671,7 @@ export default function App() {
     defaultModel: DEFAULT_MODEL,
     permissionMode: 'verify-first',
     sandbox: 'workspace-write',
+    debug: false,
   })
   const [showThemeModal, setShowThemeModal] = useState(false)
   const [showModelSetupModal, setShowModelSetupModal] = useState(false)
@@ -428,7 +683,7 @@ export default function App() {
     provider: 'codex',
     enabled: true,
   })
-  const [dockTab, setDockTab] = useState<'explorer' | 'git'>('explorer')
+  const [dockTab, setDockTab] = useState<'explorer' | 'git' | 'settings'>('explorer')
   const [workspaceTree, setWorkspaceTree] = useState<WorkspaceTreeNode[]>([])
   const [workspaceTreeLoading, setWorkspaceTreeLoading] = useState(false)
   const [workspaceTreeError, setWorkspaceTreeError] = useState<string | null>(null)
@@ -443,9 +698,18 @@ export default function App() {
   const [gitStatusLoading, setGitStatusLoading] = useState(false)
   const [gitStatusError, setGitStatusError] = useState<string | null>(null)
   const [filePreview, setFilePreview] = useState<FilePreviewState | null>(null)
+  const [selectedWorkspaceFile, setSelectedWorkspaceFile] = useState<string | null>(null)
+  const [editorPanels, setEditorPanels] = useState<EditorPanelState[]>([])
+  const [focusedEditorId, setFocusedEditorId] = useState<string | null>(null)
   const [panelActivityById, setPanelActivityById] = useState<Record<string, PanelActivityState>>({})
   const [activityClock, setActivityClock] = useState(() => Date.now())
   const [activityOpenByPanel, setActivityOpenByPanel] = useState<Record<string, boolean>>({})
+  const [panelDebugById, setPanelDebugById] = useState<Record<string, PanelDebugEntry[]>>({})
+  const [debugOpenByPanel, setDebugOpenByPanel] = useState<Record<string, boolean>>({})
+  const [codeBlockOpenById, setCodeBlockOpenById] = useState<Record<string, boolean>>({})
+  const [thinkingOpenByMessageId, setThinkingOpenByMessageId] = useState<Record<string, boolean>>({})
+  const [chatHistory, setChatHistory] = useState<ChatHistoryEntry[]>(() => getInitialChatHistory())
+  const [selectedHistoryId, setSelectedHistoryId] = useState('')
 
   const modelList = modelConfig.interfaces.filter((m) => m.enabled).map((m) => m.id)
   function getModelOptions(includeCurrent?: string): string[] {
@@ -460,12 +724,19 @@ export default function App() {
   const autoContinueCountRef = useRef(new Map<string, number>())
   const textareaRefs = useRef(new Map<string, HTMLTextAreaElement>())
   const messageViewportRefs = useRef(new Map<string, HTMLDivElement>())
+  const stickToBottomByPanelRef = useRef(new Map<string, boolean>())
+  const codeBlockViewportRefs = useRef(new Map<string, HTMLPreElement>())
+  const stickToBottomByCodeBlockRef = useRef(new Map<string, boolean>())
   const activityLatestRef = useRef(new Map<string, PanelActivityState>())
   const activityFlushTimers = useRef(new Map<string, any>())
   const panelsRef = useRef<AgentPanelState[]>([])
+  const editorPanelsRef = useRef<EditorPanelState[]>([])
+  const focusedEditorIdRef = useRef<string | null>(null)
   const reconnectingRef = useRef(new Set<string>())
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('vertical')
+  const [showWorkspaceWindow, setShowWorkspaceWindow] = useState(true)
+
   const [panels, setPanels] = useState<AgentPanelState[]>(() => [
     makeDefaultPanel('default', getInitialWorkspaceRoot()),
   ])
@@ -496,6 +767,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(EXPLORER_PREFS_STORAGE_KEY, JSON.stringify(explorerPrefsByWorkspace))
   }, [explorerPrefsByWorkspace])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_HISTORY_STORAGE_KEY, JSON.stringify(chatHistory))
+    } catch {
+      // best-effort only
+    }
+  }, [chatHistory])
 
   // Keep workspaceRoot in the list when it changes (e.g. manually selected)
   useEffect(() => {
@@ -528,9 +807,34 @@ export default function App() {
   }, [panels])
 
   useEffect(() => {
+    editorPanelsRef.current = editorPanels
+  }, [editorPanels])
+
+  useEffect(() => {
+    focusedEditorIdRef.current = focusedEditorId
+  }, [focusedEditorId])
+
+  useEffect(() => {
+    api.setEditorMenuState?.(Boolean(focusedEditorId))
+  }, [api, focusedEditorId])
+
+  useEffect(() => {
+    if (focusedEditorId && !editorPanels.some((p) => p.id === focusedEditorId)) {
+      setFocusedEditorId(null)
+    }
+  }, [editorPanels, focusedEditorId])
+
+  useEffect(() => {
     for (const p of panels) {
       const viewport = messageViewportRefs.current.get(p.id)
       if (!viewport) continue
+      const stickToBottom = stickToBottomByPanelRef.current.get(p.id) ?? true
+      if (!stickToBottom) continue
+      viewport.scrollTop = viewport.scrollHeight
+    }
+    for (const [codeBlockId, viewport] of codeBlockViewportRefs.current) {
+      const stickToBottom = stickToBottomByCodeBlockRef.current.get(codeBlockId) ?? true
+      if (!stickToBottom) continue
       viewport.scrollTop = viewport.scrollHeight
     }
   }, [panels])
@@ -541,6 +845,8 @@ export default function App() {
     setShowNodeModules(prefs.showNodeModules)
     setExpandedDirectories({})
     setFilePreview(null)
+    setSelectedWorkspaceFile(null)
+    setFocusedEditorId(null)
     void refreshWorkspaceTree(prefs)
     void refreshGitStatus()
   }, [workspaceRoot, api])
@@ -549,6 +855,22 @@ export default function App() {
     setExpandedDirectories({})
     void refreshWorkspaceTree()
   }, [showHiddenFiles, showNodeModules])
+
+  useEffect(() => {
+    const ws = workspaceSettingsByPath[workspaceRoot]
+    if (!ws?.defaultModel) return
+    const provider = getModelProvider(ws.defaultModel)
+    void ensureProviderReady(provider, `workspace default model (${ws.defaultModel})`).catch((err) => {
+      const notice = formatError(err)
+      const panelId = panelsRef.current[0]?.id
+      if (!panelId) return
+      setPanels((prev) =>
+        prev.map((p) =>
+          p.id !== panelId ? p : { ...p, messages: [...p.messages, { id: newId(), role: 'system', content: notice, format: 'text' }] },
+        ),
+      )
+    })
+  }, [workspaceRoot, workspaceSettingsByPath, modelConfig])
 
   useEffect(() => {
     const t = setInterval(() => setActivityClock(Date.now()), 1500)
@@ -577,6 +899,60 @@ export default function App() {
     )
   }
 
+  function archivePanelToHistory(panel: AgentPanelState) {
+    const hasConversation = panel.messages.some((m) => m.role === 'user' || m.role === 'assistant')
+    if (!hasConversation) return
+    const title = getConversationPrecis(panel) || panel.title || 'Untitled chat'
+    const entry: ChatHistoryEntry = {
+      id: newId(),
+      title,
+      savedAt: Date.now(),
+      workspaceRoot: panel.cwd || workspaceRoot,
+      model: panel.model || DEFAULT_MODEL,
+      permissionMode: panel.permissionMode,
+      sandbox: panel.sandbox,
+      fontScale: panel.fontScale,
+      messages: cloneChatMessages(panel.messages),
+    }
+    setChatHistory((prev) => [entry, ...prev].slice(0, MAX_CHAT_HISTORY_ENTRIES))
+  }
+
+  function openChatFromHistory(historyId: string) {
+    const entry = chatHistory.find((x) => x.id === historyId)
+    if (!entry) return
+    if (panelsRef.current.length >= MAX_PANELS) {
+      alert(`Maximum ${MAX_PANELS} panels open. Close one panel first.`)
+      return
+    }
+    const panelId = newId()
+    const restoredMessages = cloneChatMessages(entry.messages)
+    setPanels((prev) => {
+      if (prev.length >= MAX_PANELS) return prev
+      return [
+        ...prev,
+        {
+          id: panelId,
+          title: entry.title,
+          cwd: entry.workspaceRoot || workspaceRoot,
+          model: entry.model || DEFAULT_MODEL,
+          permissionMode: entry.permissionMode,
+          sandbox: entry.sandbox,
+          status: `Loaded from history (${new Date(entry.savedAt).toLocaleString()})`,
+          connected: false,
+          streaming: false,
+          messages: restoredMessages,
+          attachments: [],
+          input: '',
+          pendingInputs: [],
+          fontScale: entry.fontScale,
+          usage: undefined,
+        },
+      ]
+    })
+    setActivePanelId(panelId)
+    setFocusedEditorId(null)
+  }
+
   function registerTextarea(panelId: string, el: HTMLTextAreaElement | null) {
     if (!el) {
       textareaRefs.current.delete(panelId)
@@ -589,9 +965,40 @@ export default function App() {
   function registerMessageViewport(panelId: string, el: HTMLDivElement | null) {
     if (!el) {
       messageViewportRefs.current.delete(panelId)
+      stickToBottomByPanelRef.current.delete(panelId)
       return
     }
     messageViewportRefs.current.set(panelId, el)
+    stickToBottomByPanelRef.current.set(panelId, isViewportNearBottom(el))
+  }
+
+  function registerCodeBlockViewport(codeBlockId: string, el: HTMLPreElement | null) {
+    if (!el) {
+      codeBlockViewportRefs.current.delete(codeBlockId)
+      stickToBottomByCodeBlockRef.current.delete(codeBlockId)
+      return
+    }
+    codeBlockViewportRefs.current.set(codeBlockId, el)
+    if (!stickToBottomByCodeBlockRef.current.has(codeBlockId)) {
+      stickToBottomByCodeBlockRef.current.set(codeBlockId, isViewportNearBottom(el))
+    }
+  }
+
+  function isViewportNearBottom(viewport: HTMLElement, thresholdPx = 32) {
+    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+    return distanceFromBottom <= thresholdPx
+  }
+
+  function onMessageViewportScroll(panelId: string) {
+    const viewport = messageViewportRefs.current.get(panelId)
+    if (!viewport) return
+    stickToBottomByPanelRef.current.set(panelId, isViewportNearBottom(viewport))
+  }
+
+  function onCodeBlockViewportScroll(codeBlockId: string) {
+    const viewport = codeBlockViewportRefs.current.get(codeBlockId)
+    if (!viewport) return
+    stickToBottomByCodeBlockRef.current.set(codeBlockId, isViewportNearBottom(viewport))
   }
 
   function autoResizeTextarea(panelId: string) {
@@ -604,16 +1011,25 @@ export default function App() {
   }
 
   function zoomPanelFont(panelId: string, deltaY: number) {
-    const direction = deltaY < 0 ? 1 : -1
     setPanels((prev) =>
       prev.map((p) =>
         p.id === panelId
           ? {
               ...p,
-              fontScale: Math.max(
-                MIN_FONT_SCALE,
-                Math.min(MAX_FONT_SCALE, Number((p.fontScale + direction * FONT_SCALE_STEP).toFixed(2))),
-              ),
+              fontScale: getNextFontScale(p.fontScale, deltaY),
+            }
+          : p,
+      ),
+    )
+  }
+
+  function zoomEditorFont(editorId: string, deltaY: number) {
+    setEditorPanels((prev) =>
+      prev.map((p) =>
+        p.id === editorId
+          ? {
+              ...p,
+              fontScale: getNextFontScale(p.fontScale, deltaY),
             }
           : p,
       ),
@@ -626,22 +1042,47 @@ export default function App() {
     setWorkspaceForm((prev) => ({ ...prev, path }))
   }
 
-  function openWorkspaceSettings(mode: 'new' | 'edit') {
+  function buildWorkspaceForm(mode: 'new' | 'edit') {
     const current =
       workspaceSettingsByPath[workspaceRoot] ??
-      ({ path: workspaceRoot, defaultModel: DEFAULT_MODEL, permissionMode: 'verify-first', sandbox: 'workspace-write' } as WorkspaceSettings)
+      ({
+        path: workspaceRoot,
+        defaultModel: DEFAULT_MODEL,
+        permissionMode: 'verify-first',
+        sandbox: 'workspace-write',
+        debug: false,
+      } as WorkspaceSettings)
+
+    if (mode === 'new') {
+      return {
+        path: workspaceRoot,
+        defaultModel: current.defaultModel ?? DEFAULT_MODEL,
+        permissionMode: current.permissionMode ?? 'verify-first',
+        sandbox: current.sandbox ?? 'workspace-write',
+        debug: Boolean(current.debug),
+      } satisfies WorkspaceSettings
+    }
+
+    return {
+      path: current.path || workspaceRoot,
+      defaultModel: current.defaultModel ?? DEFAULT_MODEL,
+      permissionMode: current.permissionMode ?? 'verify-first',
+      sandbox: current.sandbox ?? 'workspace-write',
+      debug: Boolean(current.debug),
+    } satisfies WorkspaceSettings
+  }
+
+  function openWorkspaceSettings(mode: 'new' | 'edit') {
     setWorkspaceModalMode(mode)
-    setWorkspaceForm(
-      mode === 'new'
-        ? {
-            path: workspaceRoot,
-            defaultModel: current.defaultModel ?? DEFAULT_MODEL,
-            permissionMode: current.permissionMode ?? 'verify-first',
-            sandbox: current.sandbox ?? 'workspace-write',
-          }
-        : current,
-    )
+    setWorkspaceForm(buildWorkspaceForm(mode))
     setShowWorkspaceModal(true)
+  }
+
+  function openWorkspaceSettingsTab() {
+    if (dockTab !== 'settings') {
+      setWorkspaceForm(buildWorkspaceForm('edit'))
+    }
+    setDockTab('settings')
   }
 
   async function saveWorkspaceSettings() {
@@ -650,6 +1091,7 @@ export default function App() {
       defaultModel: workspaceForm.defaultModel.trim() || DEFAULT_MODEL,
       permissionMode: workspaceForm.permissionMode,
       sandbox: workspaceForm.sandbox,
+      debug: Boolean(workspaceForm.debug),
     } satisfies WorkspaceSettings
     if (!next.path) return
 
@@ -691,13 +1133,18 @@ export default function App() {
         if (w.id !== agentWindowId) return w
         const msgs = w.messages
         const last = msgs[msgs.length - 1]
-        if (last && last.role === 'assistant') {
-          return { ...w, streaming: true, messages: [...msgs.slice(0, -1), { ...last, content: last.content + buf }] }
+        // Append only while this panel is actively streaming; otherwise start a fresh assistant message.
+        if (w.streaming && last && last.role === 'assistant') {
+          return {
+            ...w,
+            streaming: true,
+            messages: [...msgs.slice(0, -1), { ...last, format: 'markdown', content: last.content + buf }],
+          }
         }
         return {
           ...w,
           streaming: true,
-          messages: [...msgs, { id: newId(), role: 'assistant', content: buf, format: 'text' }],
+          messages: [...msgs, { id: newId(), role: 'assistant', content: buf, format: 'markdown' }],
         }
       }),
     )
@@ -719,6 +1166,20 @@ export default function App() {
     if (evt.type === 'rawNotification' && typeof evt.method === 'string') return evt.method
     if (typeof evt.type === 'string') return evt.type
     return 'event'
+  }
+
+  function appendPanelDebug(agentWindowId: string, stage: string, detail: string) {
+    setPanelDebugById((prev) => {
+      const nextEntry: PanelDebugEntry = {
+        id: newId(),
+        at: Date.now(),
+        stage,
+        detail: detail || '(no detail)',
+      }
+      const existing = prev[agentWindowId] ?? []
+      const next = [nextEntry, ...existing].slice(0, 80)
+      return { ...prev, [agentWindowId]: next }
+    })
   }
 
   function markPanelActivity(agentWindowId: string, evt: any) {
@@ -758,6 +1219,7 @@ export default function App() {
       markPanelActivity(agentWindowId, evt)
 
       if (evt?.type === 'status') {
+        appendPanelDebug(agentWindowId, 'event:status', `${evt.status}${evt.message ? ` - ${evt.message}` : ''}`)
         setPanels((prev) =>
           prev.map((w) =>
             w.id !== agentWindowId
@@ -782,6 +1244,7 @@ export default function App() {
       }
 
       if (evt?.type === 'assistantCompleted') {
+        appendPanelDebug(agentWindowId, 'event:assistantCompleted', 'Assistant turn completed')
         flushWindowDelta(agentWindowId)
         setPanels((prev) =>
           prev.map((w) => {
@@ -817,6 +1280,7 @@ export default function App() {
 
       if (evt?.type === 'rawNotification') {
         const method = String(evt.method ?? '')
+        appendPanelDebug(agentWindowId, 'event:raw', method)
         const note = summarizeRawNotification(method, evt.params)
         if (!note) return
         if (!shouldSurfaceRawNoteInChat(method)) return
@@ -865,6 +1329,16 @@ export default function App() {
         setShowModelSetupModal(true)
         return
       }
+      if (action === 'saveEditorFile') {
+        const targetEditorId = focusedEditorIdRef.current
+        if (targetEditorId) void saveEditorPanel(targetEditorId)
+        return
+      }
+      if (action === 'saveEditorFileAs') {
+        const targetEditorId = focusedEditorIdRef.current
+        if (targetEditorId) void saveEditorPanelAs(targetEditorId)
+        return
+      }
       if (action === 'layoutVertical') setLayoutMode('vertical')
       if (action === 'layoutHorizontal') setLayoutMode('horizontal')
       if (action === 'layoutGrid') setLayoutMode('grid')
@@ -901,6 +1375,71 @@ export default function App() {
   function formatError(err: unknown) {
     if (err instanceof Error && err.message) return err.message
     return String(err ?? 'Unknown error')
+  }
+
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onerror = () => reject(new Error('Failed reading pasted image'))
+      reader.onload = () => {
+        if (typeof reader.result === 'string') resolve(reader.result)
+        else reject(new Error('Failed reading pasted image'))
+      }
+      reader.readAsDataURL(file)
+    })
+  }
+
+  async function handlePasteImage(panelId: string, file: File) {
+    try {
+      const dataUrl = await fileToDataUrl(file)
+      const saved = await api.savePastedImage(dataUrl, file.type || 'image/png')
+      setPanels((prev) =>
+        prev.map((p) =>
+          p.id !== panelId
+            ? p
+            : {
+                ...p,
+                attachments: [
+                  ...p.attachments,
+                  {
+                    id: newId(),
+                    path: saved.path,
+                    label: file.name || `pasted-image.${saved.mimeType.includes('jpeg') ? 'jpg' : 'png'}`,
+                    mimeType: saved.mimeType,
+                  },
+                ],
+                status: 'Image attached',
+              },
+        ),
+      )
+    } catch (err) {
+      const msg = formatError(err)
+      setPanels((prev) =>
+        prev.map((p) =>
+          p.id !== panelId
+            ? p
+            : {
+                ...p,
+                messages: [...p.messages, { id: newId(), role: 'system', content: `Image paste failed: ${msg}`, format: 'text' }],
+              },
+        ),
+      )
+    }
+  }
+
+  function getModelProvider(model: string): ModelProvider {
+    return modelConfig.interfaces.find((m) => m.id === model)?.provider ?? 'codex'
+  }
+
+  async function ensureProviderReady(provider: ModelProvider, reason: string) {
+    const status = (await api.getProviderAuthStatus(provider)) as ProviderAuthStatus
+    if (!status.installed) {
+      throw new Error(`${provider} CLI is not installed. ${status.detail}`.trim())
+    }
+    if (status.authenticated) return
+    throw new Error(
+      `${provider} login required for ${reason}. ${status.detail}\nLogin outside the app, then send again.`,
+    )
   }
 
   async function refreshWorkspaceTree(prefs?: ExplorerPrefs) {
@@ -957,6 +1496,7 @@ export default function App() {
   }
 
   async function openFilePreview(relativePath: string) {
+    setSelectedWorkspaceFile(relativePath)
     setFilePreview({
       relativePath,
       size: 0,
@@ -986,6 +1526,170 @@ export default function App() {
         error: formatError(err),
       })
     }
+  }
+
+  async function openEditorForRelativePath(relativePath: string) {
+    if (!workspaceRoot || !relativePath) return
+    const existing = editorPanelsRef.current.find((p) => p.workspaceRoot === workspaceRoot && p.relativePath === relativePath)
+    if (existing) {
+      setFocusedEditorId(existing.id)
+      return
+    }
+
+    const id = `editor-${newId()}`
+    const title = fileNameFromRelativePath(relativePath)
+    setEditorPanels((prev) => [
+      ...prev,
+      {
+        id,
+        workspaceRoot,
+        relativePath,
+        title,
+        fontScale: 1,
+        content: '',
+        size: 0,
+        loading: true,
+        saving: false,
+        dirty: false,
+        binary: false,
+      },
+    ])
+    setFocusedEditorId(id)
+    try {
+      const result = await api.readWorkspaceTextFile(workspaceRoot, relativePath)
+      setEditorPanels((prev) =>
+        prev.map((p) =>
+          p.id !== id
+            ? p
+            : {
+                ...p,
+                title: fileNameFromRelativePath(result.relativePath),
+                relativePath: result.relativePath,
+                content: result.content,
+                size: result.size,
+                binary: result.binary,
+                loading: false,
+                dirty: false,
+                error: result.binary ? 'Binary files cannot be edited in this editor.' : undefined,
+              },
+        ),
+      )
+    } catch (err) {
+      setEditorPanels((prev) =>
+        prev.map((p) =>
+          p.id !== id
+            ? p
+            : {
+                ...p,
+                loading: false,
+                error: formatError(err),
+              },
+        ),
+      )
+    }
+  }
+
+  function updateEditorContent(editorId: string, nextContent: string) {
+    setEditorPanels((prev) =>
+      prev.map((p) =>
+        p.id !== editorId
+          ? p
+          : {
+              ...p,
+              content: nextContent,
+              dirty: true,
+              error: undefined,
+            },
+      ),
+    )
+  }
+
+  async function saveEditorPanel(editorId: string) {
+    const panel = editorPanelsRef.current.find((p) => p.id === editorId)
+    if (!panel || panel.loading || panel.binary) return
+    setEditorPanels((prev) => prev.map((p) => (p.id === editorId ? { ...p, saving: true, error: undefined } : p)))
+    try {
+      const result = await api.writeWorkspaceFile(panel.workspaceRoot, panel.relativePath, panel.content)
+      setEditorPanels((prev) =>
+        prev.map((p) =>
+          p.id !== editorId
+            ? p
+            : {
+                ...p,
+                relativePath: result.relativePath,
+                title: fileNameFromRelativePath(result.relativePath),
+                size: result.size,
+                saving: false,
+                dirty: false,
+                savedAt: Date.now(),
+              },
+        ),
+      )
+      setSelectedWorkspaceFile(result.relativePath)
+      void refreshWorkspaceTree()
+    } catch (err) {
+      setEditorPanels((prev) =>
+        prev.map((p) =>
+          p.id !== editorId
+            ? p
+            : {
+                ...p,
+                saving: false,
+                error: formatError(err),
+              },
+        ),
+      )
+    }
+  }
+
+  async function saveEditorPanelAs(editorId: string) {
+    const panel = editorPanelsRef.current.find((p) => p.id === editorId)
+    if (!panel || panel.loading || panel.binary) return
+
+    try {
+      const nextRelativePath = await api.pickWorkspaceSavePath(panel.workspaceRoot, panel.relativePath)
+      if (!nextRelativePath) return
+
+      setEditorPanels((prev) => prev.map((p) => (p.id === editorId ? { ...p, saving: true, error: undefined } : p)))
+      const result = await api.writeWorkspaceFile(panel.workspaceRoot, nextRelativePath, panel.content)
+      setEditorPanels((prev) =>
+        prev.map((p) =>
+          p.id !== editorId
+            ? p
+            : {
+                ...p,
+                relativePath: result.relativePath,
+                title: fileNameFromRelativePath(result.relativePath),
+                size: result.size,
+                saving: false,
+                dirty: false,
+                savedAt: Date.now(),
+              },
+        ),
+      )
+      setSelectedWorkspaceFile(result.relativePath)
+      void refreshWorkspaceTree()
+    } catch (err) {
+      setEditorPanels((prev) =>
+        prev.map((p) =>
+          p.id !== editorId
+            ? p
+            : {
+                ...p,
+                saving: false,
+                error: formatError(err),
+              },
+        ),
+      )
+    }
+  }
+
+  function closeEditorPanel(editorId: string) {
+    const panel = editorPanelsRef.current.find((p) => p.id === editorId)
+    if (!panel) return
+    if (panel.dirty && !confirm(`Close "${panel.title}" without saving changes?`)) return
+    setEditorPanels((prev) => prev.filter((p) => p.id !== editorId))
+    if (focusedEditorId === editorId) setFocusedEditorId(null)
   }
 
   function toggleDirectory(relativePath: string) {
@@ -1032,11 +1736,11 @@ export default function App() {
   }
 
   function gitEntryClass(entry: GitStatusEntry) {
-    if (entry.untracked) return 'bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200'
-    if (entry.staged && entry.unstaged) return 'bg-purple-100 text-purple-900 dark:bg-purple-900/30 dark:text-purple-200'
-    if (entry.staged) return 'bg-green-100 text-green-900 dark:bg-green-900/30 dark:text-green-200'
-    if (entry.unstaged) return 'bg-orange-100 text-orange-900 dark:bg-orange-900/30 dark:text-orange-200'
-    return 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100'
+    if (entry.untracked) return 'border border-amber-300 text-amber-900 dark:border-amber-800 dark:text-amber-200'
+    if (entry.staged && entry.unstaged) return 'border border-purple-300 text-purple-900 dark:border-purple-800 dark:text-purple-200'
+    if (entry.staged) return 'border border-green-300 text-green-900 dark:border-green-800 dark:text-green-200'
+    if (entry.unstaged) return 'border border-orange-300 text-orange-900 dark:border-orange-800 dark:text-orange-200'
+    return 'border border-neutral-300 text-neutral-800 dark:border-neutral-700 dark:text-neutral-100'
   }
 
   function formatCheckedAt(ts?: number) {
@@ -1060,14 +1764,232 @@ export default function App() {
     })
   }
 
-  function renderGridLayout() {
-    const n = panels.length
+  function splitAgentPanel(sourcePanelId: string) {
+    setPanels((prev) => {
+      if (prev.length >= MAX_PANELS) return prev
+      const sourceIdx = prev.findIndex((p) => p.id === sourcePanelId)
+      if (sourceIdx < 0) return prev
+      const id = newId()
+      const ws = workspaceSettingsByPath[workspaceRoot]
+      const p = makeDefaultPanel(id, workspaceRoot)
+      if (ws) {
+        p.model = ws.defaultModel
+        p.permissionMode = ws.permissionMode
+        p.sandbox = ws.sandbox
+      }
+      const next = [...prev]
+      next.splice(sourceIdx + 1, 0, p)
+      return next
+    })
+  }
+
+  function renderWorkspaceTile() {
+    return (
+      <div
+        className="h-full min-h-0 min-w-0 flex flex-col border border-neutral-200/80 dark:border-neutral-800 rounded-lg overflow-hidden bg-neutral-50 dark:bg-neutral-900 font-mono"
+        onMouseDownCapture={() => setFocusedEditorId(null)}
+      >
+        <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800">
+          <div className="text-xs font-semibold text-neutral-700 dark:text-neutral-200">Workspace Window</div>
+        </div>
+        <div className="px-2.5 py-2 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center gap-1.5 bg-neutral-100 dark:bg-neutral-900/80">
+          <button
+            type="button"
+            title="Explorer"
+            aria-label="Explorer"
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+              dockTab === 'explorer'
+                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+            }`}
+            onClick={() => setDockTab('explorer')}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2.5 4.5C2.5 3.95 2.95 3.5 3.5 3.5H6.2L7 4.5H12.5C13.05 4.5 13.5 4.95 13.5 5.5V11.5C13.5 12.05 13.05 12.5 12.5 12.5H3.5C2.95 12.5 2.5 12.05 2.5 11.5V4.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            title="Git"
+            aria-label="Git"
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+              dockTab === 'git'
+                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+            }`}
+            onClick={() => setDockTab('git')}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="4" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.2" />
+              <circle cx="12" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.2" />
+              <circle cx="8" cy="12" r="1.5" stroke="currentColor" strokeWidth="1.2" />
+              <path d="M5.3 4H10.7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              <path d="M4.7 5.1L7.3 10.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              <path d="M11.3 5.1L8.7 10.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            title="Workspace settings"
+            aria-label="Workspace settings"
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+              dockTab === 'settings'
+                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+            }`}
+            onClick={openWorkspaceSettingsTab}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 2.2L9 3.1L10.4 2.8L11.2 4.1L12.6 4.4L12.5 5.9L13.6 6.8L12.8 8L13.6 9.2L12.5 10.1L12.6 11.6L11.2 11.9L10.4 13.2L9 12.9L8 13.8L7 12.9L5.6 13.2L4.8 11.9L3.4 11.6L3.5 10.1L2.4 9.2L3.2 8L2.4 6.8L3.5 5.9L3.4 4.4L4.8 4.1L5.6 2.8L7 3.1L8 2.2Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+              <circle cx="8" cy="8" r="1.9" stroke="currentColor" strokeWidth="1.1" />
+            </svg>
+          </button>
+        </div>
+        <div className="flex-1 min-h-0">
+          {dockTab === 'explorer' ? renderExplorerPane() : dockTab === 'git' ? renderGitPane() : renderWorkspaceSettingsPane()}
+        </div>
+      </div>
+    )
+  }
+
+  function renderEditorPanel(panel: EditorPanelState) {
+    const saveDisabled = panel.loading || panel.saving || panel.binary || !panel.dirty
+    const saveAsDisabled = panel.loading || panel.saving || panel.binary
+    const editorFontSizePx = 12 * panel.fontScale
+    const editorLineHeightPx = 20 * panel.fontScale
+    return (
+      <div
+        className={[
+          'h-full min-h-0 min-w-0 flex flex-col rounded-xl border bg-white dark:bg-neutral-950 overflow-hidden outline-none shadow-sm',
+          focusedEditorId === panel.id
+            ? 'border-blue-400 dark:border-blue-600 ring-2 ring-blue-100 dark:ring-blue-900/40'
+            : 'border-neutral-200/90 dark:border-neutral-800',
+        ].join(' ')}
+        tabIndex={0}
+        onFocusCapture={() => setFocusedEditorId(panel.id)}
+        onMouseDownCapture={() => setFocusedEditorId(panel.id)}
+        onWheel={(e) => {
+          if (!isZoomWheelGesture(e)) return
+          e.preventDefault()
+          setFocusedEditorId(panel.id)
+          zoomEditorFont(panel.id, e.deltaY)
+        }}
+      >
+        <div className="px-3 py-2.5 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold truncate" title={panel.relativePath}>
+              {panel.title}{panel.dirty ? ' *' : ''}
+            </div>
+            <div className="text-[11px] text-neutral-500 dark:text-neutral-400 font-mono truncate" title={panel.relativePath}>
+              {panel.relativePath}
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              className={UI_TOOLBAR_ICON_BUTTON_CLASS}
+              disabled={saveDisabled}
+              onClick={() => void saveEditorPanel(panel.id)}
+              aria-label="Save"
+              title="Save (Ctrl+S)"
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M5.2 9.5H10.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={UI_TOOLBAR_ICON_BUTTON_CLASS}
+              disabled={saveAsDisabled}
+              onClick={() => void saveEditorPanelAs(panel.id)}
+              aria-label="Save As"
+              title="Save As (Ctrl+Shift+S)"
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M8 8.4V12.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <path d="M6.1 10.3H9.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={UI_CLOSE_ICON_BUTTON_CLASS}
+              onClick={() => closeEditorPanel(panel.id)}
+              title="Close editor"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 min-h-0 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
+          {panel.loading && (
+            <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">Loading file...</div>
+          )}
+          {!panel.loading && panel.error && (
+            <div className="p-4 text-sm text-red-600 dark:text-red-400">{panel.error}</div>
+          )}
+          {!panel.loading && !panel.error && panel.binary && (
+            <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">
+              Binary files are not editable in this editor.
+            </div>
+          )}
+          {!panel.loading && !panel.error && !panel.binary && (
+            <textarea
+              className="h-full w-full resize-none border-0 outline-none p-4 m-0 text-[12px] leading-5 font-mono whitespace-pre bg-white dark:bg-neutral-950 text-blue-950 dark:text-blue-100"
+              style={{ fontSize: `${editorFontSizePx}px`, lineHeight: `${editorLineHeightPx}px` }}
+              value={panel.content}
+              onFocus={() => setFocusedEditorId(panel.id)}
+              onChange={(e) => updateEditorContent(panel.id, e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                  e.preventDefault()
+                  if (e.shiftKey) void saveEditorPanelAs(panel.id)
+                  else void saveEditorPanel(panel.id)
+                }
+              }}
+              spellCheck={false}
+            />
+          )}
+        </div>
+        <div className="px-3 py-1.5 border-t border-neutral-200 dark:border-neutral-800 text-[11px] text-neutral-500 dark:text-neutral-400 flex items-center justify-between">
+          <span>{Math.round(panel.size / 1024)} KB</span>
+          <span>
+            {panel.saving
+              ? 'Saving...'
+              : panel.dirty
+                ? 'Unsaved changes'
+                : panel.savedAt
+                  ? `Saved ${new Date(panel.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                  : 'Saved'}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  function renderLayoutPane(panelId: string) {
+    if (panelId === 'workspace-window') return renderWorkspaceTile()
+    const agentPanel = panels.find((w) => w.id === panelId)
+    if (agentPanel) return renderPanelContent(agentPanel)
+    const editorPanel = editorPanels.find((w) => w.id === panelId)
+    if (editorPanel) return renderEditorPanel(editorPanel)
+    return null
+  }
+
+  function renderGridLayout(layoutPaneIds: string[]) {
+    const n = layoutPaneIds.length
     const cols = Math.ceil(Math.sqrt(n))
     const rows = Math.ceil(n / cols)
-    const panelChunks: AgentPanelState[][] = []
+    const panelChunks: string[][] = []
     for (let r = 0; r < rows; r++) {
       const start = r * cols
-      panelChunks.push(panels.slice(start, start + cols))
+      panelChunks.push(layoutPaneIds.slice(start, start + cols))
     }
     return (
       <Group orientation="vertical" className="flex-1 min-h-0 min-w-0" id="grid-outer">
@@ -1076,11 +1998,11 @@ export default function App() {
             {rowIdx > 0 && <Separator className="h-1 bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400 data-[resize-handle-active]:bg-blue-500" />}
             <Panel id={`grid-row-${rowIdx}`} defaultSize={100 / rows} minSize={10} className="min-h-0 min-w-0">
               <Group orientation="horizontal" className="h-full min-w-0" id={`grid-row-${rowIdx}-inner`}>
-                {rowPanels.map((w, colIdx) => (
-                  <React.Fragment key={w.id}>
+                {rowPanels.map((panelId, colIdx) => (
+                  <React.Fragment key={panelId}>
                     {colIdx > 0 && <Separator className="w-1 bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400" />}
-                    <Panel id={`panel-${w.id}`} defaultSize={100 / rowPanels.length} minSize={15} className="min-h-0 min-w-0">
-                      {renderPanelContent(w)}
+                    <Panel id={`panel-${panelId}`} defaultSize={100 / rowPanels.length} minSize={15} className="min-h-0 min-w-0">
+                      {renderLayoutPane(panelId)}
                     </Panel>
                   </React.Fragment>
                 ))}
@@ -1201,7 +2123,7 @@ export default function App() {
       return [
         'Codex disconnected. Common causes:',
         '- Run `codex app-server` in a terminal to check for errors',
-        '- Ensure logged in: `codex auth`',
+        '- Ensure logged in: `codex login`',
         '- Try using fewer panels (each uses a separate Codex process)',
         'Send another message to reconnect.',
       ].join('\n')
@@ -1212,14 +2134,58 @@ export default function App() {
     return `Error: ${msg}`
   }
 
-  async function sendToAgent(winId: string, text: string) {
+  async function sendToAgent(winId: string, text: string, imagePaths: string[] = []) {
     const w = panels.find((x) => x.id === winId)
     if (!w) return
+    const provider = getModelProvider(w.model)
     try {
-      if (!w.connected) await connectWindowWithRetry(winId, w.model, w.cwd, w.permissionMode, w.sandbox)
-      await withTimeout(api.sendMessage(winId, text), TURN_START_TIMEOUT_MS, 'turn/start')
+      appendPanelDebug(winId, 'send', `Received user message (${text.length} chars)`)
+      setPanels((prev) =>
+        prev.map((x) =>
+          x.id !== winId
+            ? x
+            : {
+                ...x,
+                status: `Checking ${provider} auth...`,
+              },
+        ),
+      )
+      if (!w.connected) {
+        appendPanelDebug(winId, 'auth', `Checking provider "${provider}"`)
+        await ensureProviderReady(provider, `${w.model}`)
+        setPanels((prev) =>
+          prev.map((x) =>
+            x.id !== winId
+              ? x
+              : {
+                  ...x,
+                  status: `Connecting to ${provider}...`,
+                },
+          ),
+        )
+        appendPanelDebug(winId, 'connect', `Connecting model ${w.model} (${provider})`)
+        await connectWindowWithRetry(winId, w.model, w.cwd, w.permissionMode, w.sandbox)
+        appendPanelDebug(winId, 'connect', 'Connected')
+      }
+      setPanels((prev) =>
+        prev.map((x) =>
+          x.id !== winId
+            ? x
+            : {
+                ...x,
+                status: 'Sending message...',
+              },
+        ),
+      )
+      appendPanelDebug(winId, 'turn/start', 'Starting turn...')
+      if (provider !== 'codex' && imagePaths.length > 0) {
+        throw new Error('Image attachments are currently supported for Codex panels only.')
+      }
+      await withTimeout(api.sendMessage(winId, text, imagePaths), TURN_START_TIMEOUT_MS, 'turn/start')
+      appendPanelDebug(winId, 'turn/start', 'Turn started')
     } catch (e: any) {
       const errMsg = formatConnectionError(e)
+      appendPanelDebug(winId, 'error', errMsg)
       setPanels((prev) =>
         prev.map((x) =>
           x.id !== winId
@@ -1254,14 +2220,36 @@ export default function App() {
     const w = panels.find((x) => x.id === winId)
     if (!w) return
     const text = w.input.trim()
-    if (!text) return
-
-    let sendNow = false
+    const messageAttachments = w.attachments.map((a) => ({ ...a }))
+    const imagePaths = messageAttachments.map((a) => a.path)
+    if (!text && imagePaths.length === 0) return
+    const isBusy = w.streaming || w.pendingInputs.length > 0
+    if (isBusy && imagePaths.length > 0) {
+      setPanels((prev) =>
+        prev.map((x) =>
+          x.id !== winId
+            ? x
+            : {
+                ...x,
+                messages: [
+                  ...x.messages,
+                  {
+                    id: newId(),
+                    role: 'system',
+                    content: 'Please wait for the current turn to finish before sending image attachments.',
+                    format: 'text',
+                  },
+                ],
+              },
+        ),
+      )
+      return
+    }
     setPanels((prev) =>
       prev.map((x) => {
         if (x.id !== winId) return x
-        const isBusy = x.streaming || x.pendingInputs.length > 0
         if (isBusy) {
+          appendPanelDebug(winId, 'queue', `Panel busy - queued message (${text.length} chars)`)
           return {
             ...x,
             input: '',
@@ -1269,20 +2257,33 @@ export default function App() {
             messages: [...x.messages, { id: newId(), role: 'user', content: text, format: 'text' }],
           }
         }
-        sendNow = true
+        appendPanelDebug(winId, 'queue', 'Panel idle - sending immediately')
         return {
           ...x,
           input: '',
+          attachments: [],
           streaming: true,
-          messages: [...x.messages, { id: newId(), role: 'user', content: text, format: 'text' }],
+          status: 'Preparing message...',
+          messages: [
+            ...x.messages,
+            {
+              id: newId(),
+              role: 'user',
+              content: text,
+              format: 'text',
+              attachments: messageAttachments.length > 0 ? messageAttachments : undefined,
+            },
+          ],
         }
       }),
     )
 
-    if (sendNow) void sendToAgent(winId, text)
+    if (!isBusy) void sendToAgent(winId, text, imagePaths)
   }
 
   async function closePanel(panelId: string) {
+    const panel = panelsRef.current.find((w) => w.id === panelId)
+    if (panel) archivePanelToHistory(panel)
     await api.disconnect(panelId).catch(() => {})
     setPanels((prev) => prev.filter((w) => w.id !== panelId))
   }
@@ -1304,7 +2305,9 @@ export default function App() {
     const panel = panels.find((p) => p.id === winId)
     const permissionMode = panel?.permissionMode ?? 'verify-first'
     const sandbox = panel?.sandbox ?? 'workspace-write'
+    const provider = getModelProvider(nextModel)
     try {
+      await ensureProviderReady(provider, `${nextModel}`)
       await connectWindow(winId, nextModel, workspaceRoot, permissionMode, sandbox)
       setPanels((prev) =>
         prev.map((w) => {
@@ -1325,23 +2328,25 @@ export default function App() {
   }
 
   function renderExplorerNode(node: WorkspaceTreeNode, depth = 0): React.ReactNode {
-    const rowPadding = 8 + depth * 14
+    const rowPadding = 8 + depth * 10
     if (node.type === 'file') {
-      const selected = filePreview?.relativePath === node.relativePath
+      const selected = selectedWorkspaceFile === node.relativePath
       return (
         <button
           key={node.relativePath}
           type="button"
-          className={`w-full text-left py-1.5 pr-2 rounded text-xs font-mono flex items-center gap-2 truncate ${
+          role="treeitem"
+          aria-selected={selected}
+          className={`w-full appearance-none text-left py-1 pr-2 rounded-md text-[12px] flex items-center gap-2 truncate border border-transparent bg-transparent hover:bg-transparent active:bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-blue-400/60 ${
             selected
-              ? 'bg-blue-100 text-blue-900 dark:bg-blue-900/40 dark:text-blue-100'
-              : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
+              ? 'border-blue-300 text-blue-800 dark:border-blue-800 dark:text-blue-100'
+              : 'text-neutral-700 hover:border-neutral-300 dark:text-neutral-300 dark:hover:border-neutral-700'
           }`}
           style={{ paddingLeft: `${rowPadding}px` }}
           onClick={() => openFilePreview(node.relativePath)}
           title={node.relativePath}
         >
-          <span className="text-neutral-400">*</span>
+          <span className="text-neutral-400 dark:text-neutral-500">•</span>
           <span className="truncate">{node.name}</span>
         </button>
       )
@@ -1352,88 +2357,119 @@ export default function App() {
       <div key={node.relativePath}>
         <button
           type="button"
-          className="w-full text-left py-1.5 pr-2 rounded text-xs font-mono flex items-center gap-2 truncate hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          role="treeitem"
+          aria-expanded={expanded}
+          className="w-full appearance-none text-left py-1 pr-2 rounded-md text-[12px] flex items-center gap-2 truncate border border-transparent bg-transparent hover:bg-transparent active:bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-blue-400/60 text-neutral-700 hover:border-neutral-300 dark:text-neutral-200 dark:hover:border-neutral-700"
           style={{ paddingLeft: `${rowPadding}px` }}
           onClick={() => toggleDirectory(node.relativePath)}
           title={node.relativePath}
         >
-          <span className="w-3 text-neutral-500">{expanded ? '-' : '+'}</span>
+          <span className="w-3 text-neutral-500 dark:text-neutral-400">{expanded ? '▾' : '▸'}</span>
           <span className="truncate font-medium">{node.name}</span>
         </button>
-        {expanded && node.children?.map((child) => renderExplorerNode(child, depth + 1))}
+        {expanded && (
+          <div role="group" className="ml-3 border-l border-neutral-200/70 dark:border-neutral-800/80 pl-1">
+            {node.children?.map((child) => renderExplorerNode(child, depth + 1))}
+          </div>
+        )}
       </div>
     )
   }
 
   function renderExplorerPane() {
     return (
-      <div className="h-full min-h-0 flex flex-col bg-white dark:bg-neutral-950">
-        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
+      <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
+        <div className="px-3 py-2.5 text-xs">
           <div className="flex items-center justify-between gap-2">
             <span className="font-medium text-neutral-700 dark:text-neutral-300">Workspace files</span>
-            <button
-              type="button"
-              className="px-2.5 py-1 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
-              onClick={() => refreshWorkspaceTree()}
-            >
-              Refresh
-            </button>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
-            <label className="inline-flex items-center gap-1 text-neutral-600 dark:text-neutral-400">
-              <input
-                type="checkbox"
-                checked={showHiddenFiles}
-                onChange={(e) =>
-                  setExplorerPrefs({
-                    showHiddenFiles: e.target.checked,
-                    showNodeModules,
-                  })
-                }
-              />
-              Hidden
-            </label>
-            <label className="inline-flex items-center gap-1 text-neutral-600 dark:text-neutral-400">
-              <input
-                type="checkbox"
-                checked={showNodeModules}
-                onChange={(e) =>
-                  setExplorerPrefs({
-                    showHiddenFiles,
-                    showNodeModules: e.target.checked,
-                  })
-                }
-              />
-              node_modules
-            </label>
-            <button
-              type="button"
-              className="px-2 py-0.5 rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
-              onClick={expandAllDirectories}
-            >
-              Expand all
-            </button>
-            <button
-              type="button"
-              className="px-2 py-0.5 rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
-              onClick={collapseAllDirectories}
-            >
-              Collapse all
-            </button>
+          <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
+            <div className="flex items-center gap-2">
+              <label className="inline-flex items-center gap-1 text-neutral-600 dark:text-neutral-400">
+                <input
+                  type="checkbox"
+                  checked={showHiddenFiles}
+                  onChange={(e) =>
+                    setExplorerPrefs({
+                      showHiddenFiles: e.target.checked,
+                      showNodeModules,
+                    })
+                  }
+                />
+                Hidden
+              </label>
+              <label className="inline-flex items-center gap-1 text-neutral-600 dark:text-neutral-400">
+                <input
+                  type="checkbox"
+                  checked={showNodeModules}
+                  onChange={(e) =>
+                    setExplorerPrefs({
+                      showHiddenFiles,
+                      showNodeModules: e.target.checked,
+                    })
+                  }
+                />
+                node_modules
+              </label>
+            </div>
+            <div className="inline-flex items-center gap-1.5">
+              <button
+                type="button"
+                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                onClick={() => refreshWorkspaceTree()}
+                title="Refresh files"
+                aria-label="Refresh files"
+              >
+                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <path d="M10 6A4 4 0 1 1 8.83 3.17" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  <path d="M10 2.5V4.5H8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                onClick={expandAllDirectories}
+                title="Expand all"
+                aria-label="Expand all"
+              >
+                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <path d="M3 2.5L6 5.5L9 2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M3 5.5L6 8.5L9 5.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                onClick={collapseAllDirectories}
+                title="Collapse all"
+                aria-label="Collapse all"
+              >
+                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <path d="M3 6.5L6 3.5L9 6.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M3 9.5L6 6.5L9 9.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
-        <div className="flex-1 overflow-auto p-2.5">
+        <div className="flex-1 overflow-auto px-2 pb-2">
           {workspaceTreeLoading && <p className="text-xs text-neutral-500 dark:text-neutral-400 px-1">Loading files...</p>}
           {!workspaceTreeLoading && workspaceTreeError && (
             <p className="text-xs text-red-600 dark:text-red-400 px-1">{workspaceTreeError}</p>
           )}
           {!workspaceTreeLoading && !workspaceTreeError && workspaceTree.length === 0 && (
-            <p className="text-xs text-neutral-500 dark:text-neutral-400 px-1">No files found in this workspace.</p>
+            <div className="m-1 px-2 py-3 text-xs text-neutral-500 dark:text-neutral-400">
+              No files found in this workspace.
+            </div>
           )}
-          {!workspaceTreeLoading && !workspaceTreeError && workspaceTree.map((node) => renderExplorerNode(node))}
+          {!workspaceTreeLoading && !workspaceTreeError && (
+            <div role="tree" aria-label="Workspace files">
+              {workspaceTree.map((node) => renderExplorerNode(node))}
+            </div>
+          )}
         </div>
         {workspaceTreeTruncated && (
-          <div className="px-3 py-2 border-t border-neutral-200/80 dark:border-neutral-800 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50/50 dark:bg-amber-950/20">
+          <div className="px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50/50 dark:bg-amber-950/20">
             File list truncated for performance. Use a smaller workspace for full tree view.
           </div>
         )}
@@ -1444,12 +2480,12 @@ export default function App() {
   function renderGitPane() {
     const canShowEntries = Boolean(gitStatus?.ok)
     return (
-      <div className="h-full min-h-0 flex flex-col bg-white dark:bg-neutral-950">
+      <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
         <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs flex items-center justify-between">
           <span className="font-medium text-neutral-700 dark:text-neutral-300">Git status (view only)</span>
           <button
             type="button"
-            className="px-2.5 py-1 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+            className={UI_BUTTON_SECONDARY_CLASS}
             onClick={refreshGitStatus}
           >
             Refresh
@@ -1474,17 +2510,19 @@ export default function App() {
             Ahead {gitStatus?.ahead ?? 0}, behind {gitStatus?.behind ?? 0} | Updated {formatCheckedAt(gitStatus?.checkedAt)}
           </div>
         </div>
-        <div className="flex-1 overflow-auto p-2.5 space-y-1.5">
+        <div className="flex-1 overflow-auto p-2 space-y-0.5">
           {gitStatusLoading && <p className="text-xs text-neutral-500 dark:text-neutral-400 px-1">Loading git status...</p>}
           {!gitStatusLoading && gitStatusError && <p className="text-xs text-red-600 dark:text-red-400 px-1">{gitStatusError}</p>}
           {!gitStatusLoading && canShowEntries && gitStatus?.clean && (
-            <p className="text-xs text-neutral-500 dark:text-neutral-400 px-1">Working tree clean.</p>
+            <div className="m-1 rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 px-3 py-4 text-xs text-neutral-500 dark:text-neutral-400">
+              Working tree clean.
+            </div>
           )}
           {!gitStatusLoading && canShowEntries && gitStatus?.entries.map((entry) => (
             <button
               key={`${entry.relativePath}-${entry.indexStatus}-${entry.workingTreeStatus}`}
               type="button"
-              className="w-full text-left px-2.5 py-2 rounded-md text-xs font-mono border border-transparent hover:border-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-900 dark:hover:border-neutral-800"
+              className="w-full text-left px-2.5 py-1 rounded-md text-xs font-mono border border-transparent bg-transparent hover:bg-transparent active:bg-transparent hover:border-neutral-300 dark:hover:border-neutral-700"
               onClick={() => openFilePreview(entry.relativePath)}
               title={entry.relativePath}
             >
@@ -1504,57 +2542,198 @@ export default function App() {
     )
   }
 
-  return (
-    <div className="h-screen w-full min-w-0 max-w-full overflow-hidden flex flex-col bg-neutral-50 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
-      <header className="shrink-0 flex items-center justify-between gap-3 min-w-0 px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-950/40 backdrop-blur">
-        <div className="flex items-center gap-3 min-w-0 flex-1">
-          <div className="font-semibold">Agent Orchestrator</div>
-          <div className="text-xs text-neutral-500 dark:text-neutral-400 min-w-0 truncate">
-            Workspace: <span className="font-mono">{workspaceRoot}</span>
+  function renderWorkspaceSettingsPane() {
+    return (
+      <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
+        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
+          <span className="font-medium text-neutral-700 dark:text-neutral-300">Workspace settings</span>
+        </div>
+        <div className="flex-1 overflow-auto px-3 py-3">
+          <div className="space-y-3 text-xs">
+            <div className="space-y-1.5">
+              <label className="text-neutral-600 dark:text-neutral-400">Folder location</label>
+              <div className="grid grid-cols-[1fr_auto] gap-2">
+                <input
+                  className={`w-full ${UI_INPUT_CLASS} font-mono text-xs`}
+                  value={workspaceForm.path}
+                  onChange={(e) => setWorkspaceForm((prev) => ({ ...prev, path: e.target.value }))}
+                />
+                <button
+                  type="button"
+                  className={UI_BUTTON_SECONDARY_CLASS}
+                  onClick={browseForWorkspaceIntoForm}
+                >
+                  Browse
+                </button>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-neutral-600 dark:text-neutral-400">Default model</label>
+              <select
+                className={`w-full ${UI_SELECT_CLASS}`}
+                value={workspaceForm.defaultModel}
+                onChange={(e) =>
+                  setWorkspaceForm((prev) => ({ ...prev, defaultModel: e.target.value }))
+                }
+              >
+                {getModelOptions(workspaceForm.defaultModel).map((id) => {
+                  const mi = modelConfig.interfaces.find((m) => m.id === id)
+                  return (
+                    <option key={id} value={id}>
+                      {mi?.displayName ?? id}
+                    </option>
+                  )
+                })}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-neutral-600 dark:text-neutral-400">Sandbox</label>
+              <select
+                className={`w-full ${UI_SELECT_CLASS}`}
+                value={workspaceForm.sandbox}
+                onChange={(e) =>
+                  setWorkspaceForm((prev) => {
+                    const nextSandbox = e.target.value as SandboxMode
+                    return {
+                      ...prev,
+                      sandbox: nextSandbox,
+                      permissionMode: nextSandbox === 'read-only' ? 'verify-first' : prev.permissionMode,
+                    }
+                  })
+                }
+              >
+                <option value="read-only">Read only</option>
+                <option value="workspace-write">Workspace write</option>
+                <option value="danger-full-access">Danger full access</option>
+              </select>
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                {sandboxModeDescription(workspaceForm.sandbox)}
+              </p>
+            </div>
+            {workspaceForm.sandbox !== 'read-only' && (
+              <div className="space-y-1.5">
+                <label className="text-neutral-600 dark:text-neutral-400">Permissions</label>
+                <select
+                  className={`w-full ${UI_SELECT_CLASS}`}
+                  value={workspaceForm.permissionMode}
+                  onChange={(e) =>
+                    setWorkspaceForm((prev) => ({
+                      ...prev,
+                      permissionMode: e.target.value as PermissionMode,
+                    }))
+                  }
+                >
+                  <option value="verify-first">Verify first (safer)</option>
+                  <option value="proceed-always">Proceed always (autonomous)</option>
+                </select>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <span className="text-neutral-600 dark:text-neutral-400">Debug controls</span>
+              <label className="inline-flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300">
+                <input
+                  type="checkbox"
+                  checked={Boolean(workspaceForm.debug)}
+                  onChange={(e) =>
+                    setWorkspaceForm((prev) => ({
+                      ...prev,
+                      debug: e.target.checked,
+                    }))
+                  }
+                />
+                <span>Show panel activity/debug controls</span>
+              </label>
+            </div>
           </div>
         </div>
-        <div />
-      </header>
+        <div className="px-3 py-3 border-t border-neutral-200/80 dark:border-neutral-800">
+          <button
+            type="button"
+            className={`${UI_BUTTON_PRIMARY_CLASS} w-full`}
+            onClick={saveWorkspaceSettings}
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    )
+  }
 
-      <div className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-3 py-2 bg-white dark:bg-neutral-950">
-        <div className="flex flex-wrap items-center gap-2 text-xs min-w-0">
-          <span className="text-neutral-600 dark:text-neutral-400 w-20 shrink-0">Workspace</span>
-          <select
-            className="flex-1 px-2 py-1 rounded bg-white border border-neutral-300 text-neutral-900 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100 min-w-0 font-mono"
-            value={workspaceList.includes(workspaceRoot) ? workspaceRoot : workspaceList[0] ?? ''}
-            onChange={(e) => applyWorkspaceRoot(e.target.value)}
-          >
-            {workspaceList.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="h-8 w-8 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800 shrink-0"
-            onClick={() => openWorkspaceSettings('new')}
-            title="New workspace"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="h-8 w-8 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800 shrink-0"
-            onClick={() => openWorkspaceSettings('edit')}
-            title="Edit selected workspace"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M3 11.5L3.6 9.2L10.6 2.2L12.8 4.4L5.8 11.4L3 12Z" stroke="currentColor" strokeWidth="1.2" />
-              <path d="M8.5 3.9L11.1 6.5" stroke="currentColor" strokeWidth="1.2" />
-            </svg>
-          </button>
+  return (
+    <div className="h-screen w-full min-w-0 max-w-full overflow-hidden flex flex-col bg-neutral-100 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
+      <div className="shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 px-4 py-3 bg-white dark:bg-neutral-950">
+        <div className="flex flex-wrap items-center justify-between gap-2.5 text-xs min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-neutral-600 dark:text-neutral-400">Workspace</span>
+            <select
+              className={`h-9 px-3 rounded-lg font-mono shadow-sm w-[34vw] max-w-[440px] min-w-[220px] ${UI_INPUT_CLASS}`}
+              value={workspaceList.includes(workspaceRoot) ? workspaceRoot : workspaceList[0] ?? ''}
+              onChange={(e) => applyWorkspaceRoot(e.target.value)}
+            >
+              {workspaceList.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
+              onClick={() => openWorkspaceSettings('new')}
+              title="New workspace"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
+              onClick={() => openWorkspaceSettings('edit')}
+              title="Edit selected workspace"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M3 11.5L3.6 9.2L10.6 2.2L12.8 4.4L5.8 11.4L3 12Z" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M8.5 3.9L11.1 6.5" stroke="currentColor" strokeWidth="1.2" />
+              </svg>
+            </button>
+            <div className="mx-2 h-6 w-px bg-neutral-300/80 dark:bg-neutral-700/80" />
+            <span className="text-neutral-600 dark:text-neutral-400">History</span>
+            <select
+              className={`h-9 px-3 rounded-lg shadow-sm w-[30vw] max-w-[360px] min-w-[180px] ${UI_INPUT_CLASS}`}
+              value={selectedHistoryId}
+              onChange={(e) => {
+                const historyId = e.target.value
+                setSelectedHistoryId(historyId)
+                if (!historyId) return
+                openChatFromHistory(historyId)
+                setSelectedHistoryId('')
+              }}
+            >
+              <option value="">Open chat...</option>
+              {chatHistory.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {formatHistoryOptionLabel(entry)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={`${UI_ICON_BUTTON_CLASS} shrink-0 disabled:opacity-50 disabled:cursor-not-allowed`}
+              onClick={createAgentPanel}
+              title={panels.length >= MAX_PANELS ? `Maximum ${MAX_PANELS} chats open` : 'New chat'}
+              aria-label="New chat"
+              disabled={panels.length >= MAX_PANELS}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
           <div className="flex items-center gap-1">
             <button
-              className={`h-8 w-8 inline-flex items-center justify-center rounded border ${
-                layoutMode === 'horizontal' ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/40' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
+                layoutMode === 'horizontal' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
               }`}
               onClick={() => setLayoutMode('horizontal')}
               title="Split horizontal (H)"
@@ -1565,8 +2744,8 @@ export default function App() {
               </svg>
             </button>
             <button
-              className={`h-8 w-8 inline-flex items-center justify-center rounded border ${
-                layoutMode === 'vertical' ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/40' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
+                layoutMode === 'vertical' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
               }`}
               onClick={() => setLayoutMode('vertical')}
               title="Split vertical (V)"
@@ -1577,8 +2756,8 @@ export default function App() {
               </svg>
             </button>
             <button
-              className={`h-8 w-8 inline-flex items-center justify-center rounded border ${
-                layoutMode === 'grid' ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/40' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
+                layoutMode === 'grid' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
               }`}
               onClick={() => setLayoutMode('grid')}
               title="Tile / Grid"
@@ -1591,95 +2770,94 @@ export default function App() {
               </svg>
             </button>
             <button
-              className="h-8 w-8 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={createAgentPanel}
-              disabled={panels.length >= MAX_PANELS}
-              title={panels.length >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'New panel'}
+              className={UI_ICON_BUTTON_CLASS}
+              onClick={() => setShowWorkspaceWindow((prev) => !prev)}
+              title={showWorkspaceWindow ? 'Hide workspace window' : 'Show workspace window'}
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" stroke="currentColor" />
-                <path d="M8 5v6M5 8h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <rect x="2.2" y="2.5" width="11.6" height="11" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
+                <path
+                  d="M10 3.3H13V12.7H10Z"
+                  fill="currentColor"
+                  fillOpacity={showWorkspaceWindow ? 0.38 : 0.2}
+                />
+                <path d="M10 3.2V12.8" stroke="currentColor" strokeOpacity="0.55" strokeWidth="1" />
               </svg>
             </button>
           </div>
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 min-w-0 bg-neutral-100 dark:bg-neutral-900">
-        <Group orientation="horizontal" className="h-full min-h-0 min-w-0 select-none" id="workspace-shell-layout">
-          <Panel id="workspace-dock" defaultSize={28} minSize={16} maxSize={65} className="min-h-0 min-w-[220px]">
-            <div className="h-full min-h-0 min-w-0 flex flex-col border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950">
-              <div className="px-2 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-1">
-                <button
-                  type="button"
-                  className={`px-2.5 py-1 rounded text-xs border ${
-                    dockTab === 'explorer'
-                      ? 'border-blue-600 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
-                      : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
-                  }`}
-                  onClick={() => setDockTab('explorer')}
-                >
-                  Explorer
-                </button>
-                <button
-                  type="button"
-                  className={`px-2.5 py-1 rounded text-xs border ${
-                    dockTab === 'git'
-                      ? 'border-blue-600 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
-                      : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
-                  }`}
-                  onClick={() => setDockTab('git')}
-                >
-                  Git
-                </button>
-              </div>
-              <div className="flex-1 min-h-0 min-w-0">
-                {dockTab === 'explorer' ? renderExplorerPane() : renderGitPane()}
-              </div>
-            </div>
-          </Panel>
-          <Separator className="w-2 min-w-2 cursor-col-resize bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
-          <Panel id="workspace-content" minSize={25} className="min-h-0 min-w-0">
-            <div ref={layoutRef} className="h-full flex flex-col min-h-0 min-w-0">
-              {panels.length === 1 ? (
-                <div className="flex-1 min-h-0 min-w-0 overflow-hidden">{renderPanelContent(panels[0])}</div>
-              ) : layoutMode === 'grid' ? (
-                renderGridLayout()
-              ) : (
-                (() => {
-                  // UX naming:
-                  // - "Horizontal" means a horizontal split line (stacked panes, top/bottom)
-                  // - "Vertical" means a vertical split line (side-by-side panes, left/right)
-                  // react-resizable-panels uses orientation as the pane flow direction, so we map accordingly.
-                  const paneFlowOrientation = layoutMode === 'horizontal' ? 'vertical' : 'horizontal'
-                  return (
-                    <Group orientation={paneFlowOrientation} className="flex-1 min-h-0 min-w-0" id="main-layout">
-                      {panels.map((w, idx) => (
-                        <React.Fragment key={w.id}>
-                          {idx > 0 && (
-                            <Separator
-                              className={
-                                paneFlowOrientation === 'horizontal'
-                                  ? 'w-1 min-w-1 bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
-                                  : 'h-1 min-h-1 bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
-                              }
-                            />
-                          )}
-                          <Panel id={`panel-${w.id}`} defaultSize={100 / panels.length} minSize={15} className="min-h-0 min-w-0">
-                            {renderPanelContent(w)}
-                          </Panel>
-                        </React.Fragment>
-                      ))}
-                    </Group>
-                  )
-                })()
-              )}
-            </div>
-          </Panel>
-        </Group>
+      <div className="relative flex-1 min-h-0 min-w-0 bg-gradient-to-b from-neutral-100/90 to-neutral-100/60 dark:from-neutral-900 dark:to-neutral-950">
+        <div ref={layoutRef} className="h-full flex flex-col min-h-0 min-w-0">
+          {(() => {
+            const layoutPaneIds = [
+              ...panels.map((p) => p.id),
+              ...editorPanels.map((p) => p.id),
+              ...(showWorkspaceWindow ? (['workspace-window'] as const) : []),
+            ]
+            if (layoutPaneIds.length === 1) {
+              const id = layoutPaneIds[0]
+              if (id === 'workspace-window') {
+                return (
+                  <div className="flex-1 min-h-0 min-w-0 overflow-hidden px-3 py-3">
+                    <div className="h-full min-h-0 max-w-full" style={{ width: '20%' }}>
+                      {renderLayoutPane(id)}
+                    </div>
+                  </div>
+                )
+              }
+              return <div className="flex-1 min-h-0 min-w-0 overflow-hidden">{renderLayoutPane(id)}</div>
+            }
+            if (layoutMode === 'grid') {
+              return renderGridLayout(layoutPaneIds as string[])
+            }
+            return (
+              (() => {
+                // UX naming:
+                // - "Horizontal" means a horizontal split line (stacked panes, top/bottom)
+                // - "Vertical" means a vertical split line (side-by-side panes, left/right)
+                // react-resizable-panels uses orientation as the pane flow direction, so we map accordingly.
+                const paneFlowOrientation = layoutMode === 'horizontal' ? 'vertical' : 'horizontal'
+                const contentPaneCount = panels.length + editorPanels.length
+                return (
+                  <Group orientation={paneFlowOrientation} className="flex-1 min-h-0 min-w-0" id="main-layout">
+                    {(layoutPaneIds as string[]).map((panelId, idx) => (
+                      <React.Fragment key={panelId}>
+                        {idx > 0 && (
+                          <Separator
+                            className={
+                              paneFlowOrientation === 'horizontal'
+                                ? 'w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
+                                : 'h-1 min-h-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
+                            }
+                          />
+                        )}
+                        <Panel
+                          id={`panel-${panelId}`}
+                          defaultSize={
+                            paneFlowOrientation === 'horizontal' && showWorkspaceWindow
+                              ? panelId === 'workspace-window'
+                                ? 20
+                                : 80 / Math.max(1, contentPaneCount)
+                              : 100 / layoutPaneIds.length
+                          }
+                          minSize={15}
+                          className="min-h-0 min-w-0"
+                        >
+                          {renderLayoutPane(panelId)}
+                        </Panel>
+                      </React.Fragment>
+                    ))}
+                  </Group>
+                )
+              })()
+            )
+          })()}
+        </div>
       </div>
 
-      <footer className="shrink-0 px-3 py-1.5 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-900 text-xs text-neutral-600 dark:text-neutral-400 flex items-center gap-4">
+      <footer className="shrink-0 px-4 py-2 border-t border-neutral-200/80 dark:border-neutral-800 bg-white/85 dark:bg-neutral-950 text-xs text-neutral-600 dark:text-neutral-400 flex items-center gap-4 backdrop-blur">
         <span className="font-mono truncate max-w-[40ch]" title={workspaceRoot}>
           {workspaceRoot.split(/[/\\]/).pop() || workspaceRoot}
         </span>
@@ -1698,18 +2876,29 @@ export default function App() {
 
       {filePreview && (
         <div
-          className="fixed inset-0 z-40 bg-black/35 flex items-center justify-center p-4"
+          className="fixed inset-0 z-40 bg-black/35 backdrop-blur-[2px] flex items-center justify-center p-4"
           onClick={() => setFilePreview(null)}
         >
           <div
-            className="w-[72vw] h-[72vh] min-w-[520px] min-h-[320px] max-w-[90vw] max-h-[90vh] resize overflow-hidden rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-2xl flex flex-col"
+            className="w-[72vw] h-[72vh] min-w-[520px] min-h-[320px] max-w-[90vw] max-h-[90vh] resize overflow-hidden rounded-2xl border border-neutral-200/80 dark:border-neutral-800 bg-white/95 dark:bg-neutral-950 shadow-2xl flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-2">
-              <div className="text-xs font-mono truncate" title={filePreview.relativePath}>
+            <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-2 min-w-0">
+              <div className="min-w-0 flex-1 text-xs font-mono truncate" title={filePreview.relativePath}>
                 {filePreview.relativePath}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="shrink-0 flex items-center gap-2">
+                <button
+                  type="button"
+                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800 disabled:opacity-50"
+                  disabled={filePreview.loading || Boolean(filePreview.error) || filePreview.binary}
+                  onClick={() => {
+                    void openEditorForRelativePath(filePreview.relativePath)
+                    setFilePreview(null)
+                  }}
+                >
+                  Open in Editor
+                </button>
                 <button
                   type="button"
                   className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800 disabled:opacity-50"
@@ -1720,7 +2909,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className="h-7 w-9 inline-flex items-center justify-center rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                  className={UI_CLOSE_ICON_BUTTON_CLASS}
                   onClick={() => setFilePreview(null)}
                   title="Close preview"
                 >
@@ -1744,7 +2933,7 @@ export default function App() {
                 </div>
               )}
               {!filePreview.loading && !filePreview.error && !filePreview.binary && (
-                <pre className="p-4 m-0 text-[12px] leading-5 font-mono whitespace-pre overflow-x-auto text-neutral-900 dark:text-neutral-100">
+                <pre className="p-4 m-0 text-[12px] leading-5 font-mono whitespace-pre overflow-auto text-blue-950 dark:text-blue-100 bg-blue-50/60 dark:bg-blue-950/20">
                   {filePreview.content}
                 </pre>
               )}
@@ -1758,12 +2947,12 @@ export default function App() {
       )}
 
       {showThemeModal && (
-        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
-          <div className="w-full max-w-md rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-xl">
+        <div className={MODAL_BACKDROP_CLASS}>
+          <div className={`w-full max-w-md ${MODAL_CARD_CLASS}`}>
             <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
               <div className="font-medium">Theme</div>
               <button
-                className="h-7 w-9 inline-flex items-center justify-center rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                className={UI_CLOSE_ICON_BUTTON_CLASS}
                 onClick={() => setShowThemeModal(false)}
                 title="Close"
               >
@@ -1795,7 +2984,7 @@ export default function App() {
             </div>
             <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end">
               <button
-                className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-500"
+                className={UI_BUTTON_PRIMARY_CLASS}
                 onClick={() => setShowThemeModal(false)}
               >
                 Done
@@ -1806,12 +2995,12 @@ export default function App() {
       )}
 
       {showWorkspacePicker && (
-        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
-          <div className="w-full max-w-xl rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-xl">
+        <div className={MODAL_BACKDROP_CLASS}>
+          <div className={`w-full max-w-xl ${MODAL_CARD_CLASS}`}>
             <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
               <div className="font-medium">Open workspace</div>
               <button
-                className="h-7 w-9 inline-flex items-center justify-center rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                className={UI_CLOSE_ICON_BUTTON_CLASS}
                 onClick={() => setShowWorkspacePicker(false)}
                 title="Close"
               >
@@ -1855,6 +3044,7 @@ export default function App() {
                       defaultModel: DEFAULT_MODEL,
                       permissionMode: 'verify-first',
                       sandbox: 'workspace-write',
+                      debug: false,
                     },
                   }))
                   applyWorkspaceRoot(selected)
@@ -1872,12 +3062,12 @@ export default function App() {
       )}
 
       {showModelSetupModal && (
-        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
-          <div className="w-full max-w-2xl rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-xl max-h-[90vh] flex flex-col">
+        <div className={MODAL_BACKDROP_CLASS}>
+          <div className={`w-full max-w-2xl ${MODAL_CARD_CLASS} max-h-[90vh] flex flex-col`}>
             <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0">
               <div className="font-medium">Model setup</div>
               <button
-                className="h-7 w-9 inline-flex items-center justify-center rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                className={UI_CLOSE_ICON_BUTTON_CLASS}
                 onClick={() => {
                   setShowModelSetupModal(false)
                   setEditingModel(null)
@@ -1892,33 +3082,33 @@ export default function App() {
             </div>
             <div className="p-4 overflow-auto flex-1">
               <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
-                Add and configure model interfaces. Codex uses your ChatGPT login. Gemini requires an API key from Google AI Studio.
+                Add and configure model interfaces. Codex uses your ChatGPT login. Gemini uses your local Gemini CLI login (subscription), no API key required.
               </p>
               {editingModel ? (
                 <div className="space-y-4">
                   <div className="grid grid-cols-[120px_1fr] items-center gap-2 text-sm">
                     <span className="text-neutral-600 dark:text-neutral-400">ID</span>
                     <input
-                      className="px-2 py-1 rounded border border-neutral-300 bg-white dark:bg-neutral-900 dark:border-neutral-800 font-mono text-sm"
+                      className={`${UI_INPUT_CLASS} font-mono text-sm`}
                       value={modelForm.id}
                       onChange={(e) => setModelForm((p) => ({ ...p, id: e.target.value }))}
                       placeholder="e.g. gemini-2.0-flash"
                     />
                     <span className="text-neutral-600 dark:text-neutral-400">Display name</span>
                     <input
-                      className="px-2 py-1 rounded border border-neutral-300 bg-white dark:bg-neutral-900 dark:border-neutral-800"
+                      className={UI_INPUT_CLASS}
                       value={modelForm.displayName}
                       onChange={(e) => setModelForm((p) => ({ ...p, displayName: e.target.value }))}
                       placeholder="e.g. Gemini 2.0 Flash"
                     />
                     <span className="text-neutral-600 dark:text-neutral-400">Provider</span>
                     <select
-                      className="px-2 py-1 rounded border border-neutral-300 bg-white dark:bg-neutral-900 dark:border-neutral-800"
+                      className={UI_SELECT_CLASS}
                       value={modelForm.provider}
                       onChange={(e) => setModelForm((p) => ({ ...p, provider: e.target.value as ModelProvider }))}
                     >
                       <option value="codex">Codex (ChatGPT)</option>
-                      <option value="gemini">Gemini (Google AI)</option>
+                      <option value="gemini">Gemini (CLI subscription)</option>
                     </select>
                     <span className="text-neutral-600 dark:text-neutral-400">Enabled</span>
                     <label className="flex items-center gap-2">
@@ -1929,27 +3119,10 @@ export default function App() {
                       />
                       Show in model selector
                     </label>
-                    {modelForm.provider === 'gemini' && (
-                      <>
-                        <span className="text-neutral-600 dark:text-neutral-400">API key</span>
-                        <input
-                          type="password"
-                          className="px-2 py-1 rounded border border-neutral-300 bg-white dark:bg-neutral-900 dark:border-neutral-800 font-mono"
-                          value={modelForm.config?.apiKey ?? ''}
-                          onChange={(e) =>
-                            setModelForm((p) => ({
-                              ...p,
-                              config: { ...p.config, apiKey: e.target.value },
-                            }))
-                          }
-                          placeholder="From Google AI Studio"
-                        />
-                      </>
-                    )}
                   </div>
                   <div className="flex gap-2">
                     <button
-                      className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-500"
+                      className={UI_BUTTON_PRIMARY_CLASS}
                       onClick={() => {
                         const idx = modelConfig.interfaces.findIndex((m) => m.id === editingModel.id)
                         const next = [...modelConfig.interfaces]
@@ -2029,14 +3202,14 @@ export default function App() {
       )}
 
       {showWorkspaceModal && (
-        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
-          <div className="w-full max-w-2xl rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-xl">
+        <div className={MODAL_BACKDROP_CLASS}>
+          <div className={`w-full max-w-2xl ${MODAL_CARD_CLASS}`}>
             <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
               <div className="font-medium">
                 {workspaceModalMode === 'new' ? 'New workspace settings' : 'Edit workspace settings'}
               </div>
               <button
-                className="h-7 w-9 inline-flex items-center justify-center rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                className={UI_CLOSE_ICON_BUTTON_CLASS}
                 onClick={() => setShowWorkspaceModal(false)}
                 title="Close"
               >
@@ -2050,13 +3223,13 @@ export default function App() {
               <div className="grid grid-cols-[140px_1fr_auto] items-center gap-2">
                 <span className="text-neutral-600 dark:text-neutral-400">Folder location</span>
                 <input
-                  className="w-full px-2 py-1 rounded bg-white border border-neutral-300 text-neutral-900 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100 font-mono"
+                  className={`w-full ${UI_INPUT_CLASS} font-mono`}
                   value={workspaceForm.path}
                   onChange={(e) => setWorkspaceForm((prev) => ({ ...prev, path: e.target.value }))}
                 />
                 <button
                   type="button"
-                  className="px-2 py-1 rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                  className={UI_BUTTON_SECONDARY_CLASS}
                   onClick={browseForWorkspaceIntoForm}
                 >
                   Browse
@@ -2065,7 +3238,7 @@ export default function App() {
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <span className="text-neutral-600 dark:text-neutral-400">Default model</span>
                 <select
-                  className="px-2 py-1 rounded border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
+                  className={UI_SELECT_CLASS}
                   value={workspaceForm.defaultModel}
                   onChange={(e) =>
                     setWorkspaceForm((prev) => ({ ...prev, defaultModel: e.target.value }))
@@ -2085,13 +3258,18 @@ export default function App() {
                 <span className="text-neutral-600 dark:text-neutral-400">Sandbox</span>
                 <div className="space-y-1">
                   <select
-                    className="w-full px-2 py-1 rounded border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
+                    className={`w-full ${UI_SELECT_CLASS}`}
                     value={workspaceForm.sandbox}
                     onChange={(e) =>
-                      setWorkspaceForm((prev) => ({
-                        ...prev,
-                        sandbox: e.target.value as SandboxMode,
-                      }))
+                      setWorkspaceForm((prev) => {
+                        const nextSandbox = e.target.value as SandboxMode
+                        return {
+                          ...prev,
+                          sandbox: nextSandbox,
+                          // In read-only mode, approval policy is irrelevant; keep safest mode persisted.
+                          permissionMode: nextSandbox === 'read-only' ? 'verify-first' : prev.permissionMode,
+                        }
+                      })
                     }
                   >
                     <option value="read-only">Read only</option>
@@ -2103,21 +3281,39 @@ export default function App() {
                   </p>
                 </div>
               </div>
+              {workspaceForm.sandbox !== 'read-only' && (
+                <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                  <span className="text-neutral-600 dark:text-neutral-400">Permissions</span>
+                  <select
+                    className={UI_SELECT_CLASS}
+                    value={workspaceForm.permissionMode}
+                    onChange={(e) =>
+                      setWorkspaceForm((prev) => ({
+                        ...prev,
+                        permissionMode: e.target.value as PermissionMode,
+                      }))
+                    }
+                  >
+                    <option value="verify-first">Verify first (safer)</option>
+                    <option value="proceed-always">Proceed always (autonomous)</option>
+                  </select>
+                </div>
+              )}
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <span className="text-neutral-600 dark:text-neutral-400">Permissions</span>
-                <select
-                  className="px-2 py-1 rounded border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
-                  value={workspaceForm.permissionMode}
-                  onChange={(e) =>
-                    setWorkspaceForm((prev) => ({
-                      ...prev,
-                      permissionMode: e.target.value as PermissionMode,
-                    }))
-                  }
-                >
-                  <option value="verify-first">Verify first (safer)</option>
-                  <option value="proceed-always">Proceed always (autonomous)</option>
-                </select>
+                <span className="text-neutral-600 dark:text-neutral-400">Debug controls</span>
+                <label className="inline-flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(workspaceForm.debug)}
+                    onChange={(e) =>
+                      setWorkspaceForm((prev) => ({
+                        ...prev,
+                        debug: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span>Show panel activity/debug controls</span>
+                </label>
               </div>
             </div>
             <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-between">
@@ -2143,7 +3339,7 @@ export default function App() {
                   Cancel
                 </button>
                 <button
-                  className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-500"
+                  className={UI_BUTTON_PRIMARY_CLASS}
                   onClick={saveWorkspaceSettings}
                 >
                   Save
@@ -2157,11 +3353,12 @@ export default function App() {
   )
 
   function renderPanelContent(w: AgentPanelState) {
-    const hasInput = Boolean(w.input.trim())
+    const hasInput = Boolean(w.input.trim()) || w.attachments.length > 0
     const isBusy = w.streaming
     const queueCount = w.pendingInputs.length
     const panelFontSizePx = 14 * w.fontScale
     const panelLineHeightPx = 24 * w.fontScale
+    const panelTextStyle = { fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }
     const sendTitle = isBusy
       ? hasInput
         ? `Queue message${queueCount > 0 ? ` (${queueCount} queued)` : ''}`
@@ -2169,78 +3366,324 @@ export default function App() {
       : 'Send'
     const activity = panelActivityById[w.id]
     const msSinceLastActivity = activity ? activityClock - activity.lastEventAt : Number.POSITIVE_INFINITY
-    const isLive = isBusy || msSinceLastActivity < 4000
-    const activityDotClass = isLive
+    const isRunning = isBusy
+    const hasRecentActivity = msSinceLastActivity < 4000
+    const activityDotClass = isRunning
       ? 'bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.15)]'
-      : 'bg-neutral-300 dark:bg-neutral-700'
-    const activityLabel = isLive ? 'live' : 'idle'
+      : hasRecentActivity
+        ? 'bg-sky-500/90'
+        : 'bg-neutral-300 dark:bg-neutral-700'
+    const activityLabel = isRunning ? 'running' : hasRecentActivity ? 'recent' : 'idle'
     const secondsAgo = Number.isFinite(msSinceLastActivity) ? Math.max(0, Math.floor(msSinceLastActivity / 1000)) : null
     const activityTitle = activity
       ? `Activity: ${activityLabel}\nLast event: ${activity.lastEventLabel}\n${secondsAgo}s ago\nEvents seen: ${activity.totalEvents}`
       : 'Activity: idle\nNo events seen yet for this panel.'
     const activityItems = activity?.recent ?? []
     const activityOpen = Boolean(activityOpenByPanel[w.id])
+    const debugItems = panelDebugById[w.id] ?? []
+    const debugOpen = Boolean(debugOpenByPanel[w.id])
+    const panelWorkspaceSettings =
+      workspaceSettingsByPath[w.cwd] ?? workspaceSettingsByPath[workspaceRoot]
+    const debugControlsVisible = Boolean(panelWorkspaceSettings?.debug)
 
     return (
       <div
         className={[
-          'h-full min-h-0 min-w-0 flex flex-col rounded-lg border bg-white dark:bg-neutral-950 overflow-hidden outline-none',
+          'h-full min-h-0 min-w-0 flex flex-col rounded-xl border bg-white dark:bg-neutral-950 overflow-hidden outline-none shadow-sm',
           activePanelId === w.id
-            ? 'border-blue-400 dark:border-blue-600 ring-1 ring-blue-200 dark:ring-blue-900/40'
-            : 'border-neutral-200 dark:border-neutral-800',
+            ? 'border-blue-400 dark:border-blue-600 ring-2 ring-blue-100 dark:ring-blue-900/40'
+            : 'border-neutral-200/90 dark:border-neutral-800',
         ].join(' ')}
         tabIndex={0}
-        onFocusCapture={() => setActivePanelId(w.id)}
-        onMouseDownCapture={() => setActivePanelId(w.id)}
+        onFocusCapture={() => {
+          setActivePanelId(w.id)
+          setFocusedEditorId(null)
+        }}
+        onMouseDownCapture={() => {
+          setActivePanelId(w.id)
+          setFocusedEditorId(null)
+        }}
         onWheel={(e) => {
-          if (!e.ctrlKey) return
-          if (activePanelId !== w.id) return
+          if (!isZoomWheelGesture(e)) return
           e.preventDefault()
+          setActivePanelId(w.id)
+          setFocusedEditorId(null)
           zoomPanelFont(w.id, e.deltaY)
         }}
       >
-        <div className="flex items-center justify-between gap-2 min-w-0 px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 shrink-0">
-          <div className="flex-1 min-w-0 text-sm font-medium truncate" title={w.title}>{getConversationPrecis(w)}</div>
-          <button
-            className="h-7 w-9 shrink-0 inline-flex items-center justify-center hover:bg-red-600 hover:text-white dark:hover:bg-red-600 rounded"
-            onClick={() => closePanel(w.id)}
-            title="Close"
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-            </svg>
-          </button>
+        <div className="flex items-center justify-between gap-2 min-w-0 px-3 py-2.5 border-b border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-950 shrink-0">
+          <div className="flex-1 min-w-0 text-sm font-semibold tracking-tight truncate" title={w.title}>{getConversationPrecis(w)}</div>
+          <div className="flex items-center gap-1">
+            <button
+              className="h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border border-transparent hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/50 dark:hover:text-blue-300 dark:hover:border-blue-900/60 disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => splitAgentPanel(w.id)}
+              disabled={panels.length >= MAX_PANELS}
+              title={panels.length >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'Split panel'}
+              aria-label="Split panel"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <rect x="2.5" y="3" width="5.2" height="10" rx="1" stroke="currentColor" />
+                <rect x="8.3" y="3" width="5.2" height="10" rx="1" stroke="currentColor" />
+              </svg>
+            </button>
+            <button
+              className="h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border border-transparent hover:border-red-200 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/50 dark:hover:text-red-300 dark:hover:border-red-900/60"
+              onClick={() => closePanel(w.id)}
+              title="Close"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div
-          className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 space-y-2 bg-neutral-100 dark:bg-neutral-950 min-h-0"
-          style={{ fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }}
+          ref={(el) => registerMessageViewport(w.id, el)}
+          onScroll={() => onMessageViewportScroll(w.id)}
+          className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 space-y-2.5 bg-neutral-50 dark:bg-neutral-950 min-h-0"
+          style={panelTextStyle}
         >
-          {w.messages.map((m) => (
+          {w.messages.length === 0 && (
+            <div className="mx-auto mt-8 max-w-2xl rounded-2xl border border-dashed border-neutral-300 bg-white/90 px-5 py-5 text-sm shadow-sm dark:border-neutral-700 dark:bg-neutral-900/70">
+              <div className="text-base font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
+                Start a new agent turn
+              </div>
+              <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+                Ask for a plan, implementation, review, or debugging help in this workspace.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2 text-[11px]">
+                <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2 py-0.5 text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
+                  Enter to send
+                </span>
+                <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2 py-0.5 text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
+                  Shift+Enter for new line
+                </span>
+                <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2 py-0.5 text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
+                  Ctrl+Mousewheel to zoom text
+                </span>
+              </div>
+            </div>
+          )}
+          {w.messages.map((m) => {
+            let codeBlockIndex = 0
+            const shouldCollapseThinking = m.role === 'assistant' && isLikelyThinkingUpdate(m.content)
+            const thinkingOpen = thinkingOpenByMessageId[m.id] ?? false
+            return (
             <div key={m.id} className="w-full">
               <div
                 className={[
-                  'w-full rounded-xl px-3 py-2 border',
+                  'w-full rounded-2xl px-3.5 py-2.5 border shadow-sm',
                   m.role === 'user'
-                    ? 'bg-blue-50 border-blue-200 text-blue-950 dark:bg-blue-950/40 dark:border-blue-900 dark:text-blue-100'
-                    : 'bg-white border-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:border-neutral-800 dark:text-neutral-100',
+                    ? 'bg-blue-50/90 border-blue-200 text-blue-950 dark:bg-blue-950/40 dark:border-blue-900 dark:text-blue-100'
+                    : 'bg-white border-neutral-200/90 text-neutral-900 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100',
                   m.role === 'system'
                     ? 'bg-neutral-50 border-neutral-200 text-neutral-700 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-300'
                     : '',
                 ].join(' ')}
               >
-                {m.role === 'assistant' && m.format === 'markdown' ? (
-                  <div className="prose prose-neutral dark:prose-invert prose-pre:bg-neutral-900/5 dark:prose-pre:bg-neutral-950 prose-pre:border prose-pre:border-neutral-200 dark:prose-pre:border-neutral-800 prose-pre:rounded-lg prose-pre:p-3 max-w-none break-words [overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:overflow-x-hidden [&_code]:break-words">
+                {shouldCollapseThinking ? (
+                  <details
+                    open={thinkingOpen}
+                    onToggle={(e) => {
+                      const next = e.currentTarget.open
+                      setThinkingOpenByMessageId((prev) =>
+                        prev[m.id] === next ? prev : { ...prev, [m.id]: next },
+                      )
+                    }}
+                    className="group rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-100/80 dark:bg-neutral-950/45"
+                  >
+                    <summary className="list-none cursor-pointer px-3 py-1.5 text-[10.5px] text-neutral-600 dark:text-neutral-400 flex items-center justify-between">
+                      <span>Thinking / progress updates</span>
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        className="transition-transform group-open:rotate-180"
+                        aria-hidden
+                      >
+                        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </summary>
+                    <div className="border-t border-neutral-200 dark:border-neutral-800 px-3 py-2 text-[12px] leading-5 text-neutral-700 dark:text-neutral-300">
+                      {m.role === 'assistant' && m.format === 'markdown' ? (
+                        <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-1 prose-headings:my-1 prose-code:text-blue-800 dark:prose-code:text-blue-300">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              pre(props) {
+                                const first = React.Children.toArray(props.children)[0] as any
+                                const codeClass = typeof first?.props?.className === 'string' ? first.props.className : ''
+                                const rawChildren = first?.props?.children
+                                const codeText = Array.isArray(rawChildren) ? rawChildren.join('') : String(rawChildren ?? '')
+                                const normalized = codeText.replace(/\n$/, '')
+                                const lineCount = normalized ? normalized.split('\n').length : 0
+                                const lang = codeClass.startsWith('language-') ? codeClass.slice('language-'.length) : 'code'
+                                const isDiff = lang === 'diff'
+                                const diffLines = normalized.split('\n')
+                                const openByDefault = lineCount <= COLLAPSIBLE_CODE_MIN_LINES
+                                const codeBlockId = `${m.id}:${codeBlockIndex++}`
+                                const isOpen = codeBlockOpenById[codeBlockId] ?? openByDefault
+                                return (
+                                  <details
+                                    open={isOpen}
+                                    onToggle={(e) => {
+                                      const next = e.currentTarget.open
+                                      setCodeBlockOpenById((prev) =>
+                                        prev[codeBlockId] === next ? prev : { ...prev, [codeBlockId]: next },
+                                      )
+                                    }}
+                                    className="group my-2 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-950/25"
+                                  >
+                                    <summary className="list-none cursor-pointer px-3 py-1.5 text-[11px] font-medium text-blue-800 dark:text-blue-200 flex items-center justify-between">
+                                      <span className="inline-flex items-center gap-1.5">
+                                        <span>{lang} - {lineCount} lines</span>
+                                        {isDiff && (
+                                          <span className="rounded border border-emerald-300 bg-emerald-100 px-1.5 py-0.5 text-[10px] leading-none text-emerald-900 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">
+                                            DIFF
+                                          </span>
+                                        )}
+                                      </span>
+                                      <svg
+                                        width="12"
+                                        height="12"
+                                        viewBox="0 0 12 12"
+                                        fill="none"
+                                        className="transition-transform group-open:rotate-180"
+                                        aria-hidden
+                                      >
+                                        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                                      </svg>
+                                    </summary>
+                                    <pre
+                                      ref={(el) => registerCodeBlockViewport(codeBlockId, el)}
+                                      onScroll={() => onCodeBlockViewportScroll(codeBlockId)}
+                                      className="m-0 rounded-t-none border-t border-blue-200 dark:border-blue-900/60 p-3 overflow-auto max-h-80 whitespace-pre bg-white/80 dark:bg-neutral-950/80"
+                                    >
+                                      {isDiff ? (
+                                        <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>
+                                          {diffLines.map((line, idx) => (
+                                            <div
+                                              key={idx}
+                                              className={[
+                                                line.startsWith('+') ? 'bg-emerald-100/80 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-200' : '',
+                                                line.startsWith('-') ? 'bg-rose-100/80 text-rose-900 dark:bg-rose-900/30 dark:text-rose-200' : '',
+                                              ].join(' ')}
+                                            >
+                                              {line}
+                                            </div>
+                                          ))}
+                                        </code>
+                                      ) : (
+                                        <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>{rawChildren}</code>
+                                      )}
+                                    </pre>
+                                  </details>
+                                )
+                              },
+                              code(props) {
+                                const { children, className } = props as any
+                                const isBlock = typeof className === 'string' && className.includes('language-')
+                                if (isBlock) return <code className={className}>{children}</code>
+                                return (
+                                  <code className="px-1 py-0.5 rounded bg-blue-100 text-blue-900 dark:bg-blue-950/50 dark:text-blue-200">
+                                    {children}
+                                  </code>
+                                )
+                              },
+                            }}
+                          >
+                            {m.content}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] text-neutral-700 dark:text-neutral-300">{m.content}</div>
+                      )}
+                    </div>
+                  </details>
+                ) : m.role === 'assistant' && m.format === 'markdown' ? (
+                  <div className="prose prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-code:text-blue-800 dark:prose-code:text-blue-300">
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
                       components={{
+                        pre(props) {
+                          const first = React.Children.toArray(props.children)[0] as any
+                          const codeClass = typeof first?.props?.className === 'string' ? first.props.className : ''
+                          const rawChildren = first?.props?.children
+                          const codeText = Array.isArray(rawChildren) ? rawChildren.join('') : String(rawChildren ?? '')
+                          const normalized = codeText.replace(/\n$/, '')
+                          const lineCount = normalized ? normalized.split('\n').length : 0
+                          const lang = codeClass.startsWith('language-') ? codeClass.slice('language-'.length) : 'code'
+                          const isDiff = lang === 'diff'
+                          const diffLines = normalized.split('\n')
+                          const openByDefault = lineCount <= COLLAPSIBLE_CODE_MIN_LINES
+                          const codeBlockId = `${m.id}:${codeBlockIndex++}`
+                          const isOpen = codeBlockOpenById[codeBlockId] ?? openByDefault
+                          return (
+                            <details
+                              open={isOpen}
+                              onToggle={(e) => {
+                                const next = e.currentTarget.open
+                                setCodeBlockOpenById((prev) =>
+                                  prev[codeBlockId] === next ? prev : { ...prev, [codeBlockId]: next },
+                                )
+                              }}
+                              className="group my-2 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-950/25"
+                            >
+                              <summary className="list-none cursor-pointer px-3 py-1.5 text-[11px] font-medium text-blue-800 dark:text-blue-200 flex items-center justify-between">
+                              <span className="inline-flex items-center gap-1.5">
+                                <span>{lang} - {lineCount} lines</span>
+                                {isDiff && (
+                                  <span className="rounded border border-emerald-300 bg-emerald-100 px-1.5 py-0.5 text-[10px] leading-none text-emerald-900 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">
+                                    DIFF
+                                  </span>
+                                )}
+                              </span>
+                              <svg
+                                width="12"
+                                height="12"
+                                viewBox="0 0 12 12"
+                                fill="none"
+                                className="transition-transform group-open:rotate-180"
+                                aria-hidden
+                              >
+                                <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                              </summary>
+                              <pre
+                                ref={(el) => registerCodeBlockViewport(codeBlockId, el)}
+                                onScroll={() => onCodeBlockViewportScroll(codeBlockId)}
+                                className="m-0 rounded-t-none border-t border-blue-200 dark:border-blue-900/60 p-3 overflow-auto max-h-80 whitespace-pre bg-white/80 dark:bg-neutral-950/80"
+                              >
+                              {isDiff ? (
+                                <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>
+                                  {diffLines.map((line, idx) => (
+                                    <div
+                                      key={idx}
+                                      className={[
+                                        line.startsWith('+') ? 'bg-emerald-100/80 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-200' : '',
+                                        line.startsWith('-') ? 'bg-rose-100/80 text-rose-900 dark:bg-rose-900/30 dark:text-rose-200' : '',
+                                      ].join(' ')}
+                                    >
+                                      {line}
+                                    </div>
+                                  ))}
+                                </code>
+                              ) : (
+                                <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>{rawChildren}</code>
+                              )}
+                              </pre>
+                            </details>
+                          )
+                        },
                         code(props) {
-                          const { children, className } = props
+                          const { children, className } = props as any
                           const isBlock = typeof className === 'string' && className.includes('language-')
                           if (isBlock) return <code className={className}>{children}</code>
                           return (
-                            <code className="px-1 py-0.5 rounded bg-neutral-900/10 dark:bg-neutral-100/10">
+                            <code className="px-1 py-0.5 rounded bg-blue-100 text-blue-900 dark:bg-blue-950/50 dark:text-blue-200">
                               {children}
                             </code>
                           )
@@ -2250,21 +3693,59 @@ export default function App() {
                       {m.content}
                     </ReactMarkdown>
                   </div>
-                ) : (
+                ) : m.content ? (
                   <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{m.content}</div>
+                ) : null}
+                {m.attachments && m.attachments.length > 0 && (
+                  <div className={`${m.content ? 'mt-2' : ''} flex flex-wrap gap-2`}>
+                    {m.attachments.map((attachment) => (
+                      <img
+                        key={attachment.id}
+                        src={toLocalFileUrl(attachment.path)}
+                        alt={attachment.label || 'Image attachment'}
+                        title={attachment.path}
+                        className="h-20 w-20 rounded-md border border-blue-200/80 object-cover bg-blue-50 dark:border-blue-900/70 dark:bg-blue-950/20"
+                        loading="lazy"
+                      />
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
 
-        <div className="border-t border-neutral-200 dark:border-neutral-800 p-2 bg-white dark:bg-neutral-950">
+        <div className="border-t border-neutral-200/80 dark:border-neutral-800 p-2.5 bg-white dark:bg-neutral-950">
+          {w.attachments.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {w.attachments.map((a) => (
+                <span key={a.id} className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
+                  <span className="truncate max-w-[200px]" title={a.path}>{a.label}</span>
+                  <button
+                    type="button"
+                    className="rounded px-1 hover:bg-blue-100 dark:hover:bg-blue-900/40"
+                    title="Remove attachment"
+                    onClick={() =>
+                      setPanels((prev) =>
+                        prev.map((p) =>
+                          p.id !== w.id ? p : { ...p, attachments: p.attachments.filter((x) => x.id !== a.id) },
+                        ),
+                      )
+                    }
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="flex items-end gap-2 min-w-0">
             <textarea
               ref={(el) => registerTextarea(w.id, el)}
-              className="flex-1 min-w-0 resize-none rounded-xl bg-white border border-neutral-300 px-3 py-2 text-neutral-900 outline-none focus:border-neutral-500 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100 dark:focus:border-neutral-600"
+              className="flex-1 min-w-0 resize-none rounded-xl bg-white border border-neutral-300 px-3 py-2 text-neutral-900 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
               style={{ fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }}
-              placeholder="Message..."
+              placeholder="Message the agent..."
               rows={1}
               value={w.input}
               onFocus={() => setActivePanelId(w.id)}
@@ -2272,6 +3753,15 @@ export default function App() {
                 const next = e.target.value
                 setPanels((prev) => prev.map((x) => (x.id === w.id ? { ...x, input: next } : x)))
                 queueMicrotask(() => autoResizeTextarea(w.id))
+              }}
+              onPaste={(e) => {
+                const items = Array.from(e.clipboardData?.items ?? []).filter((it) => it.type.startsWith('image/'))
+                if (items.length === 0) return
+                e.preventDefault()
+                for (const item of items) {
+                  const file = item.getAsFile()
+                  if (file) void handlePasteImage(w.id, file)
+                }
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -2288,7 +3778,7 @@ export default function App() {
                     ? 'border-neutral-400 bg-neutral-200 text-neutral-700 hover:bg-neutral-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-600'
                     : 'border-neutral-300 bg-neutral-200 text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400'
                   : hasInput
-                    ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-500'
+                    ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
                     : 'border-neutral-300 bg-neutral-100 text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-600',
               ].join(' ')}
               onClick={() => sendMessage(w.id)}
@@ -2316,133 +3806,189 @@ export default function App() {
           )}
         </div>
 
-        <div className="border-t border-neutral-200 dark:border-neutral-800 px-3 py-1.5 text-xs flex flex-wrap items-start justify-between gap-2 min-w-0 overflow-x-hidden bg-neutral-50 dark:bg-neutral-900">
-          <div className="min-w-0 flex-1 text-neutral-600 dark:text-neutral-400 flex items-center gap-2 flex-wrap">
-            <span
-              className="inline-flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-400"
-              title={activityTitle}
-              aria-label={`Panel activity ${activityLabel}`}
-            >
+        <div className="border-t border-neutral-200/80 dark:border-neutral-800 px-3 py-2 text-xs min-w-0 overflow-x-hidden bg-white/90 dark:bg-neutral-950">
+          <div className="flex flex-wrap items-start justify-between gap-2 min-w-0">
+            <div className="min-w-0 flex-1 text-neutral-600 dark:text-neutral-400 flex items-center gap-2 flex-wrap">
               <span
-                className={`h-1.5 w-1.5 rounded-full ${activityDotClass} ${isLive ? 'animate-pulse' : ''}`}
-                aria-hidden
-              />
-              {activityLabel}
-            </span>
-            {activityItems.length > 0 && (
-              <button
-                type="button"
-                className="text-[11px] rounded border border-neutral-300 px-1.5 py-0.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-                onClick={() => setActivityOpenByPanel((prev) => ({ ...prev, [w.id]: !prev[w.id] }))}
-                title="Toggle activity details"
+                className="inline-flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-400"
+                title={activityTitle}
+                aria-label={`Panel activity ${activityLabel}`}
               >
-                {activityOpen ? 'Hide activity' : 'Show activity'}
-              </button>
-            )}
-            <span className="break-words [overflow-wrap:anywhere]">{w.status}</span>
-            {(() => {
-              const pct = getRateLimitPercent(w.usage)
-              const label = formatRateLimitLabel(w.usage)
-              if (pct === null || !label) return null
-              return (
-                <span className="inline-flex items-center gap-2">
-                  <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
-                    <span className="block h-full bg-blue-600" style={{ width: `${100 - pct}%` }} />
-                  </span>
-                  <span className="text-neutral-500 dark:text-neutral-400">{label}</span>
-                </span>
-              )
-            })()}
-            {activityOpen && activityItems.length > 0 && (
-              <div className="w-full rounded border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-950/70 px-2 py-1.5 space-y-1 max-h-32 overflow-auto">
-                {activityItems.map((item) => (
-                  <div key={item.id} className="text-[11px] leading-4">
-                    <span className="font-medium text-neutral-700 dark:text-neutral-200">
-                      {item.label}
-                      {item.count > 1 ? ` x${item.count}` : ''}
-                    </span>
-                    {item.detail ? (
-                      <span className="text-neutral-500 dark:text-neutral-400"> - {item.detail}</span>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="min-w-0 flex flex-wrap items-end justify-end gap-3">
-            <div className="flex flex-col gap-0.5">
-              <div className="flex items-center gap-2">
-                <span className="text-neutral-600 dark:text-neutral-400">Sandbox</span>
-                <select
-                  className="max-w-full text-xs rounded border border-neutral-300 bg-white text-neutral-900 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
-                  value={w.sandbox}
-                  onChange={(e) => {
-                    const next = e.target.value as SandboxMode
-                    setPanels((prev) =>
-                      prev.map((p) =>
-                        p.id === w.id
-                          ? {
-                              ...p,
-                              sandbox: next,
-                              connected: false,
-                              status: `Sandbox set to ${next} (reconnect on next send).`,
-                            }
-                          : p,
-                      ),
-                    )
-                  }}
-                >
-                  <option value="read-only">Read only</option>
-                  <option value="workspace-write">Workspace write</option>
-                  <option value="danger-full-access">Danger full access</option>
-                </select>
-              </div>
-              <span className="text-[10px] leading-4 text-neutral-500 dark:text-neutral-400 max-w-[280px]">
-                {sandboxModeDescription(w.sandbox)}
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${activityDotClass} ${isRunning ? 'animate-pulse' : ''}`}
+                  aria-hidden
+                />
+                {activityLabel}
               </span>
-            </div>
-            <span className="text-neutral-600 dark:text-neutral-400">Permissions</span>
-            <select
-              className="max-w-full text-xs rounded border border-neutral-300 bg-white text-neutral-900 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
-              value={w.permissionMode}
-              onChange={(e) => {
-                const next = e.target.value as PermissionMode
-                setPanels((prev) =>
-                  prev.map((p) =>
-                    p.id === w.id
-                      ? {
-                          ...p,
-                          permissionMode: next,
-                          connected: false,
-                          status:
-                            next === 'proceed-always'
-                              ? 'Permissions set: Proceed always (reconnect on next send).'
-                              : 'Permissions set: Verify first (reconnect on next send).',
-                        }
-                      : p,
-                  ),
-                )
-              }}
-            >
-              <option value="verify-first">Verify first</option>
-              <option value="proceed-always">Proceed always</option>
-            </select>
-            <span className="text-neutral-600 dark:text-neutral-400">Model</span>
-            <select
-              className="max-w-full text-xs rounded border border-neutral-300 bg-white text-neutral-900 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
-              value={w.model}
-              onChange={(e) => switchModel(w.id, e.target.value)}
-            >
-              {getModelOptions(w.model).map((id) => {
-                const mi = modelConfig.interfaces.find((m) => m.id === id)
+              {debugControlsVisible && activityItems.length > 0 && (
+                <button
+                  type="button"
+                  className="text-[11px] rounded border border-neutral-300 px-1.5 py-0.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                  onClick={() => setActivityOpenByPanel((prev) => ({ ...prev, [w.id]: !prev[w.id] }))}
+                  title="Toggle activity details"
+                >
+                  {activityOpen ? 'Hide activity' : 'Show activity'}
+                </button>
+              )}
+              {debugControlsVisible && (
+                <button
+                  type="button"
+                  className="text-[11px] rounded border border-neutral-300 px-1.5 py-0.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                  onClick={() => setDebugOpenByPanel((prev) => ({ ...prev, [w.id]: !prev[w.id] }))}
+                  title="Toggle debug trace"
+                >
+                  {debugOpen ? 'Hide debug' : 'Show debug'}
+                </button>
+              )}
+              {debugControlsVisible && (
+                <button
+                  type="button"
+                  className="text-[11px] rounded border border-neutral-300 px-1.5 py-0.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                  onClick={() =>
+                    setPanelDebugById((prev) => ({
+                      ...prev,
+                      [w.id]: [],
+                    }))
+                  }
+                  title="Clear panel debug trace"
+                >
+                  Clear debug
+                </button>
+              )}
+              <span className="break-words [overflow-wrap:anywhere]">{w.status}</span>
+              {(() => {
+                const pct = getRateLimitPercent(w.usage)
+                const label = formatRateLimitLabel(w.usage)
+                if (pct === null || !label) return null
                 return (
-                  <option key={id} value={id}>
-                    {mi?.displayName ?? id}
-                  </option>
+                  <span className="inline-flex items-center gap-2">
+                    <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
+                      <span className="block h-full bg-blue-600" style={{ width: `${100 - pct}%` }} />
+                    </span>
+                    <span className="text-neutral-500 dark:text-neutral-400">{label}</span>
+                  </span>
                 )
-              })}
-            </select>
+              })()}
+            </div>
+            <div className="min-w-0 flex flex-wrap items-end justify-end gap-1.5">
+              <div className="rounded-md border border-neutral-200/80 bg-neutral-50/80 px-1.5 py-1 dark:border-neutral-800 dark:bg-neutral-900/70">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-neutral-600 dark:text-neutral-400">Sandbox</span>
+                  <select
+                    className="h-7 max-w-full text-[11px] rounded border border-neutral-300 bg-white text-neutral-900 px-1.5 py-0.5 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
+                    value={w.sandbox}
+                    onChange={(e) => {
+                      const next = e.target.value as SandboxMode
+                      setPanels((prev) =>
+                        prev.map((p) =>
+                          p.id === w.id
+                            ? {
+                                ...p,
+                                sandbox: next,
+                                permissionMode: next === 'read-only' ? 'verify-first' : p.permissionMode,
+                                connected: false,
+                                status:
+                                  next === 'read-only'
+                                    ? 'Sandbox set to read-only. Permissions locked to Verify first.'
+                                    : `Sandbox set to ${next} (reconnect on next send).`,
+                              }
+                            : p,
+                        ),
+                      )
+                    }}
+                  >
+                    <option value="read-only">Read only</option>
+                    <option value="workspace-write">Workspace write</option>
+                    <option value="danger-full-access">Danger full access</option>
+                  </select>
+                </div>
+              </div>
+              {w.sandbox !== 'read-only' && (
+                <div className="rounded-md border border-neutral-200/80 bg-neutral-50/80 px-1.5 py-1 dark:border-neutral-800 dark:bg-neutral-900/70">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-neutral-600 dark:text-neutral-400">Permissions</span>
+                    <select
+                      className="h-7 max-w-full text-[11px] rounded border border-neutral-300 bg-white text-neutral-900 px-1.5 py-0.5 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
+                      value={w.permissionMode}
+                      onChange={(e) => {
+                        const next = e.target.value as PermissionMode
+                        setPanels((prev) =>
+                          prev.map((p) =>
+                            p.id === w.id
+                              ? {
+                                  ...p,
+                                  permissionMode: next,
+                                  connected: false,
+                                  status:
+                                    next === 'proceed-always'
+                                      ? 'Permissions set: Proceed always (reconnect on next send).'
+                                      : 'Permissions set: Verify first (reconnect on next send).',
+                                }
+                              : p,
+                          ),
+                        )
+                      }}
+                    >
+                      <option value="verify-first">Verify first</option>
+                      <option value="proceed-always">Proceed always</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+              <div className="rounded-md border border-neutral-200/80 bg-neutral-50/80 px-1.5 py-1 dark:border-neutral-800 dark:bg-neutral-900/70">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-neutral-600 dark:text-neutral-400">Model</span>
+                  <select
+                    className="h-7 max-w-full text-[11px] rounded border border-neutral-300 bg-white text-neutral-900 px-1.5 py-0.5 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
+                    value={w.model}
+                    onChange={(e) => switchModel(w.id, e.target.value)}
+                  >
+                    {getModelOptions(w.model).map((id) => {
+                      const mi = modelConfig.interfaces.find((m) => m.id === id)
+                      return (
+                        <option key={id} value={id}>
+                          {mi?.displayName ?? id}
+                        </option>
+                      )
+                    })}
+                  </select>
+                </div>
+              </div>
+            </div>
           </div>
+          {debugControlsVisible && activityOpen && activityItems.length > 0 && (
+            <div className="mt-2 w-full rounded border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-950/70 px-2 py-1.5 space-y-1 max-h-32 overflow-auto">
+              {activityItems.map((item) => (
+                <div key={item.id} className="text-[11px] leading-4">
+                  <span className="font-medium text-neutral-700 dark:text-neutral-200">
+                    {item.label}
+                    {item.count > 1 ? ` x${item.count}` : ''}
+                  </span>
+                  {item.detail ? (
+                    <span className="text-neutral-500 dark:text-neutral-400"> - {item.detail}</span>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+          {debugControlsVisible && debugOpen && (
+            <div className="mt-2 w-full rounded border border-neutral-200 dark:border-neutral-800 bg-black/[0.04] dark:bg-black/20 px-2 py-1.5 space-y-1 max-h-44 overflow-auto font-mono">
+              {debugItems.length === 0 && (
+                <div className="text-[11px] text-neutral-500 dark:text-neutral-400">No debug entries yet.</div>
+              )}
+              {debugItems.map((item) => (
+                <div key={item.id} className="text-[11px] leading-4">
+                  <span className="text-neutral-500 dark:text-neutral-400">
+                    {new Date(item.at).toLocaleTimeString()}
+                  </span>
+                  <span className="mx-1 text-blue-700 dark:text-blue-300">[{item.stage}]</span>
+                  <span className="text-neutral-700 dark:text-neutral-200 break-words [overflow-wrap:anywhere]">
+                    {item.detail}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     )

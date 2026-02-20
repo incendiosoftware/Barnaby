@@ -1,0 +1,20 @@
+---
+description: Portable-only build workflow defaults
+alwaysApply: true
+---
+
+# Build Defaults
+
+- This project is a local desktop executable workflow.
+- For generic build requests, run `npm run build` (portable-only).
+- Avoid `npm run build:dist` for normal user-facing builds unless user explicitly asks for dist-only output.
+- Use `npm run build:release` only when user explicitly asks for full release/installer artifacts.
+
+# Versioning
+
+- Build commands that include `build:dist` auto-increment version.
+- After build, always mention the new version and artifact path.
+
+# Build + Run
+
+- For "build and run", run `npm run build` first, then launch app.

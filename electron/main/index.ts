@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, Menu, dialog } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, Menu, dialog, screen } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -63,6 +63,15 @@ type ConnectOptions = CodexConnectOptions & {
   modelConfig?: Record<string, string>
 }
 
+type ProviderName = 'codex' | 'gemini'
+type ProviderAuthStatus = {
+  provider: ProviderName
+  installed: boolean
+  authenticated: boolean
+  detail: string
+  checkedAt: number
+}
+
 type AgentClient = CodexAppServerClient | GeminiClient
 type AgentEvent = FireHarnessCodexEvent | GeminiClientEvent
 
@@ -94,13 +103,9 @@ if (os.release().startsWith('6.1')) app.disableHardwareAcceleration()
 // Set application name for Windows 10+ notifications
 if (process.platform === 'win32') app.setAppUserModelId(app.getName())
 
-if (!app.requestSingleInstanceLock()) {
-  app.quit()
-  process.exit(0)
-}
-
 let win: BrowserWindow | null = null
 let recentWorkspaces: string[] = []
+let editorMenuEnabled = false
 const preload = path.join(__dirname, '../preload/index.mjs')
 const indexHtml = path.join(RENDERER_DIST, 'index.html')
 
@@ -119,6 +124,16 @@ function resolveWorkspacePath(workspaceRoot: string, relativePath: string) {
     throw new Error('Path is outside the workspace root.')
   }
   return target
+}
+
+function toWorkspaceRelativePath(workspaceRoot: string, absolutePath: string) {
+  const root = path.resolve(workspaceRoot)
+  const target = path.resolve(absolutePath)
+  const check = path.relative(root, target)
+  if (check.startsWith('..') || path.isAbsolute(check)) {
+    throw new Error('Path is outside the workspace root.')
+  }
+  return normalizeRelativePath(check)
 }
 
 function readWorkspaceTree(
@@ -218,6 +233,56 @@ function readWorkspaceFile(workspaceRoot: string, relativePath: string) {
   }
 }
 
+function readWorkspaceTextFile(workspaceRoot: string, relativePath: string) {
+  if (!relativePath?.trim()) throw new Error('File path is required.')
+  const normalizedPath = normalizeRelativePath(relativePath)
+  const absolutePath = resolveWorkspacePath(workspaceRoot, normalizedPath)
+  if (!fs.existsSync(absolutePath)) throw new Error('File does not exist.')
+
+  const stat = fs.statSync(absolutePath)
+  if (!stat.isFile()) throw new Error('Path is not a file.')
+
+  const buffer = fs.readFileSync(absolutePath)
+  const binary = buffer.includes(0)
+  return {
+    relativePath: normalizedPath,
+    size: stat.size,
+    binary,
+    content: binary ? '' : buffer.toString('utf8'),
+  }
+}
+
+function writeWorkspaceFile(workspaceRoot: string, relativePath: string, content: string) {
+  if (!relativePath?.trim()) throw new Error('File path is required.')
+  const normalizedPath = normalizeRelativePath(relativePath)
+  const absolutePath = resolveWorkspacePath(workspaceRoot, normalizedPath)
+  fs.mkdirSync(path.dirname(absolutePath), { recursive: true })
+  fs.writeFileSync(absolutePath, content ?? '', 'utf8')
+  const stat = fs.statSync(absolutePath)
+  return {
+    relativePath: normalizedPath,
+    size: stat.size,
+  }
+}
+
+async function pickWorkspaceSavePath(workspaceRoot: string, relativePath: string) {
+  const root = path.resolve(workspaceRoot)
+  if (!fs.existsSync(root)) throw new Error('Workspace path does not exist.')
+  if (!fs.statSync(root).isDirectory()) throw new Error('Workspace path is not a directory.')
+
+  const normalizedPath = normalizeRelativePath(relativePath || 'untitled.txt')
+  const defaultPath = path.join(root, normalizedPath.split('/').filter(Boolean).join(path.sep))
+  const parent = BrowserWindow.getFocusedWindow() ?? win ?? BrowserWindow.getAllWindows()[0] ?? undefined
+  const result = await dialog.showSaveDialog(parent, {
+    title: 'Save file as',
+    defaultPath,
+  })
+  if (result.canceled || !result.filePath) return null
+  const nextRelativePath = toWorkspaceRelativePath(root, result.filePath)
+  if (!nextRelativePath) throw new Error('Save As path must be a file inside the workspace root.')
+  return nextRelativePath
+}
+
 function parseGitStatus(rawStatus: string): GitStatusResult {
   let branch = '(detached HEAD)'
   let ahead = 0
@@ -294,6 +359,114 @@ function errorMessage(value: unknown) {
   return 'Unknown error.'
 }
 
+async function getProviderAuthStatus(provider: ProviderName): Promise<ProviderAuthStatus> {
+  async function isCliInstalled(command: 'codex' | 'gemini'): Promise<boolean> {
+    try {
+      if (process.platform === 'win32') {
+        await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `${command} --version`], {
+          windowsHide: true,
+          maxBuffer: 1024 * 1024,
+        })
+      } else {
+        await execFileAsync(command, ['--version'], {
+          windowsHide: true,
+          maxBuffer: 1024 * 1024,
+        })
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  if (provider === 'codex') {
+    try {
+      const result =
+        process.platform === 'win32'
+          ? await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'codex login status'], {
+              windowsHide: true,
+              maxBuffer: 1024 * 1024,
+            })
+          : await execFileAsync('codex', ['login', 'status'], {
+              windowsHide: true,
+              maxBuffer: 1024 * 1024,
+            })
+      const out = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim()
+      const normalized = out.toLowerCase()
+      const authenticated = normalized.includes('logged in') && !normalized.includes('not logged in')
+      return {
+        provider,
+        installed: true,
+        authenticated,
+        detail: out || (authenticated ? 'Logged in.' : 'Not logged in.'),
+        checkedAt: Date.now(),
+      }
+    } catch (err) {
+      const msg = errorMessage(err)
+      const installed = await isCliInstalled('codex')
+      return {
+        provider,
+        installed,
+        authenticated: false,
+        detail: msg || (installed ? 'Not logged in.' : 'Codex CLI not found.'),
+        checkedAt: Date.now(),
+      }
+    }
+  }
+
+  try {
+    const version =
+      process.platform === 'win32'
+        ? await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini --version'], {
+            windowsHide: true,
+            maxBuffer: 1024 * 1024,
+          })
+        : await execFileAsync('gemini', ['--version'], {
+            windowsHide: true,
+            maxBuffer: 1024 * 1024,
+          })
+    const versionText = (version.stdout ?? version.stderr ?? '').trim()
+    return {
+      provider,
+      installed: true,
+      authenticated: true,
+      detail: versionText
+        ? `Gemini CLI ${versionText} detected. Uses local CLI login/session.`
+        : 'Gemini CLI detected. Uses local CLI login/session.',
+      checkedAt: Date.now(),
+    }
+  } catch (err) {
+    return {
+      provider,
+      installed: false,
+      authenticated: false,
+      detail: errorMessage(err) || 'Gemini CLI not found.',
+      checkedAt: Date.now(),
+    }
+  }
+}
+
+async function launchProviderLogin(provider: ProviderName): Promise<{ started: boolean; detail: string }> {
+  if (process.platform === 'win32') {
+    const cmd = provider === 'codex' ? 'codex login' : 'gemini'
+    await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'start', '', 'cmd', '/k', cmd], {
+      windowsHide: true,
+    })
+    return {
+      started: true,
+      detail:
+        provider === 'codex'
+          ? 'Opened terminal for Codex login.'
+          : 'Opened terminal for Gemini login.',
+    }
+  }
+
+  // Best effort for non-Windows shells.
+  const command = provider === 'codex' ? 'codex login' : 'gemini'
+  await execFileAsync('sh', ['-lc', command], { windowsHide: true })
+  return { started: true, detail: `Launched ${provider} login.` }
+}
+
 async function getGitStatus(workspaceRoot: string): Promise<GitStatusResult> {
   const root = path.resolve(workspaceRoot)
   const base: Omit<GitStatusResult, 'ok'> = {
@@ -346,10 +519,9 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
   }
 
   if (provider === 'gemini') {
-    const apiKey = options.modelConfig?.apiKey ?? ''
     const client = new GeminiClient()
     client.on('event', (evt: GeminiClientEvent) => forwardEvent(agentWindowId, evt))
-    const result = await client.connect({ model: options.model, apiKey }) as { threadId: string }
+    const result = await client.connect({ model: options.model }) as { threadId: string }
     agentClients.set(agentWindowId, client)
     return { client, result }
   }
@@ -367,10 +539,16 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
 }
 
 async function createWindow() {
+  const { width: workAreaWidth, height: workAreaHeight } = screen.getPrimaryDisplay().workAreaSize
+  const startupWidth = Math.floor(workAreaWidth / 5)
+  const startupHeight = Math.floor(workAreaHeight * 0.9)
+
   win = new BrowserWindow({
-    title: 'Agent Orchestrator',
+    title: 'Barnaby',
     icon: path.join(process.env.VITE_PUBLIC, 'appicon.png'),
     show: false,
+    width: startupWidth,
+    height: startupHeight,
     webPreferences: {
       preload,
       // Warning: Enable nodeIntegration and disable contextIsolation is not secure in production
@@ -390,13 +568,9 @@ async function createWindow() {
     win.loadFile(indexHtml)
   }
 
-  // Maximize on start (then show) to feel IDE-like.
   win.once('ready-to-show', () => {
-    try {
-      win?.maximize()
-    } finally {
-      win?.show()
-    }
+    win?.maximize()
+    win?.show()
   })
 
   // Make all links open with the browser, not with the application
@@ -424,14 +598,6 @@ app.on('before-quit', () => {
     (client as { close: () => Promise<void> }).close().catch(() => {})
   }
   agentClients.clear()
-})
-
-app.on('second-instance', () => {
-  if (win) {
-    // Focus on the main window if the user tried to open another
-    if (win.isMinimized()) win.restore()
-    win.focus()
-  }
 })
 
 app.on('activate', () => {
@@ -496,6 +662,23 @@ ipcMain.handle('agentorchestrator:sendMessage', async (_evt, agentWindowId: stri
   return {}
 })
 
+ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: string, payload: { text: string; imagePaths?: string[] }) => {
+  const client = agentClients.get(agentWindowId)
+  if (!client) return {}
+  const text = typeof payload?.text === 'string' ? payload.text : ''
+  const imagePaths = Array.isArray(payload?.imagePaths) ? payload.imagePaths.filter((p): p is string => typeof p === 'string' && p.trim().length > 0) : []
+  if (imagePaths.length > 0) {
+    const withImages = client as { sendUserMessageWithImages?: (t: string, paths: string[]) => Promise<void> }
+    if (typeof withImages.sendUserMessageWithImages !== 'function') {
+      throw new Error('Selected provider does not support image attachments in this app yet.')
+    }
+    await withImages.sendUserMessageWithImages(text, imagePaths)
+    return {}
+  }
+  await (client as { sendUserMessage: (t: string) => Promise<void> }).sendUserMessage(text)
+  return {}
+})
+
 ipcMain.handle('agentorchestrator:interrupt', async (_evt, agentWindowId: string) => {
   const client = agentClients.get(agentWindowId)
   if (!client) return {}
@@ -528,12 +711,45 @@ ipcMain.handle('agentorchestrator:writeWorkspaceConfig', async (_evt, folderPath
   return true
 })
 
+ipcMain.handle('agentorchestrator:savePastedImage', async (_evt, dataUrl: string, mimeType?: string) => {
+  const match = /^data:([^;]+);base64,(.+)$/.exec(String(dataUrl ?? ''))
+  if (!match) throw new Error('Invalid image data')
+  const dataMime = match[1]
+  const base64 = match[2]
+  const effectiveMime = (mimeType && typeof mimeType === 'string' ? mimeType : dataMime).toLowerCase()
+  const ext =
+    effectiveMime.includes('jpeg') || effectiveMime.includes('jpg')
+      ? 'jpg'
+      : effectiveMime.includes('webp')
+        ? 'webp'
+        : effectiveMime.includes('gif')
+          ? 'gif'
+          : 'png'
+  const dir = path.join(os.tmpdir(), 'agentorchestrator', 'pasted-images')
+  fs.mkdirSync(dir, { recursive: true })
+  const filePath = path.join(dir, `paste-${Date.now()}-${Math.random().toString(16).slice(2)}.${ext}`)
+  fs.writeFileSync(filePath, Buffer.from(base64, 'base64'))
+  return { path: filePath, mimeType: effectiveMime }
+})
+
 ipcMain.handle('agentorchestrator:listWorkspaceTree', async (_evt, workspaceRoot: string, options?: WorkspaceTreeOptions) => {
   return readWorkspaceTree(workspaceRoot, options)
 })
 
 ipcMain.handle('agentorchestrator:readWorkspaceFile', async (_evt, workspaceRoot: string, relativePath: string) => {
   return readWorkspaceFile(workspaceRoot, relativePath)
+})
+
+ipcMain.handle('agentorchestrator:readWorkspaceTextFile', async (_evt, workspaceRoot: string, relativePath: string) => {
+  return readWorkspaceTextFile(workspaceRoot, relativePath)
+})
+
+ipcMain.handle('agentorchestrator:writeWorkspaceFile', async (_evt, workspaceRoot: string, relativePath: string, content: string) => {
+  return writeWorkspaceFile(workspaceRoot, relativePath, content)
+})
+
+ipcMain.handle('agentorchestrator:pickWorkspaceSavePath', async (_evt, workspaceRoot: string, relativePath: string) => {
+  return pickWorkspaceSavePath(workspaceRoot, relativePath)
 })
 
 ipcMain.handle('agentorchestrator:getGitStatus', async (_evt, workspaceRoot: string) => {
@@ -543,6 +759,21 @@ ipcMain.handle('agentorchestrator:getGitStatus', async (_evt, workspaceRoot: str
 ipcMain.on('agentorchestrator:setRecentWorkspaces', (_evt, list: string[]) => {
   recentWorkspaces = Array.isArray(list) ? list : []
   setAppMenu()
+})
+
+ipcMain.on('agentorchestrator:setEditorMenuState', (_evt, enabled: boolean) => {
+  const next = Boolean(enabled)
+  if (editorMenuEnabled === next) return
+  editorMenuEnabled = next
+  setAppMenu()
+})
+
+ipcMain.handle('agentorchestrator:getProviderAuthStatus', async (_evt, provider: ProviderName) => {
+  return getProviderAuthStatus(provider)
+})
+
+ipcMain.handle('agentorchestrator:startProviderLogin', async (_evt, provider: ProviderName) => {
+  return launchProviderLogin(provider)
 })
 
 function sendMenuAction(action: string, payload?: Record<string, unknown>) {
@@ -569,6 +800,13 @@ function setAppMenu() {
         { label: 'Recent workspaces', submenu: recentSubmenu },
         { type: 'separator' },
         { label: 'New Panel', accelerator: 'Ctrl+N', click: () => sendMenuAction('newAgentWindow') },
+        ...(editorMenuEnabled
+          ? [
+              { type: 'separator' as const },
+              { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => sendMenuAction('saveEditorFile') },
+              { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: () => sendMenuAction('saveEditorFileAs') },
+            ]
+          : []),
         { type: 'separator' },
         { label: 'Close workspace', click: () => sendMenuAction('closeWorkspace') },
         { label: 'Exit', role: 'quit' },
@@ -579,6 +817,14 @@ function setAppMenu() {
       submenu: [
         { label: 'New Panel', accelerator: 'Ctrl+Shift+N', click: () => sendMenuAction('newAgentWindow') },
         { label: 'Theme...', click: () => sendMenuAction('openThemeModal') },
+        {
+          label: 'Layout',
+          submenu: [
+            { label: 'Split Vertical (V)', click: () => sendMenuAction('layoutVertical') },
+            { label: 'Split Horizontal (H)', click: () => sendMenuAction('layoutHorizontal') },
+            { label: 'Tile / Grid', click: () => sendMenuAction('layoutGrid') },
+          ],
+        },
         { type: 'separator' },
         { role: 'reload' },
         { role: 'toggleDevTools' },
@@ -597,25 +843,17 @@ function setAppMenu() {
       ],
     },
     {
-      label: 'Layout',
-      submenu: [
-        { label: 'Split Vertical (V)', click: () => sendMenuAction('layoutVertical') },
-        { label: 'Split Horizontal (H)', click: () => sendMenuAction('layoutHorizontal') },
-        { label: 'Tile / Grid', click: () => sendMenuAction('layoutGrid') },
-      ],
-    },
-    {
       label: 'Help',
       submenu: [
         {
-          label: 'About Agent Orchestrator',
+          label: 'About Barnaby',
           click: () => {
             const parent = win ?? BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
             const opts: Electron.MessageBoxOptions = {
               type: 'info',
-              title: 'About Agent Orchestrator',
+              title: 'About Barnaby',
               icon: path.join(process.env.VITE_PUBLIC, 'appicon.png'),
-              message: 'Agent Orchestrator',
+              message: 'Barnaby',
               detail: [
                 `Version: ${app.getVersion()}`,
                 'Contact: stuartmackereth@gmail.com',

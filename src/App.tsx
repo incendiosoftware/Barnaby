@@ -90,6 +90,17 @@ type PanelActivityState = {
   lastEventAt: number
   lastEventLabel: string
   totalEvents: number
+  recent?: ActivityFeedItem[]
+}
+
+type ActivityKind = 'approval' | 'command' | 'reasoning' | 'event'
+type ActivityFeedItem = {
+  id: string
+  label: string
+  detail?: string
+  kind: ActivityKind
+  at: number
+  count: number
 }
 
 const DEFAULT_WORKSPACE_ROOT = 'E:\\Retirement\\FIREMe'
@@ -154,6 +165,9 @@ const MAX_FONT_SCALE = 1.5
 const FONT_SCALE_STEP = 0.05
 const INPUT_MAX_HEIGHT_PX = 220
 const DEFAULT_EXPLORER_PREFS: ExplorerPrefs = { showHiddenFiles: false, showNodeModules: false }
+const CONNECT_TIMEOUT_MS = 15000
+const TURN_START_TIMEOUT_MS = 15000
+const STALL_WATCHDOG_MS = 30000
 
 function newId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -266,6 +280,72 @@ function summarizeRawNotification(method: string, params: any): string | null {
   return null
 }
 
+function simplifyCommand(raw: string): string {
+  const trimmed = raw.trim()
+  const m = trimmed.match(/-Command\s+'([^']+)'/i)
+  const reduced = m?.[1]?.trim() || trimmed
+  return reduced.length > 140 ? `${reduced.slice(0, 140)}...` : reduced
+}
+
+function describeActivityEntry(evt: any): { label: string; detail?: string; kind: ActivityKind } | null {
+  if (!evt) return null
+  if (evt.type === 'status') {
+    return {
+      label: `Status: ${String(evt.status ?? 'unknown')}`,
+      detail: typeof evt.message === 'string' ? evt.message : undefined,
+      kind: 'event',
+    }
+  }
+  if (evt.type === 'assistantCompleted') return { label: 'Turn complete', kind: 'event' }
+  if (evt.type === 'rawNotification' && typeof evt.method === 'string') {
+    const method = evt.method
+    const params = evt.params
+    if (method.endsWith('/requestApproval')) {
+      return {
+        label: 'Approval requested',
+        detail: summarizeRawNotification(method, params) ?? undefined,
+        kind: 'approval',
+      }
+    }
+    if (/commandExecution/i.test(method)) {
+      const cmd =
+        pickString(params, ['command', 'cmd']) ??
+        pickString(params?.command, ['command', 'cmd', 'raw']) ??
+        pickString(params?.action, ['command', 'cmd'])
+      return { label: 'Running command', detail: cmd ? simplifyCommand(cmd) : undefined, kind: 'command' }
+    }
+    if (/reasoning/i.test(method)) return { label: 'Reasoning update', kind: 'reasoning' }
+    if (method === 'item/completed') {
+      const itemType = params?.item?.type
+      if (itemType && itemType !== 'agentMessage') return { label: `Completed ${itemType}`, kind: 'event' }
+      return null
+    }
+    return { label: `Event: ${method}`, detail: toShortJson(params, 140), kind: 'event' }
+  }
+  if (typeof evt.type === 'string') return { label: evt.type, kind: 'event' }
+  return null
+}
+
+function shouldSurfaceRawNoteInChat(method: string): boolean {
+  if (method.endsWith('/requestApproval')) return true
+  return false
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
+    promise
+      .then((v) => {
+        clearTimeout(t)
+        resolve(v)
+      })
+      .catch((e) => {
+        clearTimeout(t)
+        reject(e)
+      })
+  })
+}
+
 function makeDefaultPanel(id: string, cwd: string): AgentPanelState {
   return {
     id,
@@ -365,6 +445,7 @@ export default function App() {
   const [filePreview, setFilePreview] = useState<FilePreviewState | null>(null)
   const [panelActivityById, setPanelActivityById] = useState<Record<string, PanelActivityState>>({})
   const [activityClock, setActivityClock] = useState(() => Date.now())
+  const [activityOpenByPanel, setActivityOpenByPanel] = useState<Record<string, boolean>>({})
 
   const modelList = modelConfig.interfaces.filter((m) => m.enabled).map((m) => m.id)
   function getModelOptions(includeCurrent?: string): string[] {
@@ -381,6 +462,8 @@ export default function App() {
   const messageViewportRefs = useRef(new Map<string, HTMLDivElement>())
   const activityLatestRef = useRef(new Map<string, PanelActivityState>())
   const activityFlushTimers = useRef(new Map<string, any>())
+  const panelsRef = useRef<AgentPanelState[]>([])
+  const reconnectingRef = useRef(new Set<string>())
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('vertical')
   const [panels, setPanels] = useState<AgentPanelState[]>(() => [
@@ -439,6 +522,10 @@ export default function App() {
       setActivePanelId(panels[0].id)
     }
   }, [panels, activePanelId])
+
+  useEffect(() => {
+    panelsRef.current = panels
+  }, [panels])
 
   useEffect(() => {
     for (const p of panels) {
@@ -636,10 +723,23 @@ export default function App() {
 
   function markPanelActivity(agentWindowId: string, evt: any) {
     const prev = activityLatestRef.current.get(agentWindowId)
+    const entry = describeActivityEntry(evt)
+    let recent = [...(prev?.recent ?? [])]
+    if (entry) {
+      const now = Date.now()
+      const top = recent[0]
+      if (top && top.label === entry.label && top.detail === entry.detail && now - top.at < 4000) {
+        recent[0] = { ...top, at: now, count: top.count + 1 }
+      } else {
+        recent.unshift({ id: newId(), label: entry.label, detail: entry.detail, kind: entry.kind, at: now, count: 1 })
+      }
+      recent = recent.slice(0, 10)
+    }
     const next: PanelActivityState = {
       lastEventAt: Date.now(),
-      lastEventLabel: describeIncomingEvent(evt),
+      lastEventLabel: entry?.label ?? describeIncomingEvent(evt),
       totalEvents: (prev?.totalEvents ?? 0) + 1,
+      recent,
     }
     activityLatestRef.current.set(agentWindowId, next)
     if (activityFlushTimers.current.has(agentWindowId)) return
@@ -670,6 +770,9 @@ export default function App() {
                 },
           ),
         )
+        if (evt.status === 'closed') {
+          queueMicrotask(() => kickQueuedMessage(agentWindowId))
+        }
         return
       }
 
@@ -713,8 +816,10 @@ export default function App() {
       }
 
       if (evt?.type === 'rawNotification') {
-        const note = summarizeRawNotification(String(evt.method ?? ''), evt.params)
+        const method = String(evt.method ?? '')
+        const note = summarizeRawNotification(method, evt.params)
         if (!note) return
+        if (!shouldSurfaceRawNoteInChat(method)) return
         setPanels((prev) =>
           prev.map((w) =>
             w.id !== agentWindowId
@@ -995,16 +1100,100 @@ export default function App() {
     sandbox: SandboxMode,
   ) {
     const mi = modelConfig.interfaces.find((m) => m.id === model)
-    await api.connect(winId, {
-      model,
-      cwd,
-      permissionMode,
-      approvalPolicy: permissionMode === 'proceed-always' ? 'never' : 'on-request',
-      sandbox,
-      provider: mi?.provider ?? 'codex',
-      modelConfig: mi?.config,
-    })
+    await withTimeout(
+      api.connect(winId, {
+        model,
+        cwd,
+        permissionMode,
+        approvalPolicy: permissionMode === 'proceed-always' ? 'never' : 'on-request',
+        sandbox,
+        provider: mi?.provider ?? 'codex',
+        modelConfig: mi?.config,
+      }),
+      CONNECT_TIMEOUT_MS,
+      'connect',
+    )
   }
+
+  async function reconnectPanel(winId: string, reason: string) {
+    if (reconnectingRef.current.has(winId)) return
+    const w = panelsRef.current.find((x) => x.id === winId)
+    if (!w) return
+    reconnectingRef.current.add(winId)
+    setPanels((prev) =>
+      prev.map((p) =>
+        p.id !== winId
+          ? p
+          : {
+              ...p,
+              connected: false,
+              streaming: false,
+              status: `Reconnecting: ${reason}`,
+            },
+      ),
+    )
+    try {
+      await connectWindow(winId, w.model, w.cwd, w.permissionMode, w.sandbox)
+      setPanels((prev) =>
+        prev.map((p) =>
+          p.id !== winId
+            ? p
+            : {
+                ...p,
+                status: 'Reconnected.',
+              },
+        ),
+      )
+      queueMicrotask(() => kickQueuedMessage(winId))
+    } catch (e) {
+      const errMsg = formatConnectionError(e)
+      setPanels((prev) =>
+        prev.map((p) =>
+          p.id !== winId
+            ? p
+            : {
+                ...p,
+                connected: false,
+                streaming: false,
+                status: 'Reconnect failed',
+                messages: [...p.messages, { id: newId(), role: 'system', content: errMsg, format: 'text' }],
+              },
+        ),
+      )
+    } finally {
+      reconnectingRef.current.delete(winId)
+    }
+  }
+
+  async function connectWindowWithRetry(
+    winId: string,
+    model: string,
+    cwd: string,
+    permissionMode: PermissionMode,
+    sandbox: SandboxMode,
+  ) {
+    try {
+      await connectWindow(winId, model, cwd, permissionMode, sandbox)
+      return
+    } catch {
+      await connectWindow(winId, model, cwd, permissionMode, sandbox)
+    }
+  }
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now()
+      const current = panelsRef.current
+      for (const p of current) {
+        if (!p.streaming) continue
+        const activity = panelActivityById[p.id]
+        if (!activity) continue
+        if (now - activity.lastEventAt < STALL_WATCHDOG_MS) continue
+        void reconnectPanel(p.id, 'turn appears stalled')
+      }
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [panelActivityById])
 
   function formatConnectionError(e: unknown): string {
     const msg = e instanceof Error ? e.message : String(e)
@@ -1027,8 +1216,8 @@ export default function App() {
     const w = panels.find((x) => x.id === winId)
     if (!w) return
     try {
-      if (!w.connected) await connectWindow(winId, w.model, w.cwd, w.permissionMode, w.sandbox)
-      await api.sendMessage(winId, text)
+      if (!w.connected) await connectWindowWithRetry(winId, w.model, w.cwd, w.permissionMode, w.sandbox)
+      await withTimeout(api.sendMessage(winId, text), TURN_START_TIMEOUT_MS, 'turn/start')
     } catch (e: any) {
       const errMsg = formatConnectionError(e)
       setPanels((prev) =>
@@ -1178,13 +1367,13 @@ export default function App() {
 
   function renderExplorerPane() {
     return (
-      <div className="h-full min-h-0 flex flex-col">
-        <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 text-xs">
+      <div className="h-full min-h-0 flex flex-col bg-white dark:bg-neutral-950">
+        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-neutral-600 dark:text-neutral-400">Workspace files</span>
+            <span className="font-medium text-neutral-700 dark:text-neutral-300">Workspace files</span>
             <button
               type="button"
-              className="px-2 py-1 rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+              className="px-2.5 py-1 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
               onClick={() => refreshWorkspaceTree()}
             >
               Refresh
@@ -1233,7 +1422,7 @@ export default function App() {
             </button>
           </div>
         </div>
-        <div className="flex-1 overflow-auto p-2">
+        <div className="flex-1 overflow-auto p-2.5">
           {workspaceTreeLoading && <p className="text-xs text-neutral-500 dark:text-neutral-400 px-1">Loading files...</p>}
           {!workspaceTreeLoading && workspaceTreeError && (
             <p className="text-xs text-red-600 dark:text-red-400 px-1">{workspaceTreeError}</p>
@@ -1244,7 +1433,7 @@ export default function App() {
           {!workspaceTreeLoading && !workspaceTreeError && workspaceTree.map((node) => renderExplorerNode(node))}
         </div>
         {workspaceTreeTruncated && (
-          <div className="px-3 py-2 border-t border-neutral-200 dark:border-neutral-800 text-[11px] text-amber-700 dark:text-amber-300">
+          <div className="px-3 py-2 border-t border-neutral-200/80 dark:border-neutral-800 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50/50 dark:bg-amber-950/20">
             File list truncated for performance. Use a smaller workspace for full tree view.
           </div>
         )}
@@ -1255,18 +1444,18 @@ export default function App() {
   function renderGitPane() {
     const canShowEntries = Boolean(gitStatus?.ok)
     return (
-      <div className="h-full min-h-0 flex flex-col">
-        <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 text-xs flex items-center justify-between">
-          <span className="text-neutral-600 dark:text-neutral-400">Git status (view only)</span>
+      <div className="h-full min-h-0 flex flex-col bg-white dark:bg-neutral-950">
+        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs flex items-center justify-between">
+          <span className="font-medium text-neutral-700 dark:text-neutral-300">Git status (view only)</span>
           <button
             type="button"
-            className="px-2 py-1 rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+            className="px-2.5 py-1 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
             onClick={refreshGitStatus}
           >
             Refresh
           </button>
         </div>
-        <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 text-xs space-y-1">
+        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs space-y-1.5">
           <div className="font-mono truncate" title={gitStatus?.branch ?? '(unknown)'}>
             Branch: {gitStatus?.branch ?? '(unknown)'}
           </div>
@@ -1285,7 +1474,7 @@ export default function App() {
             Ahead {gitStatus?.ahead ?? 0}, behind {gitStatus?.behind ?? 0} | Updated {formatCheckedAt(gitStatus?.checkedAt)}
           </div>
         </div>
-        <div className="flex-1 overflow-auto p-2 space-y-1">
+        <div className="flex-1 overflow-auto p-2.5 space-y-1.5">
           {gitStatusLoading && <p className="text-xs text-neutral-500 dark:text-neutral-400 px-1">Loading git status...</p>}
           {!gitStatusLoading && gitStatusError && <p className="text-xs text-red-600 dark:text-red-400 px-1">{gitStatusError}</p>}
           {!gitStatusLoading && canShowEntries && gitStatus?.clean && (
@@ -1295,7 +1484,7 @@ export default function App() {
             <button
               key={`${entry.relativePath}-${entry.indexStatus}-${entry.workingTreeStatus}`}
               type="button"
-              className="w-full text-left px-2 py-1.5 rounded text-xs font-mono hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              className="w-full text-left px-2.5 py-2 rounded-md text-xs font-mono border border-transparent hover:border-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-900 dark:hover:border-neutral-800"
               onClick={() => openFilePreview(entry.relativePath)}
               title={entry.relativePath}
             >
@@ -1417,8 +1606,8 @@ export default function App() {
       </div>
 
       <div className="flex-1 min-h-0 min-w-0 bg-neutral-100 dark:bg-neutral-900">
-        <Group orientation="horizontal" className="h-full min-h-0 min-w-0" id="workspace-shell-layout">
-          <Panel id="workspace-dock" defaultSize={23} minSize={14} maxSize={42} className="min-h-0 min-w-[220px]">
+        <Group orientation="horizontal" className="h-full min-h-0 min-w-0 select-none" id="workspace-shell-layout">
+          <Panel id="workspace-dock" defaultSize={28} minSize={16} maxSize={65} className="min-h-0 min-w-[220px]">
             <div className="h-full min-h-0 min-w-0 flex flex-col border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950">
               <div className="px-2 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-1">
                 <button
@@ -1449,8 +1638,8 @@ export default function App() {
               </div>
             </div>
           </Panel>
-          <Separator className="w-1 min-w-1 bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
-          <Panel id="workspace-content" minSize={40} className="min-h-0 min-w-0">
+          <Separator className="w-2 min-w-2 cursor-col-resize bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
+          <Panel id="workspace-content" minSize={25} className="min-h-0 min-w-0">
             <div ref={layoutRef} className="h-full flex flex-col min-h-0 min-w-0">
               {panels.length === 1 ? (
                 <div className="flex-1 min-h-0 min-w-0 overflow-hidden">{renderPanelContent(panels[0])}</div>
@@ -1989,6 +2178,8 @@ export default function App() {
     const activityTitle = activity
       ? `Activity: ${activityLabel}\nLast event: ${activity.lastEventLabel}\n${secondsAgo}s ago\nEvents seen: ${activity.totalEvents}`
       : 'Activity: idle\nNo events seen yet for this panel.'
+    const activityItems = activity?.recent ?? []
+    const activityOpen = Boolean(activityOpenByPanel[w.id])
 
     return (
       <div
@@ -2002,7 +2193,9 @@ export default function App() {
         onFocusCapture={() => setActivePanelId(w.id)}
         onMouseDownCapture={() => setActivePanelId(w.id)}
         onWheel={(e) => {
+          if (!e.ctrlKey) return
           if (activePanelId !== w.id) return
+          e.preventDefault()
           zoomPanelFont(w.id, e.deltaY)
         }}
       >
@@ -2136,6 +2329,16 @@ export default function App() {
               />
               {activityLabel}
             </span>
+            {activityItems.length > 0 && (
+              <button
+                type="button"
+                className="text-[11px] rounded border border-neutral-300 px-1.5 py-0.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                onClick={() => setActivityOpenByPanel((prev) => ({ ...prev, [w.id]: !prev[w.id] }))}
+                title="Toggle activity details"
+              >
+                {activityOpen ? 'Hide activity' : 'Show activity'}
+              </button>
+            )}
             <span className="break-words [overflow-wrap:anywhere]">{w.status}</span>
             {(() => {
               const pct = getRateLimitPercent(w.usage)
@@ -2150,6 +2353,21 @@ export default function App() {
                 </span>
               )
             })()}
+            {activityOpen && activityItems.length > 0 && (
+              <div className="w-full rounded border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-950/70 px-2 py-1.5 space-y-1 max-h-32 overflow-auto">
+                {activityItems.map((item) => (
+                  <div key={item.id} className="text-[11px] leading-4">
+                    <span className="font-medium text-neutral-700 dark:text-neutral-200">
+                      {item.label}
+                      {item.count > 1 ? ` x${item.count}` : ''}
+                    </span>
+                    {item.detail ? (
+                      <span className="text-neutral-500 dark:text-neutral-400"> - {item.detail}</span>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div className="min-w-0 flex flex-wrap items-end justify-end gap-3">
             <div className="flex flex-col gap-0.5">

@@ -1,5 +1,5 @@
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { GoogleGenAI } from '@google/genai'
 
 export type GeminiClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
@@ -9,14 +9,12 @@ export type GeminiClientEvent =
 
 export type GeminiConnectOptions = {
   model: string
-  apiKey: string
 }
 
 export class GeminiClient extends EventEmitter {
-  private ai: GoogleGenAI | null = null
   private model: string = 'gemini-2.0-flash'
-  private history: Array<{ role: 'user' | 'model'; parts: { text: string }[] }> = []
-  private activeStream: AsyncGenerator<unknown> | null = null
+  private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
+  private activeProc: ChildProcessWithoutNullStreams | null = null
 
   emitEvent(evt: GeminiClientEvent) {
     this.emit('event', evt)
@@ -24,48 +22,59 @@ export class GeminiClient extends EventEmitter {
 
   async connect(options: GeminiConnectOptions) {
     this.model = options.model || 'gemini-2.0-flash'
-    if (!options.apiKey?.trim()) {
-      this.emitEvent({ type: 'status', status: 'error', message: 'Gemini API key required' })
-      throw new Error('Gemini API key required. Add it in Edit > Model setup.')
-    }
-
-    this.emitEvent({ type: 'status', status: 'starting', message: 'Connecting to Gemini...' })
-    this.ai = new GoogleGenAI({ apiKey: options.apiKey.trim() })
+    this.emitEvent({ type: 'status', status: 'starting', message: 'Connecting to Gemini CLI...' })
+    await this.assertGeminiCliAvailable()
     this.history = []
     this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })
     return { threadId: 'gemini' }
   }
 
   async sendUserMessage(text: string) {
-    if (!this.ai) throw new Error('Not connected')
     const trimmed = text.trim()
     if (!trimmed) return
 
-    this.history.push({ role: 'user', parts: [{ text: trimmed }] })
+    this.history.push({ role: 'user', text: trimmed })
 
     const COMPLETION_SYSTEM =
-      'Complete all tasks fully. Do not stop after describing a plan—execute the plan. Continue until the work is done.'
+      'You are a coding assistant running inside Agent Orchestrator. Complete tasks fully. Do not stop after describing a plan - execute the plan and provide concrete outputs.'
+    const prompt = this.buildPrompt(COMPLETION_SYSTEM)
 
     try {
-      const contents = this.history.map((m) => ({
-        role: m.role === 'user' ? 'user' : 'model',
-        parts: m.parts,
-      }))
-      const stream = await this.ai.models.generateContentStream({
-        model: this.model,
-        contents,
-        config: { systemInstruction: COMPLETION_SYSTEM, maxOutputTokens: 16384 },
-      } as any)
-
       let full = ''
-      for await (const chunk of stream as AsyncGenerator<{ text?: string }>) {
-        const delta = chunk?.text ?? ''
-        if (delta) {
-          full += delta
-          this.emitEvent({ type: 'assistantDelta', delta })
-        }
-      }
-      this.history.push({ role: 'model', parts: [{ text: full }] })
+      await new Promise<void>((resolve, reject) => {
+        const args = ['-m', this.model, '-p', prompt]
+        const proc =
+          process.platform === 'win32'
+            ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
+                stdio: ['ignore', 'pipe', 'pipe'],
+                windowsHide: true,
+              })
+            : spawn('gemini', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+
+        this.activeProc = proc
+        proc.stdout.setEncoding('utf8')
+        proc.stderr.setEncoding('utf8')
+
+        let stderr = ''
+        proc.stdout.on('data', (chunk: string) => {
+          if (!chunk) return
+          full += chunk
+          this.emitEvent({ type: 'assistantDelta', delta: chunk })
+        })
+
+        proc.stderr.on('data', (chunk: string) => {
+          stderr += chunk
+        })
+
+        proc.on('error', (err) => reject(err))
+        proc.on('exit', (code) => {
+          this.activeProc = null
+          if (code === 0) resolve()
+          else reject(new Error(stderr.trim() || `Gemini CLI exited with code ${code ?? 'unknown'}`))
+        })
+      })
+
+      this.history.push({ role: 'assistant', text: full.trim() || full })
       this.emitEvent({ type: 'assistantCompleted' })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -75,12 +84,58 @@ export class GeminiClient extends EventEmitter {
   }
 
   async interruptActiveTurn() {
-    this.activeStream = null
+    if (!this.activeProc) return
+    try {
+      this.activeProc.kill()
+    } catch {
+      // ignore
+    } finally {
+      this.activeProc = null
+    }
   }
 
   async close() {
-    this.ai = null
+    await this.interruptActiveTurn()
     this.history = []
-    this.activeStream = null
+  }
+
+  private buildPrompt(systemInstruction: string): string {
+    const recent = this.history.slice(-12)
+    const transcript = recent
+      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}:\n${m.text}`)
+      .join('\n\n')
+    return [systemInstruction, transcript, 'Assistant:'].filter(Boolean).join('\n\n')
+  }
+
+  private async assertGeminiCliAvailable() {
+    await new Promise<void>((resolve, reject) => {
+      const proc =
+        process.platform === 'win32'
+          ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', '--version'], {
+              stdio: ['ignore', 'pipe', 'pipe'],
+              windowsHide: true,
+            })
+          : spawn('gemini', ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] })
+
+      let stderr = ''
+      proc.stderr.setEncoding('utf8')
+      proc.stderr.on('data', (chunk: string) => {
+        stderr += chunk
+      })
+
+      proc.on('error', (err) => reject(err))
+      proc.on('exit', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(stderr.trim() || 'Gemini CLI not available. Install and login with `gemini`.'))
+      })
+    }).catch((err: unknown) => {
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Gemini CLI not available. Install and login with `gemini` first.'
+      throw new Error(
+        `${message}\nUse terminal: \`gemini\` and choose "Login with Google" (subscription).`,
+      )
+    })
   }
 }

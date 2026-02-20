@@ -15,6 +15,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:clean": "node scripts/dev-clean.mjs && npm run dev",
     "build:dist": "tsc && vite build",
     "build": "npm run build:dist && electron-builder",
     "package:win": "npm run build:dist && electron-packager . FireHarness --platform=win32 --arch=x64 --out=release/0.0.1/packaged --overwrite --asar --prune=true --icon=public/favicon.ico",

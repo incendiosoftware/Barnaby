@@ -231,14 +231,14 @@ export class CodexAppServerClient extends EventEmitter {
       // Best-effort: respond "decline" for approval requests.
       if (method.endsWith('/requestApproval')) {
         if (this.permissionMode === 'proceed-always') {
-          this.sendResponse(id, 'accept')
+          this.sendResponse(id, { decision: 'accept' })
         } else {
           this.emitEvent({
             type: 'status',
             status: 'error',
             message: 'Action requires approval. Set permissions to Proceed always to allow writes.',
           })
-          this.sendResponse(id, 'decline')
+          this.sendResponse(id, { decision: 'decline' })
         }
       } else {
         this.sendResponse(id, null)

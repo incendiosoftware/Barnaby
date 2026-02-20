@@ -1,91 +1,66 @@
-# electron-vite-react
+# Agent Orchestrator
 
-[![awesome-vite](https://awesome.re/mentioned-badge.svg)](https://github.com/vitejs/awesome-vite)
-![GitHub stars](https://img.shields.io/github/stars/caoxiemeihao/vite-react-electron?color=fa6470)
-![GitHub issues](https://img.shields.io/github/issues/caoxiemeihao/vite-react-electron?color=d8b22d)
-![GitHub license](https://img.shields.io/github/license/caoxiemeihao/vite-react-electron)
-[![Required Node.JS >= 14.18.0 || >=16.0.0](https://img.shields.io/static/v1?label=node&message=14.18.0%20||%20%3E=16.0.0&logo=node.js&color=3f893e)](https://nodejs.org/about/releases)
+Desktop Electron app for running and coordinating multiple local AI agent panels.
 
-English | [简体中文](README.zh-CN.md)
+## Overview
 
-## 👀 Overview
+Agent Orchestrator provides:
 
-📦 Ready out of the box  
-🎯 Based on the official [template-react-ts](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts), project structure will be familiar to you  
-🌱 Easily extendable and customizable  
-💪 Supports Node.js API in the renderer process  
-🔩 Supports C/C++ native addons  
-🐞 Debugger configuration included  
-🖥 Easy to implement multiple windows  
+- Multiple agent panels with split layouts (horizontal, vertical, grid)
+- Workspace selection and per-workspace defaults
+- Model setup and provider routing (Codex and Gemini)
+- Streaming chat with markdown rendering
+- Queue-aware sending and auto-scroll in chat windows
+- Menu actions for workspace management (new/open/recent/close/exit)
 
-## 🛫 Quick Setup
+## Prerequisites
+
+- Node.js 18+ recommended
+- npm
+- For Codex provider:
+  - Codex CLI installed and available in `PATH`
+  - Logged in once from terminal (for example: `codex auth` or your installed CLI login flow)
+- For Gemini provider:
+  - Gemini API key configured in **Edit -> Model setup...**
+
+## Development
+
+From repo root:
 
 ```sh
-# clone the project
-git clone https://github.com/electron-vite/electron-vite-react.git
-
-# enter the project directory
-cd electron-vite-react
-
-# install dependency
 npm install
-
-# develop
 npm run dev
 ```
 
-## 🐞 Debug
+## Build
 
-![electron-vite-react-debug.gif](/electron-vite-react-debug.gif)
-
-## 📂 Directory structure
-
-Familiar React application structure, just with `electron` folder on the top :wink:  
-*Files in this folder will be separated from your React application and built into `dist-electron`*  
-
-```tree
-├── electron                                 Electron-related code
-│   ├── main                                 Main-process source code
-│   └── preload                              Preload-scripts source code
-│
-├── release                                  Generated after production build, contains executables
-│   └── {version}
-│       ├── {os}-{os_arch}                   Contains unpacked application executable
-│       └── {app_name}_{version}.{ext}       Installer for the application
-│
-├── public                                   Static assets
-└── src                                      Renderer source code, your React application
+```sh
+npm run build:dist
 ```
 
-<!--
-## 🚨 Be aware
+This generates:
 
-This template integrates Node.js API to the renderer process by default. If you want to follow **Electron Security Concerns** you might want to disable this feature. You will have to expose needed API by yourself.  
+- `dist/` (renderer)
+- `dist-electron/` (main/preload)
 
-To get started, remove the option as shown below. This will [modify the Vite configuration and disable this feature](https://github.com/electron-vite/vite-plugin-electron-renderer#config-presets-opinionated).
+## Packaging
 
-```diff
-# vite.config.ts
-
-export default {
-  plugins: [
-    ...
--   // Use Node.js API in the Renderer-process
--   renderer({
--     nodeIntegration: true,
--   }),
-    ...
-  ],
-}
+```sh
+npm run build
 ```
--->
 
-## 🔧 Additional features
+This runs production build and packages installers/artifacts into `release/`.
 
-1. electron-updater 👉 [see docs](src/components/update/README.md)
-1. playwright
+## Project Structure
 
-## ❔ FAQ
+```text
+electron/        Electron main and preload
+src/             React renderer UI
+public/          Static assets
+release/         Packaged outputs
+```
 
-- [C/C++ addons, Node.js modules - Pre-Bundling](https://github.com/electron-vite/vite-plugin-electron-renderer#dependency-pre-bundling)
-- [dependencies vs devDependencies](https://github.com/electron-vite/vite-plugin-electron-renderer#dependencies-vs-devdependencies)
+## Notes
+
+- Workspace root should be the repository root unless you intentionally want broader file scope.
+- If Codex fails with `codex app-server closed`, run `codex app-server` manually in terminal to inspect the underlying error.

@@ -10,6 +10,7 @@ export type TimelineMessage = {
   content: string
   format?: 'text' | 'markdown'
   attachments?: Array<{ id: string; path: string; label: string; mimeType?: string }>
+  createdAt?: number
 }
 
 export type TimelineActivityItem = {

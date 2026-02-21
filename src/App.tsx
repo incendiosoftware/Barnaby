@@ -23,7 +23,14 @@ type StandaloneTheme = {
 type ChatRole = 'user' | 'assistant' | 'system'
 type MessageFormat = 'text' | 'markdown'
 type PastedImageAttachment = { id: string; path: string; label: string; mimeType?: string }
-type ChatMessage = { id: string; role: ChatRole; content: string; format?: MessageFormat; attachments?: PastedImageAttachment[] }
+type ChatMessage = {
+  id: string
+  role: ChatRole
+  content: string
+  format?: MessageFormat
+  attachments?: PastedImageAttachment[]
+  createdAt?: number
+}
 type PermissionMode = 'verify-first' | 'proceed-always'
 type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 type AgentInteractionMode = 'agent' | 'plan' | 'debug' | 'ask'
@@ -137,6 +144,10 @@ type ChatHistoryEntry = {
   messages: ChatMessage[]
 }
 
+type DiagnosticsMessageColorKey = 'debugNote' | 'activityUpdate' | 'reasoningUpdate' | 'operationTrace' | 'timelineMessage'
+
+type DiagnosticsMessageColors = Record<DiagnosticsMessageColorKey, string>
+
 type ApplicationSettings = {
   restoreSessionOnStartup: boolean
   themeId: string
@@ -145,6 +156,7 @@ type ApplicationSettings = {
   showActivityUpdates: boolean
   showReasoningUpdates: boolean
   showOperationTrace: boolean
+  diagnosticsMessageColors: DiagnosticsMessageColors
 }
 
 
@@ -374,6 +386,20 @@ const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'prefer
 const OPERATION_TRACE_VISIBLE_MS = 1200
 const OPERATION_TRACE_FADE_MS = 2600
 const OPERATION_TRACE_MIN_OPACITY = 0.4
+const DEFAULT_DIAGNOSTICS_MESSAGE_COLORS: DiagnosticsMessageColors = {
+  debugNote: '#b91c1c',
+  activityUpdate: '#b45309',
+  reasoningUpdate: '#047857',
+  operationTrace: '#1e3a8a',
+  timelineMessage: '#737373',
+}
+const DIAGNOSTICS_MESSAGE_COLOR_FIELDS: Array<{ key: DiagnosticsMessageColorKey; label: string }> = [
+  { key: 'debugNote', label: 'Debug notes' },
+  { key: 'activityUpdate', label: 'Activity updates' },
+  { key: 'reasoningUpdate', label: 'Reasoning updates' },
+  { key: 'operationTrace', label: 'Operation trace' },
+  { key: 'timelineMessage', label: 'Thinking/progress messages' },
+]
 
 const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderConfig> = {
   codex: {
@@ -1026,6 +1052,7 @@ function parseHistoryMessages(raw: unknown): ChatMessage[] {
       content: typeof record.content === 'string' ? record.content : '',
       format,
       attachments: attachments && attachments.length > 0 ? attachments : undefined,
+      createdAt: typeof record.createdAt === 'number' && Number.isFinite(record.createdAt) ? record.createdAt : undefined,
     })
   }
   return stripSyntheticAutoContinueMessages(next)
@@ -1075,6 +1102,30 @@ function getInitialChatHistory(): ChatHistoryEntry[] {
   }
 }
 
+function normalizeColorHex(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback
+  const normalized = value.trim().toLowerCase()
+  if (/^#[0-9a-f]{6}$/.test(normalized)) return normalized
+  const short = normalized.match(/^#([0-9a-f]{3})$/)
+  if (!short) return fallback
+  const [, raw] = short
+  return `#${raw[0]}${raw[0]}${raw[1]}${raw[1]}${raw[2]}${raw[2]}`
+}
+
+function parseDiagnosticsMessageColors(raw: unknown): DiagnosticsMessageColors {
+  const source =
+    raw && typeof raw === 'object'
+      ? (raw as Partial<Record<DiagnosticsMessageColorKey, unknown>>)
+      : {}
+  return {
+    debugNote: normalizeColorHex(source.debugNote, DEFAULT_DIAGNOSTICS_MESSAGE_COLORS.debugNote),
+    activityUpdate: normalizeColorHex(source.activityUpdate, DEFAULT_DIAGNOSTICS_MESSAGE_COLORS.activityUpdate),
+    reasoningUpdate: normalizeColorHex(source.reasoningUpdate, DEFAULT_DIAGNOSTICS_MESSAGE_COLORS.reasoningUpdate),
+    operationTrace: normalizeColorHex(source.operationTrace, DEFAULT_DIAGNOSTICS_MESSAGE_COLORS.operationTrace),
+    timelineMessage: normalizeColorHex(source.timelineMessage, DEFAULT_DIAGNOSTICS_MESSAGE_COLORS.timelineMessage),
+  }
+}
+
 function getInitialApplicationSettings(): ApplicationSettings {
   try {
     const raw = globalThis.localStorage?.getItem(APP_SETTINGS_STORAGE_KEY)
@@ -1087,6 +1138,7 @@ function getInitialApplicationSettings(): ApplicationSettings {
         showActivityUpdates: false,
         showReasoningUpdates: false,
         showOperationTrace: true,
+        diagnosticsMessageColors: { ...DEFAULT_DIAGNOSTICS_MESSAGE_COLORS },
       }
     }
     const parsed = JSON.parse(raw) as Partial<ApplicationSettings>
@@ -1105,6 +1157,7 @@ function getInitialApplicationSettings(): ApplicationSettings {
       showActivityUpdates: Boolean(parsed?.showActivityUpdates),
       showReasoningUpdates: Boolean(parsed?.showReasoningUpdates),
       showOperationTrace: parsed?.showOperationTrace !== false,
+      diagnosticsMessageColors: parseDiagnosticsMessageColors(parsed?.diagnosticsMessageColors),
     }
   } catch {
     return {
@@ -1115,6 +1168,7 @@ function getInitialApplicationSettings(): ApplicationSettings {
       showActivityUpdates: false,
       showReasoningUpdates: false,
       showOperationTrace: true,
+      diagnosticsMessageColors: { ...DEFAULT_DIAGNOSTICS_MESSAGE_COLORS },
     }
   }
 }
@@ -1641,12 +1695,14 @@ function makeDefaultPanel(id: string, cwd: string, historyId = newId()): AgentPa
         role: 'system',
         content: `Model: ${startupModel}`,
         format: 'text',
+        createdAt: Date.now(),
       },
       {
         id: newId(),
         role: 'assistant',
         content: STARTUP_READY_MESSAGE,
         format: 'text',
+        createdAt: Date.now() + 1,
       },
     ],
     attachments: [],
@@ -1662,13 +1718,13 @@ function withModelBanner(messages: ChatMessage[], model: string): ChatMessage[] 
   if (messages[0]?.role === 'system' && messages[0].content.startsWith(MODEL_BANNER_PREFIX)) {
     return [{ ...messages[0], content: banner, format: 'text' }, ...messages.slice(1)]
   }
-  return [{ id: newId(), role: 'system', content: banner, format: 'text' }, ...messages]
+  return [{ id: newId(), role: 'system', content: banner, format: 'text', createdAt: Date.now() }, ...messages]
 }
 
 function withReadyAck(messages: ChatMessage[]): ChatMessage[] {
   const last = messages[messages.length - 1]
   if (last?.role === 'assistant' && last.content.trim() === STARTUP_READY_MESSAGE) return messages
-  return [...messages, { id: newId(), role: 'assistant', content: STARTUP_READY_MESSAGE, format: 'text' }]
+  return [...messages, { id: newId(), role: 'assistant', content: STARTUP_READY_MESSAGE, format: 'text', createdAt: Date.now() }]
 }
 
 function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSettings> {
@@ -2382,7 +2438,12 @@ export default function App() {
       if (!panelId) return
       setPanels((prev) =>
         prev.map((p) =>
-          p.id !== panelId ? p : { ...p, messages: [...p.messages, { id: newId(), role: 'system', content: notice, format: 'text' }] },
+          p.id !== panelId
+            ? p
+            : {
+                ...p,
+                messages: [...p.messages, { id: newId(), role: 'system', content: notice, format: 'text', createdAt: Date.now() }],
+              },
         ),
       )
     })
@@ -3055,13 +3116,13 @@ export default function App() {
           return {
             ...w,
             streaming: true,
-            messages: [...msgs.slice(0, -1), { ...last, format: 'markdown', content: last.content + buf }],
+            messages: [...msgs.slice(0, -1), { ...last, format: 'markdown', content: last.content + buf, createdAt: last.createdAt ?? Date.now() }],
           }
         }
         return {
           ...w,
           streaming: true,
-          messages: [...msgs, { id: newId(), role: 'assistant', content: buf, format: 'markdown' }],
+          messages: [...msgs, { id: newId(), role: 'assistant', content: buf, format: 'markdown', createdAt: Date.now() }],
         }
       }),
     )
@@ -3115,7 +3176,7 @@ export default function App() {
           ? p
           : {
               ...p,
-              messages: [...p.messages, { id: newId(), role: 'system', content: debugLine, format: 'text' }],
+              messages: [...p.messages, { id: newId(), role: 'system', content: debugLine, format: 'text', createdAt: Date.now() }],
             },
       ),
     )
@@ -3235,7 +3296,7 @@ export default function App() {
               ? w
               : {
                   ...w,
-                  messages: [...w.messages, { id: newId(), role: 'system', content: note, format: 'text' }],
+                  messages: [...w.messages, { id: newId(), role: 'system', content: note, format: 'text', createdAt: Date.now() }],
                 },
           ),
         )
@@ -3470,7 +3531,7 @@ export default function App() {
             ? p
             : {
                 ...p,
-                messages: [...p.messages, { id: newId(), role: 'system', content: `Image paste failed: ${msg}`, format: 'text' }],
+                messages: [...p.messages, { id: newId(), role: 'system', content: `Image paste failed: ${msg}`, format: 'text', createdAt: Date.now() }],
               },
         ),
       )
@@ -4404,7 +4465,7 @@ export default function App() {
                 connected: false,
                 streaming: false,
                 status: 'Reconnect failed',
-                messages: [...p.messages, { id: newId(), role: 'system', content: errMsg, format: 'text' }],
+                messages: [...p.messages, { id: newId(), role: 'system', content: errMsg, format: 'text', createdAt: Date.now() }],
               },
         ),
       )
@@ -4544,7 +4605,7 @@ export default function App() {
                 streaming: false,
                 connected: false,
                 status: 'Disconnected',
-                messages: [...x.messages, { id: newId(), role: 'system', content: errMsg, format: 'text' }],
+                messages: [...x.messages, { id: newId(), role: 'system', content: errMsg, format: 'text', createdAt: Date.now() }],
               },
         ),
       )
@@ -4587,6 +4648,7 @@ export default function App() {
                     role: 'system',
                     content: 'Please wait for the current turn to finish before sending image attachments.',
                     format: 'text',
+                    createdAt: Date.now(),
                   },
                 ],
               },
@@ -4600,7 +4662,7 @@ export default function App() {
         if (x.id !== winId) return x
         if (isBusy) {
           appendPanelDebug(winId, 'queue', `Panel busy - queued message (${text.length} chars)`)
-          const queuedMessage: ChatMessage = { id: newId(), role: 'user', content: text, format: 'text' }
+          const queuedMessage: ChatMessage = { id: newId(), role: 'user', content: text, format: 'text', createdAt: Date.now() }
           const updated: AgentPanelState = {
             ...x,
             input: '',
@@ -4617,6 +4679,7 @@ export default function App() {
           content: text,
           format: 'text',
           attachments: messageAttachments.length > 0 ? messageAttachments : undefined,
+          createdAt: Date.now(),
         }
         const updated: AgentPanelState = {
           ...x,
@@ -4676,7 +4739,13 @@ export default function App() {
       const errMsg = formatConnectionError(e)
       setPanels((prev) =>
         prev.map((w) =>
-          w.id !== winId ? w : { ...w, status: 'Disconnected', messages: [...w.messages, { id: newId(), role: 'system' as const, content: errMsg, format: 'text' as const }] },
+          w.id !== winId
+            ? w
+            : {
+                ...w,
+                status: 'Disconnected',
+                messages: [...w.messages, { id: newId(), role: 'system' as const, content: errMsg, format: 'text' as const, createdAt: Date.now() }],
+              },
         ),
       )
     }
@@ -6051,7 +6120,9 @@ export default function App() {
                         }))
                       }
                     />
-                    <span className="text-red-700 dark:text-red-300">Inject debug notes into chat timeline</span>
+                    <span style={{ color: applicationSettings.diagnosticsMessageColors.debugNote }}>
+                      Inject debug notes into chat timeline
+                    </span>
                   </label>
                   <label className="flex items-center gap-2">
                     <input
@@ -6064,7 +6135,9 @@ export default function App() {
                         }))
                       }
                     />
-                    <span className="text-amber-700 dark:text-amber-300">Show activity updates in chat timeline</span>
+                    <span style={{ color: applicationSettings.diagnosticsMessageColors.activityUpdate }}>
+                      Show activity updates in chat timeline
+                    </span>
                   </label>
                   <label className="flex items-center gap-2">
                     <input
@@ -6077,7 +6150,9 @@ export default function App() {
                         }))
                       }
                     />
-                    <span className="text-emerald-700 dark:text-emerald-300">Show reasoning updates in chat timeline</span>
+                    <span style={{ color: applicationSettings.diagnosticsMessageColors.reasoningUpdate }}>
+                      Show reasoning updates in chat timeline
+                    </span>
                   </label>
                   <label className="flex items-center gap-2">
                     <input
@@ -6090,8 +6165,43 @@ export default function App() {
                         }))
                       }
                     />
-                    <span className="text-blue-900 dark:text-blue-300">Show operation trace in chat timeline</span>
+                    <span style={{ color: applicationSettings.diagnosticsMessageColors.operationTrace }}>
+                      Show operation trace in chat timeline
+                    </span>
                   </label>
+                </div>
+                <div className="rounded-lg border border-neutral-200 bg-neutral-50/70 p-3 dark:border-neutral-700 dark:bg-neutral-900/50">
+                  <div className="text-xs font-medium text-neutral-700 dark:text-neutral-300">Message colors</div>
+                  <div className="mt-2 space-y-2">
+                    {DIAGNOSTICS_MESSAGE_COLOR_FIELDS.map((field) => {
+                      const value = applicationSettings.diagnosticsMessageColors[field.key]
+                      return (
+                        <label key={field.key} className="flex items-center justify-between gap-3 text-xs">
+                          <span className="text-neutral-700 dark:text-neutral-300">{field.label}</span>
+                          <span className="inline-flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={value}
+                              onChange={(e) =>
+                                setApplicationSettings((prev) => ({
+                                  ...prev,
+                                  diagnosticsMessageColors: {
+                                    ...prev.diagnosticsMessageColors,
+                                    [field.key]: e.target.value,
+                                  },
+                                }))
+                              }
+                              className="h-7 w-10 cursor-pointer rounded border border-neutral-300 bg-white p-0.5 dark:border-neutral-600 dark:bg-neutral-800"
+                              title={`${field.label} color`}
+                            />
+                            <code className="w-16 text-right font-mono text-[11px] text-neutral-600 dark:text-neutral-400">
+                              {value}
+                            </code>
+                          </span>
+                        </label>
+                      )
+                    })}
+                  </div>
                 </div>
               </section>
 
@@ -6594,6 +6704,12 @@ export default function App() {
     const showActivityUpdates = Boolean(applicationSettings.showActivityUpdates)
     const showReasoningUpdates = Boolean(applicationSettings.showReasoningUpdates)
     const showOperationTrace = applicationSettings.showOperationTrace !== false
+    const diagnosticsMessageColors = applicationSettings.diagnosticsMessageColors
+    const debugNoteColor = diagnosticsMessageColors.debugNote
+    const activityUpdateColor = diagnosticsMessageColors.activityUpdate
+    const reasoningUpdateColor = diagnosticsMessageColors.reasoningUpdate
+    const operationTraceColor = diagnosticsMessageColors.operationTrace
+    const timelineMessageColor = diagnosticsMessageColors.timelineMessage
     const settingsPopover = settingsPopoverByPanel[w.id] ?? null
     const interactionMode = parseInteractionMode(w.interactionMode)
     const contextUsage = estimatePanelContextUsage(w)
@@ -6719,8 +6835,9 @@ export default function App() {
                       return (
                         <div key={unit.id} className="px-1 py-0">
                           <div
-                            className="rounded px-2 py-0 text-[11px] leading-[1.2] text-blue-900 dark:text-blue-300 transition-opacity duration-300"
+                            className="rounded px-2 py-0 text-[11px] leading-[1.2] transition-opacity duration-300"
                             style={{
+                              color: operationTraceColor,
                               opacity: fadedOpacity,
                               display: '-webkit-box',
                               WebkitLineClamp: 2,
@@ -6744,9 +6861,7 @@ export default function App() {
                 if (isOperationTrace) return null
                 if (isReasoningActivity && !showReasoningUpdates) return null
                 if (!isReasoningActivity && !showActivityUpdates) return null
-              const activityToneClass = isReasoningActivity
-                ? 'text-emerald-700 dark:text-emerald-300'
-                : 'text-amber-700 dark:text-amber-300'
+              const activityColor = isReasoningActivity ? reasoningUpdateColor : activityUpdateColor
               const isOpen = timelineOpenByUnitId[unit.id] ?? unit.defaultOpen
               const activitySummary = unit.title || unit.body.trim().split(/\r?\n/)[0]?.slice(0, 80) || 'Activity'
               return (
@@ -6759,7 +6874,10 @@ export default function App() {
                     }}
                     className="group"
                   >
-                    <summary className={`list-none cursor-pointer py-0.5 text-[10.5px] flex items-center justify-between gap-2 ${activityToneClass}`}>
+                    <summary
+                      className="list-none cursor-pointer py-0.5 text-[10.5px] flex items-center justify-between gap-2"
+                      style={{ color: activityColor }}
+                    >
                       <span>{activitySummary}</span>
                       <svg
                         width="12"
@@ -6772,7 +6890,7 @@ export default function App() {
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                     </summary>
-                    <div className={`mt-1 pl-0 py-1 text-[12px] leading-5 ${activityToneClass}`}>
+                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5" style={{ color: activityColor }}>
                       {unit.body}
                     </div>
                   </details>
@@ -6795,6 +6913,7 @@ export default function App() {
             const thinkingOpen = timelineOpenByUnitId[unit.id] ?? unit.defaultOpen
             const thinkingInProgress = unit.status === 'in_progress'
             const thinkingSummary = m.content.trim().split(/\r?\n/)[0]?.trim().slice(0, 80) || 'Progress update'
+            const messageContainerStyle = !shouldCollapseThinking && isDebugSystemNote ? { color: debugNoteColor } : undefined
             return (
             <div key={m.id} className="w-full">
               <div
@@ -6815,6 +6934,7 @@ export default function App() {
                           : '',
                       ].join(' '),
                 ].filter(Boolean).join(' ')}
+                style={messageContainerStyle}
               >
                 {isCodeLifecycleUnit && hasFencedCodeBlocks && (
                   <div className="mb-2 flex justify-end">
@@ -6844,7 +6964,10 @@ export default function App() {
                     }}
                     className="group"
                   >
-                    <summary className={`list-none cursor-pointer py-0.5 text-[10.5px] text-neutral-400 dark:text-neutral-500 flex items-center justify-between gap-2 ${thinkingInProgress ? 'animate-pulse motion-reduce:animate-none' : ''}`}>
+                    <summary
+                      className={`list-none cursor-pointer py-0.5 text-[10.5px] flex items-center justify-between gap-2 ${thinkingInProgress ? 'animate-pulse motion-reduce:animate-none' : ''}`}
+                      style={{ color: timelineMessageColor }}
+                    >
                       <span>{thinkingSummary}</span>
                       <svg
                         width="12"
@@ -6857,7 +6980,7 @@ export default function App() {
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                     </summary>
-                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5 text-neutral-500 dark:text-neutral-400">
+                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5" style={{ color: timelineMessageColor }}>
                       {m.role === 'assistant' && m.format === 'markdown' ? (
                         <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-1 prose-headings:my-1 prose-code:text-blue-800 dark:prose-code:text-blue-300">
                           <ReactMarkdown
@@ -6972,9 +7095,10 @@ export default function App() {
                         <div
                           className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] ${
                             isDebugSystemNote
-                              ? 'italic text-red-800 dark:text-red-200'
+                              ? 'italic'
                               : 'text-neutral-700 dark:text-neutral-300'
                           }`}
+                          style={isDebugSystemNote ? { color: debugNoteColor } : undefined}
                         >
                           {m.content}
                         </div>

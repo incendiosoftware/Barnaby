@@ -1,5 +1,5 @@
-import { app, BrowserWindow, shell, ipcMain, Menu, dialog, screen } from 'electron'
-import { fileURLToPath } from 'node:url'
+import { app, BrowserWindow, shell, ipcMain, Menu, dialog, screen, nativeTheme } from 'electron'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -9,8 +9,21 @@ import { CodexAppServerClient, type CodexConnectOptions, type FireHarnessCodexEv
 import { GeminiClient, type GeminiClientEvent } from './geminiClient'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
+const WORKSPACE_LOCK_DIRNAME = '.barnaby'
+const WORKSPACE_LOCK_FILENAME = 'active-token.json'
+const WORKSPACE_LOCK_HEARTBEAT_INTERVAL_MS = 5000
+const WORKSPACE_LOCK_STALE_MS = 30000
+const LEGACY_APPDATA_DIRNAME = 'Agent Orchestrator'
+const LEGACY_STORAGE_MIGRATION_MARKER = '.legacy-storage-migration-v1.json'
+const CHAT_HISTORY_STORAGE_KEY = 'agentorchestrator.chatHistory'
+const APP_STORAGE_DIRNAME = '.storage'
+const CHAT_HISTORY_FILENAME = 'chat-history.json'
+const APP_STATE_FILENAME = 'app-state.json'
+const RUNTIME_LOG_FILENAME = 'runtime.log'
+const MAX_PERSISTED_CHAT_HISTORY_ENTRIES = 200
 const MAX_EXPLORER_NODES = 2500
 const MAX_FILE_PREVIEW_BYTES = 1024 * 1024
+const STARTUP_SPLASH_TIMEOUT_MS = 30000
 const EXPLORER_ALWAYS_IGNORED_DIRECTORIES = new Set([
   '.git',
   'dist',
@@ -58,6 +71,32 @@ type GitStatusResult = {
   error?: string
 }
 
+type WorkspaceLockToken = {
+  version: 1
+  app: 'Barnaby'
+  instanceId: string
+  pid: number
+  hostname: string
+  workspaceRoot: string
+  acquiredAt: number
+  heartbeatAt: number
+}
+
+type WorkspaceLockAcquireResult =
+  | {
+      ok: true
+      workspaceRoot: string
+      lockFilePath: string
+    }
+  | {
+      ok: false
+      reason: 'invalid-workspace' | 'in-use' | 'error'
+      message: string
+      workspaceRoot: string
+      lockFilePath: string
+      owner?: Pick<WorkspaceLockToken, 'pid' | 'hostname' | 'acquiredAt' | 'heartbeatAt'> | null
+    }
+
 type ConnectOptions = CodexConnectOptions & {
   provider?: 'codex' | 'gemini'
   modelConfig?: Record<string, string>
@@ -70,6 +109,33 @@ type ProviderAuthStatus = {
   authenticated: boolean
   detail: string
   checkedAt: number
+}
+
+type PersistedChatAttachment = {
+  id: string
+  path: string
+  label: string
+  mimeType?: string
+}
+
+type PersistedChatMessage = {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  format?: 'text' | 'markdown'
+  attachments?: PersistedChatAttachment[]
+}
+
+type PersistedChatHistoryEntry = {
+  id: string
+  title: string
+  savedAt: number
+  workspaceRoot: string
+  model: string
+  permissionMode: 'verify-first' | 'proceed-always'
+  sandbox: 'read-only' | 'workspace-write' | 'danger-full-access'
+  fontScale: number
+  messages: PersistedChatMessage[]
 }
 
 type AgentClient = CodexAppServerClient | GeminiClient
@@ -104,15 +170,247 @@ if (os.release().startsWith('6.1')) app.disableHardwareAcceleration()
 if (process.platform === 'win32') app.setAppUserModelId(app.getName())
 
 let win: BrowserWindow | null = null
+let splashWin: BrowserWindow | null = null
 let recentWorkspaces: string[] = []
 let editorMenuEnabled = false
 const preload = path.join(__dirname, '../preload/index.mjs')
 const indexHtml = path.join(RENDERER_DIST, 'index.html')
+let startupRevealTimer: ReturnType<typeof setTimeout> | null = null
+let mainWindowReadyToShow = false
+let rendererStartupReady = false
+let waitForRendererStartup = false
+let mainWindowRevealed = false
 
 const agentClients = new Map<string, AgentClient>()
+const workspaceLockInstanceId = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+const ownedWorkspaceLocks = new Map<string, { lockFilePath: string; acquiredAt: number }>()
+let workspaceLockHeartbeatTimer: ReturnType<typeof setInterval> | null = null
+
+function isBareElectronHostLaunch() {
+  // In dev, defaultApp=true when running with the Electron host binary.
+  // If no non-flag app target argument is provided, Electron opens its default page.
+  if (!process.defaultApp) return false
+  const candidateArgs = process.argv.slice(1).filter(Boolean)
+  const hasAppTarget = candidateArgs.some((arg) => !arg.startsWith('-'))
+  return !hasAppTarget
+}
 
 function normalizeRelativePath(p: string) {
   return p.replace(/\\/g, '/')
+}
+
+function isDirectory(p: string) {
+  try {
+    return fs.statSync(p).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+function clearStartupRevealTimer() {
+  if (!startupRevealTimer) return
+  clearTimeout(startupRevealTimer)
+  startupRevealTimer = null
+}
+
+function closeSplashWindow() {
+  if (!splashWin) return
+  if (!splashWin.isDestroyed()) splashWin.close()
+  splashWin = null
+}
+
+function splashFallbackHtmlDataUrl(splashImagePath: string) {
+  const splashImageUrl = pathToFileURL(splashImagePath).toString()
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Barnaby Splash</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: #0b0b0b;
+      overflow: hidden;
+    }
+    .root {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    img {
+      max-width: 90%;
+      max-height: 90%;
+      object-fit: contain;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="root">
+    <img src="${splashImageUrl}" alt="Barnaby splash" />
+  </div>
+</body>
+</html>`
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+}
+
+function createSplashWindow() {
+  const publicRoot = process.env.VITE_PUBLIC
+  if (!publicRoot) {
+    appendRuntimeLog('splash-skipped', { reason: 'vite-public-missing' }, 'warn')
+    return null
+  }
+  const splashImagePath = path.join(publicRoot, 'splash.png')
+  const splashHtmlPath = path.join(publicRoot, 'splash.html')
+  if (!fs.existsSync(splashImagePath)) {
+    appendRuntimeLog('splash-skipped', { reason: 'splash-image-missing', splashImagePath }, 'warn')
+    return null
+  }
+  const hasSplashHtml = fs.existsSync(splashHtmlPath)
+
+  const splash = new BrowserWindow({
+    width: 560,
+    height: 360,
+    center: true,
+    show: true,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    backgroundColor: '#0b0b0b',
+    autoHideMenuBar: true,
+  })
+  splash.setMenuBarVisibility(false)
+  if (hasSplashHtml) {
+    void splash.loadFile(splashHtmlPath).catch((err) => {
+      appendRuntimeLog('splash-loadfile-failed', { splashHtmlPath, error: errorMessage(err) }, 'warn')
+      void splash.loadURL(splashFallbackHtmlDataUrl(splashImagePath)).catch(() => {})
+    })
+  } else {
+    appendRuntimeLog('splash-html-missing-fallback', { splashHtmlPath }, 'warn')
+    void splash.loadURL(splashFallbackHtmlDataUrl(splashImagePath)).catch((err) => {
+      appendRuntimeLog('splash-fallback-loadurl-failed', { splashImagePath, error: errorMessage(err) }, 'warn')
+    })
+  }
+  splash.on('closed', () => {
+    if (splashWin === splash) splashWin = null
+  })
+  return splash
+}
+
+function revealMainWindow() {
+  if (!win || mainWindowRevealed) return
+  mainWindowRevealed = true
+  clearStartupRevealTimer()
+  closeSplashWindow()
+  win.maximize()
+  win.show()
+}
+
+function maybeRevealMainWindow() {
+  if (!win) return
+  if (mainWindowRevealed) return
+  if (!mainWindowReadyToShow) return
+  if (waitForRendererStartup && !rendererStartupReady) return
+  revealMainWindow()
+}
+
+function copyDirectoryRecursive(sourceDir: string, destinationDir: string, skipNames = new Set<string>()) {
+  fs.mkdirSync(destinationDir, { recursive: true })
+  const entries = fs.readdirSync(sourceDir, { withFileTypes: true })
+  for (const entry of entries) {
+    if (skipNames.has(entry.name)) continue
+    const sourcePath = path.join(sourceDir, entry.name)
+    const destinationPath = path.join(destinationDir, entry.name)
+    if (entry.isDirectory()) {
+      copyDirectoryRecursive(sourcePath, destinationPath, skipNames)
+      continue
+    }
+    if (entry.isFile()) {
+      fs.copyFileSync(sourcePath, destinationPath)
+    }
+  }
+}
+
+function levelDbHasNonEmptyChatHistory(levelDbDir: string) {
+  if (!isDirectory(levelDbDir)) return false
+  const files = fs
+    .readdirSync(levelDbDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && (entry.name.endsWith('.ldb') || entry.name.endsWith('.log')))
+    .map((entry) => path.join(levelDbDir, entry.name))
+
+  for (const filePath of files) {
+    let content = ''
+    try {
+      content = fs.readFileSync(filePath, 'latin1')
+    } catch {
+      continue
+    }
+    let idx = content.indexOf(CHAT_HISTORY_STORAGE_KEY)
+    while (idx >= 0) {
+      const snippet = content.slice(idx, idx + 240)
+      if (snippet.includes('[{') || snippet.includes('[\x00{\x00')) return true
+      idx = content.indexOf(CHAT_HISTORY_STORAGE_KEY, idx + CHAT_HISTORY_STORAGE_KEY.length)
+    }
+  }
+  return false
+}
+
+function writeLegacyMigrationMarker(userDataDir: string, status: 'migrated' | 'skipped') {
+  try {
+    const markerPath = path.join(userDataDir, LEGACY_STORAGE_MIGRATION_MARKER)
+    fs.writeFileSync(
+      markerPath,
+      JSON.stringify({ version: 1, status, at: new Date().toISOString() }, null, 2),
+      'utf8',
+    )
+  } catch {
+    // best effort only
+  }
+}
+
+function migrateLegacyLocalStorageIfNeeded() {
+  const userDataDir = app.getPath('userData')
+  const markerPath = path.join(userDataDir, LEGACY_STORAGE_MIGRATION_MARKER)
+  if (fs.existsSync(markerPath)) return
+
+  const legacyLevelDbDir = path.join(app.getPath('appData'), LEGACY_APPDATA_DIRNAME, 'Local Storage', 'leveldb')
+  const currentLevelDbDir = path.join(userDataDir, 'Local Storage', 'leveldb')
+
+  if (!isDirectory(legacyLevelDbDir)) {
+    writeLegacyMigrationMarker(userDataDir, 'skipped')
+    return
+  }
+  if (!levelDbHasNonEmptyChatHistory(legacyLevelDbDir)) {
+    writeLegacyMigrationMarker(userDataDir, 'skipped')
+    return
+  }
+  if (levelDbHasNonEmptyChatHistory(currentLevelDbDir)) {
+    writeLegacyMigrationMarker(userDataDir, 'skipped')
+    return
+  }
+
+  try {
+    if (isDirectory(currentLevelDbDir)) {
+      const backupDir = path.join(userDataDir, 'Local Storage', `leveldb-pre-legacy-import-${Date.now()}`)
+      copyDirectoryRecursive(currentLevelDbDir, backupDir, new Set(['LOCK']))
+      fs.rmSync(currentLevelDbDir, { recursive: true, force: true })
+    }
+    copyDirectoryRecursive(legacyLevelDbDir, currentLevelDbDir, new Set(['LOCK']))
+    writeLegacyMigrationMarker(userDataDir, 'migrated')
+    console.info('[Barnaby] Imported legacy chat history from Agent Orchestrator.')
+  } catch (err) {
+    console.warn('[Barnaby] Legacy chat history migration failed:', errorMessage(err))
+  }
 }
 
 function resolveWorkspacePath(workspaceRoot: string, relativePath: string) {
@@ -134,6 +432,242 @@ function toWorkspaceRelativePath(workspaceRoot: string, absolutePath: string) {
     throw new Error('Path is outside the workspace root.')
   }
   return normalizeRelativePath(check)
+}
+
+function getChatHistoryFilePath() {
+  return path.join(app.getPath('userData'), APP_STORAGE_DIRNAME, CHAT_HISTORY_FILENAME)
+}
+
+function getAppStorageDirPath() {
+  return path.join(app.getPath('userData'), APP_STORAGE_DIRNAME)
+}
+
+function getAppStateFilePath() {
+  return path.join(getAppStorageDirPath(), APP_STATE_FILENAME)
+}
+
+function getRuntimeLogFilePath() {
+  return path.join(getAppStorageDirPath(), RUNTIME_LOG_FILENAME)
+}
+
+function appendRuntimeLog(event: string, detail?: unknown, level: 'info' | 'warn' | 'error' = 'info') {
+  try {
+    const logPath = getRuntimeLogFilePath()
+    fs.mkdirSync(path.dirname(logPath), { recursive: true })
+    const entry = {
+      at: new Date().toISOString(),
+      level,
+      pid: process.pid,
+      event,
+      detail: detail ?? null,
+    }
+    fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, 'utf8')
+  } catch {
+    // best-effort only
+  }
+}
+
+function readPersistedAppState() {
+  const statePath = getAppStateFilePath()
+  if (!fs.existsSync(statePath)) return null
+  try {
+    const raw = fs.readFileSync(statePath, 'utf8')
+    if (!raw.trim()) return null
+    const parsed = JSON.parse(raw) as { state?: unknown } | unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'state' in parsed) {
+      return (parsed as { state?: unknown }).state ?? null
+    }
+    return parsed
+  } catch (err) {
+    appendRuntimeLog('read-app-state-failed', errorMessage(err), 'warn')
+    return null
+  }
+}
+
+function writePersistedAppState(state: unknown) {
+  const statePath = getAppStateFilePath()
+  const payload = {
+    version: 1,
+    savedAt: Date.now(),
+    state: state ?? null,
+  }
+  fs.mkdirSync(path.dirname(statePath), { recursive: true })
+  fs.writeFileSync(statePath, JSON.stringify(payload, null, 2), 'utf8')
+  return {
+    ok: true,
+    path: statePath,
+    savedAt: payload.savedAt,
+  }
+}
+
+function getDiagnosticsInfo() {
+  return {
+    userDataPath: app.getPath('userData'),
+    storageDir: getAppStorageDirPath(),
+    chatHistoryPath: getChatHistoryFilePath(),
+    appStatePath: getAppStateFilePath(),
+    runtimeLogPath: getRuntimeLogFilePath(),
+  }
+}
+
+function openRuntimeLogFile() {
+  const runtimeLogPath = getRuntimeLogFilePath()
+  try {
+    fs.mkdirSync(path.dirname(runtimeLogPath), { recursive: true })
+    if (!fs.existsSync(runtimeLogPath)) {
+      fs.writeFileSync(runtimeLogPath, '', 'utf8')
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      path: runtimeLogPath,
+      error: errorMessage(err),
+    }
+  }
+  return shell.openPath(runtimeLogPath).then((result) => ({
+    ok: !result,
+    path: runtimeLogPath,
+    error: result || undefined,
+  }))
+}
+
+function registerRuntimeDiagnosticsLogging() {
+  process.on('uncaughtException', (err) => {
+    appendRuntimeLog('uncaughtException', { message: err?.message, stack: err?.stack }, 'error')
+  })
+
+  process.on('unhandledRejection', (reason) => {
+    appendRuntimeLog('unhandledRejection', reason, 'error')
+  })
+
+  app.on('render-process-gone', (_event, webContents, details) => {
+    appendRuntimeLog(
+      'render-process-gone',
+      {
+        url: webContents.getURL(),
+        reason: details.reason,
+        exitCode: details.exitCode,
+      },
+      'error',
+    )
+  })
+
+  app.on('child-process-gone', (_event, details) => {
+    appendRuntimeLog(
+      'child-process-gone',
+      {
+        type: details.type,
+        reason: details.reason,
+        name: details.name,
+        serviceName: details.serviceName,
+        exitCode: details.exitCode,
+      },
+      details.reason === 'clean-exit' ? 'info' : 'warn',
+    )
+  })
+}
+
+function sanitizePersistedChatHistory(raw: unknown): PersistedChatHistoryEntry[] {
+  if (!Array.isArray(raw)) return []
+  const fallbackWorkspace = process.env.APP_ROOT || process.cwd()
+  const next: PersistedChatHistoryEntry[] = []
+
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Partial<PersistedChatHistoryEntry>
+    if (!Array.isArray(record.messages) || record.messages.length === 0) continue
+
+    const messages: PersistedChatMessage[] = []
+    for (const message of record.messages) {
+      if (!message || typeof message !== 'object') continue
+      const msgRecord = message as Partial<PersistedChatMessage>
+      const role =
+        msgRecord.role === 'user' || msgRecord.role === 'assistant' || msgRecord.role === 'system'
+          ? msgRecord.role
+          : 'system'
+      const format = msgRecord.format === 'text' || msgRecord.format === 'markdown' ? msgRecord.format : undefined
+      const attachments = Array.isArray(msgRecord.attachments)
+        ? msgRecord.attachments
+            .filter((x): x is PersistedChatAttachment => Boolean(x && typeof x === 'object'))
+            .map((x) => ({
+              id: typeof x.id === 'string' && x.id.trim() ? x.id.trim() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+              path: typeof x.path === 'string' ? x.path : '',
+              label: typeof x.label === 'string' && x.label.trim() ? x.label.trim() : 'attachment',
+              mimeType: typeof x.mimeType === 'string' && x.mimeType.trim() ? x.mimeType.trim() : undefined,
+            }))
+            .filter((x) => Boolean(x.path))
+        : undefined
+
+      messages.push({
+        id:
+          typeof msgRecord.id === 'string' && msgRecord.id.trim()
+            ? msgRecord.id.trim()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        role,
+        content: typeof msgRecord.content === 'string' ? msgRecord.content : '',
+        format,
+        attachments: attachments && attachments.length > 0 ? attachments : undefined,
+      })
+    }
+
+    if (messages.length === 0) continue
+
+    next.push({
+      id: typeof record.id === 'string' && record.id.trim() ? record.id.trim() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      title: typeof record.title === 'string' && record.title.trim() ? record.title.trim() : 'Untitled chat',
+      savedAt: typeof record.savedAt === 'number' && Number.isFinite(record.savedAt) ? record.savedAt : Date.now(),
+      workspaceRoot:
+        typeof record.workspaceRoot === 'string' && record.workspaceRoot.trim()
+          ? record.workspaceRoot.trim()
+          : fallbackWorkspace,
+      model: typeof record.model === 'string' && record.model.trim() ? record.model.trim() : 'gpt-5',
+      permissionMode: record.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first',
+      sandbox:
+        record.sandbox === 'read-only' || record.sandbox === 'workspace-write' || record.sandbox === 'danger-full-access'
+          ? record.sandbox
+          : 'workspace-write',
+      fontScale: typeof record.fontScale === 'number' && Number.isFinite(record.fontScale) ? record.fontScale : 1,
+      messages,
+    })
+  }
+
+  return next
+    .sort((a, b) => b.savedAt - a.savedAt)
+    .slice(0, MAX_PERSISTED_CHAT_HISTORY_ENTRIES)
+}
+
+function readPersistedChatHistory() {
+  const historyPath = getChatHistoryFilePath()
+  if (!fs.existsSync(historyPath)) return []
+  try {
+    const raw = fs.readFileSync(historyPath, 'utf8')
+    if (!raw.trim()) return []
+    const parsed = JSON.parse(raw) as { entries?: unknown } | unknown[]
+    const candidate =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'entries' in parsed ? parsed.entries : parsed
+    return sanitizePersistedChatHistory(candidate)
+  } catch (err) {
+    console.warn('[Barnaby] Failed to read persisted chat history:', errorMessage(err))
+    return []
+  }
+}
+
+function writePersistedChatHistory(entries: unknown) {
+  const historyPath = getChatHistoryFilePath()
+  const historyDir = path.dirname(historyPath)
+  const sanitized = sanitizePersistedChatHistory(entries)
+  const payload = {
+    version: 1,
+    savedAt: Date.now(),
+    entries: sanitized,
+  }
+  fs.mkdirSync(historyDir, { recursive: true })
+  fs.writeFileSync(historyPath, JSON.stringify(payload, null, 2), 'utf8')
+  return {
+    ok: true,
+    count: sanitized.length,
+    path: historyPath,
+  }
 }
 
 function readWorkspaceTree(
@@ -359,6 +893,271 @@ function errorMessage(value: unknown) {
   return 'Unknown error.'
 }
 
+function resolveWorkspaceRootPath(workspaceRoot: string) {
+  const root = path.resolve(workspaceRoot)
+  if (!fs.existsSync(root)) throw new Error('Workspace path does not exist.')
+  if (!fs.statSync(root).isDirectory()) throw new Error('Workspace path is not a directory.')
+  return root
+}
+
+function getWorkspaceLockFilePath(workspaceRoot: string) {
+  return path.join(workspaceRoot, WORKSPACE_LOCK_DIRNAME, WORKSPACE_LOCK_FILENAME)
+}
+
+function readWorkspaceLockToken(lockFilePath: string): WorkspaceLockToken | null {
+  try {
+    const raw = fs.readFileSync(lockFilePath, 'utf8')
+    const parsed = JSON.parse(raw) as Partial<WorkspaceLockToken>
+    if (!parsed || typeof parsed !== 'object') return null
+    if (parsed.app !== 'Barnaby') return null
+    if (parsed.version !== 1) return null
+    if (typeof parsed.instanceId !== 'string' || !parsed.instanceId.trim()) return null
+    if (typeof parsed.pid !== 'number' || !Number.isFinite(parsed.pid) || parsed.pid <= 0) return null
+    if (typeof parsed.hostname !== 'string') return null
+    if (typeof parsed.workspaceRoot !== 'string' || !parsed.workspaceRoot.trim()) return null
+    if (typeof parsed.acquiredAt !== 'number' || !Number.isFinite(parsed.acquiredAt)) return null
+    if (typeof parsed.heartbeatAt !== 'number' || !Number.isFinite(parsed.heartbeatAt)) return null
+    return {
+      version: 1,
+      app: 'Barnaby',
+      instanceId: parsed.instanceId,
+      pid: parsed.pid,
+      hostname: parsed.hostname,
+      workspaceRoot: parsed.workspaceRoot,
+      acquiredAt: parsed.acquiredAt,
+      heartbeatAt: parsed.heartbeatAt,
+    }
+  } catch {
+    return null
+  }
+}
+
+function isPidLikelyAlive(pid: number) {
+  if (!Number.isFinite(pid) || pid <= 0) return false
+  if (pid === process.pid) return true
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ESRCH') return false
+    return true
+  }
+}
+
+function isWorkspaceLockOwnedByThisProcess(token: WorkspaceLockToken) {
+  return token.instanceId === workspaceLockInstanceId && token.pid === process.pid
+}
+
+function isWorkspaceLockStale(token: WorkspaceLockToken) {
+  if (isWorkspaceLockOwnedByThisProcess(token)) return false
+  if (!Number.isFinite(token.heartbeatAt)) return true
+  if (Date.now() - token.heartbeatAt > WORKSPACE_LOCK_STALE_MS) return true
+  return !isPidLikelyAlive(token.pid)
+}
+
+function makeWorkspaceLockToken(workspaceRoot: string, acquiredAt?: number, heartbeatAt?: number): WorkspaceLockToken {
+  const now = Date.now()
+  return {
+    version: 1,
+    app: 'Barnaby',
+    instanceId: workspaceLockInstanceId,
+    pid: process.pid,
+    hostname: os.hostname(),
+    workspaceRoot,
+    acquiredAt: acquiredAt ?? now,
+    heartbeatAt: heartbeatAt ?? now,
+  }
+}
+
+function writeWorkspaceLockToken(lockFilePath: string, token: WorkspaceLockToken, mode: 'exclusive' | 'overwrite') {
+  fs.mkdirSync(path.dirname(lockFilePath), { recursive: true })
+  fs.writeFileSync(lockFilePath, `${JSON.stringify(token, null, 2)}\n`, {
+    encoding: 'utf8',
+    flag: mode === 'exclusive' ? 'wx' : 'w',
+  })
+}
+
+function ensureWorkspaceLockHeartbeatTimer() {
+  if (workspaceLockHeartbeatTimer) return
+  workspaceLockHeartbeatTimer = setInterval(() => {
+    const now = Date.now()
+    for (const [workspaceRoot, lockInfo] of ownedWorkspaceLocks) {
+      const currentToken = readWorkspaceLockToken(lockInfo.lockFilePath)
+      if (currentToken && !isWorkspaceLockOwnedByThisProcess(currentToken)) {
+        ownedWorkspaceLocks.delete(workspaceRoot)
+        continue
+      }
+      const nextToken = makeWorkspaceLockToken(workspaceRoot, lockInfo.acquiredAt, now)
+      try {
+        writeWorkspaceLockToken(lockInfo.lockFilePath, nextToken, 'overwrite')
+      } catch {
+        // best-effort only; stale locks are recovered by timeout checks
+      }
+    }
+    if (ownedWorkspaceLocks.size === 0 && workspaceLockHeartbeatTimer) {
+      clearInterval(workspaceLockHeartbeatTimer)
+      workspaceLockHeartbeatTimer = null
+    }
+  }, WORKSPACE_LOCK_HEARTBEAT_INTERVAL_MS)
+
+  if (typeof workspaceLockHeartbeatTimer.unref === 'function') {
+    workspaceLockHeartbeatTimer.unref()
+  }
+}
+
+function acquireWorkspaceLock(workspaceRoot: string): WorkspaceLockAcquireResult {
+  let root = ''
+  try {
+    root = resolveWorkspaceRootPath(workspaceRoot)
+  } catch (err) {
+    const resolvedPath = path.resolve(workspaceRoot || '.')
+    return {
+      ok: false,
+      reason: 'invalid-workspace',
+      message: errorMessage(err),
+      workspaceRoot: resolvedPath,
+      lockFilePath: getWorkspaceLockFilePath(resolvedPath),
+      owner: null,
+    }
+  }
+
+  const lockFilePath = getWorkspaceLockFilePath(root)
+  const existingOwned = ownedWorkspaceLocks.get(root)
+  if (existingOwned) {
+    const refreshedToken = makeWorkspaceLockToken(root, existingOwned.acquiredAt, Date.now())
+    try {
+      writeWorkspaceLockToken(lockFilePath, refreshedToken, 'overwrite')
+    } catch (err) {
+      return {
+        ok: false,
+        reason: 'error',
+        message: errorMessage(err),
+        workspaceRoot: root,
+        lockFilePath,
+      }
+    }
+    return {
+      ok: true,
+      workspaceRoot: root,
+      lockFilePath,
+    }
+  }
+
+  const nextToken = makeWorkspaceLockToken(root)
+  try {
+    writeWorkspaceLockToken(lockFilePath, nextToken, 'exclusive')
+    ownedWorkspaceLocks.set(root, { lockFilePath, acquiredAt: nextToken.acquiredAt })
+    ensureWorkspaceLockHeartbeatTimer()
+    return {
+      ok: true,
+      workspaceRoot: root,
+      lockFilePath,
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+      return {
+        ok: false,
+        reason: 'error',
+        message: errorMessage(err),
+        workspaceRoot: root,
+        lockFilePath,
+      }
+    }
+  }
+
+  const currentOwner = readWorkspaceLockToken(lockFilePath)
+  if (currentOwner && !isWorkspaceLockStale(currentOwner)) {
+    return {
+      ok: false,
+      reason: 'in-use',
+      message: 'Workspace is already open in another Barnaby instance.',
+      workspaceRoot: root,
+      lockFilePath,
+      owner: {
+        pid: currentOwner.pid,
+        hostname: currentOwner.hostname,
+        acquiredAt: currentOwner.acquiredAt,
+        heartbeatAt: currentOwner.heartbeatAt,
+      },
+    }
+  }
+
+  try {
+    writeWorkspaceLockToken(lockFilePath, nextToken, 'overwrite')
+    const confirmed = readWorkspaceLockToken(lockFilePath)
+    if (!confirmed || !isWorkspaceLockOwnedByThisProcess(confirmed)) {
+      return {
+        ok: false,
+        reason: 'in-use',
+        message: 'Workspace lock was claimed by another Barnaby instance.',
+        workspaceRoot: root,
+        lockFilePath,
+        owner: confirmed
+          ? {
+              pid: confirmed.pid,
+              hostname: confirmed.hostname,
+              acquiredAt: confirmed.acquiredAt,
+              heartbeatAt: confirmed.heartbeatAt,
+            }
+          : null,
+      }
+    }
+    ownedWorkspaceLocks.set(root, { lockFilePath, acquiredAt: confirmed.acquiredAt })
+    ensureWorkspaceLockHeartbeatTimer()
+    return {
+      ok: true,
+      workspaceRoot: root,
+      lockFilePath,
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'error',
+      message: errorMessage(err),
+      workspaceRoot: root,
+      lockFilePath,
+      owner: currentOwner
+        ? {
+            pid: currentOwner.pid,
+            hostname: currentOwner.hostname,
+            acquiredAt: currentOwner.acquiredAt,
+            heartbeatAt: currentOwner.heartbeatAt,
+          }
+        : null,
+    }
+  }
+}
+
+function releaseWorkspaceLock(workspaceRoot: string) {
+  const root = path.resolve(workspaceRoot)
+  const lockFilePath = ownedWorkspaceLocks.get(root)?.lockFilePath ?? getWorkspaceLockFilePath(root)
+  let released = false
+  const token = readWorkspaceLockToken(lockFilePath)
+  if (token && isWorkspaceLockOwnedByThisProcess(token)) {
+    try {
+      fs.rmSync(lockFilePath, { force: true })
+      released = true
+    } catch {
+      // best-effort only
+    }
+  }
+
+  ownedWorkspaceLocks.delete(root)
+  if (ownedWorkspaceLocks.size === 0 && workspaceLockHeartbeatTimer) {
+    clearInterval(workspaceLockHeartbeatTimer)
+    workspaceLockHeartbeatTimer = null
+  }
+  return released
+}
+
+function releaseAllWorkspaceLocks() {
+  const roots = [...ownedWorkspaceLocks.keys()]
+  for (const root of roots) {
+    releaseWorkspaceLock(root)
+  }
+}
+
 async function getProviderAuthStatus(provider: ProviderName): Promise<ProviderAuthStatus> {
   async function isCliInstalled(command: 'codex' | 'gemini'): Promise<boolean> {
     try {
@@ -539,6 +1338,24 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
 }
 
 async function createWindow() {
+  clearStartupRevealTimer()
+  closeSplashWindow()
+  mainWindowReadyToShow = false
+  rendererStartupReady = false
+  waitForRendererStartup = false
+  mainWindowRevealed = false
+
+  splashWin = createSplashWindow()
+  waitForRendererStartup = Boolean(splashWin)
+  if (!waitForRendererStartup) {
+    rendererStartupReady = true
+  } else {
+    startupRevealTimer = setTimeout(() => {
+      rendererStartupReady = true
+      maybeRevealMainWindow()
+    }, STARTUP_SPLASH_TIMEOUT_MS)
+  }
+
   const { width: workAreaWidth, height: workAreaHeight } = screen.getPrimaryDisplay().workAreaSize
   const startupWidth = Math.floor(workAreaWidth / 5)
   const startupHeight = Math.floor(workAreaHeight * 0.9)
@@ -569,8 +1386,8 @@ async function createWindow() {
   }
 
   win.once('ready-to-show', () => {
-    win?.maximize()
-    win?.show()
+    mainWindowReadyToShow = true
+    maybeRevealMainWindow()
   })
 
   // Make all links open with the browser, not with the application
@@ -582,10 +1399,23 @@ async function createWindow() {
   setAppMenu()
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(async () => {
+  if (isBareElectronHostLaunch()) {
+    appendRuntimeLog('bare-electron-host-launch-blocked', { argv: process.argv }, 'warn')
+    app.quit()
+    return
+  }
+  registerRuntimeDiagnosticsLogging()
+  appendRuntimeLog('app-start', { version: app.getVersion(), platform: process.platform, electron: process.versions.electron })
+  migrateLegacyLocalStorageIfNeeded()
+  await createWindow()
+})
 
 app.on('window-all-closed', () => {
   win = null
+  closeSplashWindow()
+  clearStartupRevealTimer()
+  releaseAllWorkspaceLocks()
   for (const client of agentClients.values()) {
     (client as { close: () => Promise<void> }).close().catch(() => {})
   }
@@ -594,6 +1424,9 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  closeSplashWindow()
+  clearStartupRevealTimer()
+  releaseAllWorkspaceLocks()
   for (const client of agentClients.values()) {
     (client as { close: () => Promise<void> }).close().catch(() => {})
   }
@@ -679,6 +1512,67 @@ ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: st
   return {}
 })
 
+ipcMain.handle('agentorchestrator:loadChatHistory', async () => {
+  const loaded = readPersistedChatHistory()
+  return loaded
+})
+
+ipcMain.handle('agentorchestrator:saveChatHistory', async (_evt, entries: unknown) => {
+  return writePersistedChatHistory(entries)
+})
+
+ipcMain.handle('agentorchestrator:loadAppState', async () => {
+  return readPersistedAppState()
+})
+
+ipcMain.handle('agentorchestrator:saveAppState', async (_evt, state: unknown) => {
+  return writePersistedAppState(state)
+})
+
+ipcMain.handle('agentorchestrator:setWindowTheme', async (_evt, requestedTheme: unknown) => {
+  const themeSource =
+    requestedTheme === 'light' || requestedTheme === 'dark' || requestedTheme === 'system'
+      ? requestedTheme
+      : 'system'
+  nativeTheme.themeSource = themeSource
+  return { ok: true, themeSource, shouldUseDarkColors: nativeTheme.shouldUseDarkColors }
+})
+
+ipcMain.handle('agentorchestrator:rendererReady', async () => {
+  rendererStartupReady = true
+  maybeRevealMainWindow()
+  return { ok: true }
+})
+
+ipcMain.handle('agentorchestrator:getDiagnosticsInfo', async () => {
+  return getDiagnosticsInfo()
+})
+
+ipcMain.handle('agentorchestrator:openRuntimeLog', async () => {
+  return openRuntimeLogFile()
+})
+
+ipcMain.handle('agentorchestrator:openExternalUrl', async (_evt, rawUrl: string) => {
+  const url = typeof rawUrl === 'string' ? rawUrl.trim() : ''
+  if (!url) return { ok: false, error: 'URL is required.' }
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return { ok: false, error: 'Invalid URL.' }
+  }
+  const protocol = parsed.protocol.toLowerCase()
+  if (protocol !== 'http:' && protocol !== 'https:' && protocol !== 'mailto:') {
+    return { ok: false, error: `Unsupported URL protocol: ${protocol}` }
+  }
+  try {
+    await shell.openExternal(parsed.toString())
+    return { ok: true as const }
+  } catch (err) {
+    return { ok: false as const, error: errorMessage(err) }
+  }
+})
+
 ipcMain.handle('agentorchestrator:interrupt', async (_evt, agentWindowId: string) => {
   const client = agentClients.get(agentWindowId)
   if (!client) return {}
@@ -709,6 +1603,15 @@ ipcMain.handle('agentorchestrator:writeWorkspaceConfig', async (_evt, folderPath
   const config = { version: 1, agentorchestrator: true }
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
   return true
+})
+
+ipcMain.handle('agentorchestrator:claimWorkspace', async (_evt, workspaceRoot: string) => {
+  return acquireWorkspaceLock(workspaceRoot)
+})
+
+ipcMain.handle('agentorchestrator:releaseWorkspace', async (_evt, workspaceRoot: string) => {
+  if (!workspaceRoot?.trim()) return false
+  return releaseWorkspaceLock(workspaceRoot)
 })
 
 ipcMain.handle('agentorchestrator:savePastedImage', async (_evt, dataUrl: string, mimeType?: string) => {
@@ -839,6 +1742,8 @@ function setAppMenu() {
     {
       label: 'Edit',
       submenu: [
+        { label: 'Application settings...', accelerator: 'CmdOrCtrl+,', click: () => sendMenuAction('openAppSettings') },
+        { type: 'separator' },
         { label: 'Model setup...', click: () => sendMenuAction('openModelSetup') },
       ],
     },

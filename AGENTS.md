@@ -32,3 +32,10 @@ For "build and run":
 
 1. Run `npm run build`
 2. Launch app (typically `npx electron .` unless user explicitly requests running the portable exe directly)
+
+## Plan Mode Workflow
+
+- If the user sets `Mode: Plan`, do not make code or file changes in that turn unless they explicitly switch modes or approve implementation.
+- In plan mode, provide implementation options, trade-offs, and concrete steps first.
+- If asked "are you finished?" during plan mode, report that implementation is not finished yet and state what planning deliverables remain.
+- After plan approval, move to implementation and execute the agreed steps.

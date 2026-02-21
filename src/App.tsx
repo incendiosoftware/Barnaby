@@ -10,14 +10,18 @@ type PastedImageAttachment = { id: string; path: string; label: string; mimeType
 type ChatMessage = { id: string; role: ChatRole; content: string; format?: MessageFormat; attachments?: PastedImageAttachment[] }
 type PermissionMode = 'verify-first' | 'proceed-always'
 type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+type AgentInteractionMode = 'agent' | 'plan' | 'debug' | 'ask'
 
 type LayoutMode = 'vertical' | 'horizontal' | 'grid'
+type WorkspaceDockSide = 'left' | 'right'
 
 type AgentPanelState = {
   id: string
+  historyId: string
   title: string
   cwd: string
   model: string
+  interactionMode: AgentInteractionMode
   permissionMode: PermissionMode
   sandbox: SandboxMode
   status: string
@@ -117,6 +121,101 @@ type ChatHistoryEntry = {
   messages: ChatMessage[]
 }
 
+type ApplicationSettings = {
+  restoreSessionOnStartup: boolean
+  themePresetId: string
+  responseStyle: 'concise' | 'standard' | 'detailed'
+}
+
+type ThemePreset = {
+  id: string
+  name: string
+  accent500: string
+  accent600: string
+  accent700: string
+  accentText: string
+  accentSoft: string
+  accentSoftDark: string
+  dark950: string
+  dark900: string
+}
+
+type PersistedEditorPanelState = {
+  id?: unknown
+  workspaceRoot?: unknown
+  relativePath?: unknown
+  title?: unknown
+  fontScale?: unknown
+  content?: unknown
+  size?: unknown
+  dirty?: unknown
+  binary?: unknown
+  error?: unknown
+  savedAt?: unknown
+}
+
+type PersistedAgentPanelState = {
+  id?: unknown
+  historyId?: unknown
+  title?: unknown
+  cwd?: unknown
+  model?: unknown
+  interactionMode?: unknown
+  permissionMode?: unknown
+  sandbox?: unknown
+  status?: unknown
+  messages?: unknown
+  attachments?: unknown
+  input?: unknown
+  pendingInputs?: unknown
+  fontScale?: unknown
+}
+
+type PersistedAppState = {
+  workspaceRoot?: unknown
+  workspaceList?: unknown
+  workspaceSnapshotsByRoot?: unknown
+  layoutMode?: unknown
+  showWorkspaceWindow?: unknown
+  dockTab?: unknown
+  workspaceDockSide?: unknown
+  activePanelId?: unknown
+  focusedEditorId?: unknown
+  selectedWorkspaceFile?: unknown
+  expandedDirectories?: unknown
+  panels?: unknown
+  editorPanels?: unknown
+}
+
+type ParsedAppState = {
+  workspaceRoot: string | null
+  workspaceList: string[] | null
+  workspaceSnapshotsByRoot: Record<string, WorkspaceUiSnapshot>
+  panels: AgentPanelState[]
+  editorPanels: EditorPanelState[]
+  dockTab: 'orchestrator' | 'explorer' | 'git' | 'settings' | null
+  layoutMode: LayoutMode | null
+  workspaceDockSide: WorkspaceDockSide | null
+  selectedWorkspaceFile: string | null | undefined
+  activePanelId: string | null
+  focusedEditorId: string | null | undefined
+  showWorkspaceWindow: boolean | undefined
+  expandedDirectories: Record<string, boolean> | undefined
+}
+
+type WorkspaceUiSnapshot = {
+  layoutMode: LayoutMode
+  showWorkspaceWindow: boolean
+  dockTab: 'orchestrator' | 'explorer' | 'git' | 'settings'
+  workspaceDockSide: WorkspaceDockSide
+  panels: AgentPanelState[]
+  editorPanels: EditorPanelState[]
+  activePanelId: string | null
+  focusedEditorId: string | null
+  selectedWorkspaceFile: string | null
+  expandedDirectories: Record<string, boolean>
+}
+
 type PanelActivityState = {
   lastEventAt: number
   lastEventLabel: string
@@ -143,6 +242,8 @@ type ActivityFeedItem = {
 
 const DEFAULT_WORKSPACE_ROOT = 'E:\\Retirement\\FIREMe'
 const DEFAULT_MODEL = 'gpt-5.3-codex'
+const MODEL_BANNER_PREFIX = 'Model: '
+const STARTUP_READY_MESSAGE = 'I am ready'
 
 type ModelProvider = 'codex' | 'gemini'
 
@@ -166,6 +267,28 @@ type ProviderAuthStatus = {
   checkedAt: number
 }
 
+type WorkspaceLockOwner = {
+  pid: number
+  hostname: string
+  acquiredAt: number
+  heartbeatAt: number
+}
+
+type WorkspaceLockAcquireResult =
+  | {
+      ok: true
+      workspaceRoot: string
+      lockFilePath: string
+    }
+  | {
+      ok: false
+      reason: 'invalid-workspace' | 'in-use' | 'error'
+      message: string
+      workspaceRoot: string
+      lockFilePath: string
+      owner?: WorkspaceLockOwner | null
+    }
+
 const DEFAULT_MODEL_INTERFACES: ModelInterface[] = [
   { id: 'gpt-5.3-codex', displayName: 'GPT 5.3 (Codex)', provider: 'codex', enabled: true },
   { id: 'gpt-5.2-codex', displayName: 'GPT 5.2 (Codex)', provider: 'codex', enabled: true },
@@ -185,6 +308,123 @@ const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-cen
 const UI_TOOLBAR_ICON_BUTTON_CLASS = 'h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
 const UI_INPUT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100'
 const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100'
+const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
+const STATUS_SYMBOL_ICON_CLASS = 'h-[13px] w-[13px] text-neutral-600 dark:text-neutral-300'
+
+function renderSandboxSymbol(mode: SandboxMode) {
+  if (mode === 'read-only') {
+    return (
+      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
+        <rect x="4.1" y="7.1" width="7.8" height="6" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
+        <path d="M5.9 7.1V5.5C5.9 4.34 6.84 3.4 8 3.4C9.16 3.4 10.1 4.34 10.1 5.5V7.1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+        <path d="M8 9.3V10.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  if (mode === 'workspace-write') {
+    return (
+      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
+        <path d="M2 4.8H6L7.2 6H14V12.8H2V4.8Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+        <path d="M2 6H14" stroke="currentColor" strokeWidth="1.1" />
+      </svg>
+    )
+  }
+  return (
+    <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path d="M8 2.2L14 13H2L8 2.2Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+      <path d="M8 5.8V9.3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <circle cx="8" cy="11.2" r="0.8" fill="currentColor" />
+    </svg>
+  )
+}
+
+function renderPermissionSymbol(mode: PermissionMode) {
+  if (mode === 'verify-first') {
+    return (
+      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
+        <circle cx="6.8" cy="6.8" r="3.5" stroke="currentColor" strokeWidth="1.1" />
+        <path d="M5.4 6.8L6.5 7.9L8.4 6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M9.6 9.6L13.2 13.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  return (
+    <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
+      <circle cx="8" cy="8" r="5.8" stroke="currentColor" strokeWidth="1.1" />
+      <path d="M5.4 8H10.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <path d="M8.8 6.4L10.6 8L8.8 9.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function renderInteractionModeSymbol(mode: AgentInteractionMode) {
+  if (mode === 'agent') {
+    return (
+      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
+        <rect x="3.1" y="4.5" width="9.8" height="7.5" rx="2" stroke="currentColor" strokeWidth="1.1" />
+        <path d="M8 2.8V4.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+        <circle cx="5.9" cy="8.2" r="0.7" fill="currentColor" />
+        <circle cx="10.1" cy="8.2" r="0.7" fill="currentColor" />
+        <path d="M6.1 10H9.9" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  if (mode === 'plan') {
+    return (
+      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
+        <rect x="2.5" y="3.2" width="8.8" height="10.3" rx="1.3" stroke="currentColor" strokeWidth="1.1" />
+        <path d="M4.5 6H9.4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+        <path d="M4.5 8.4H8.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+        <path d="M9.8 10.8L12.9 7.7L14.3 9.1L11.2 12.2L9.4 12.6L9.8 10.8Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+      </svg>
+    )
+  }
+  if (mode === 'debug') {
+    return (
+      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
+        <ellipse cx="8" cy="8.5" rx="3" ry="3.3" stroke="currentColor" strokeWidth="1.1" />
+        <path d="M8 3.1V5.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+        <path d="M5.1 6.6L3.2 5.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+        <path d="M10.9 6.6L12.8 5.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+        <path d="M5 10.1L3.1 11.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+        <path d="M11 10.1L12.9 11.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  return (
+    <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
+      <circle cx="8" cy="8" r="5.8" stroke="currentColor" strokeWidth="1.1" />
+      <path d="M6.8 6.2C6.8 5.54 7.34 5 8 5C8.66 5 9.2 5.54 9.2 6.2C9.2 6.72 8.88 7.03 8.42 7.4C7.94 7.78 7.6 8.13 7.6 8.8V9" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <circle cx="8" cy="11.2" r="0.8" fill="currentColor" />
+    </svg>
+  )
+}
+
+const INTERACTION_MODE_META: Record<AgentInteractionMode, { label: string; promptPrefix: string; hint: string }> = {
+  agent: {
+    label: 'Agent',
+    promptPrefix: '',
+    hint: 'Default mode: implement directly.',
+  },
+  plan: {
+    label: 'Plan',
+    promptPrefix:
+      'Mode: Plan. Explore and design the implementation first. Focus on options, trade-offs, and concrete steps before making code changes.',
+    hint: 'Plan-first with trade-offs.',
+  },
+  debug: {
+    label: 'Debug',
+    promptPrefix:
+      'Mode: Debug. Investigate systematically. Prioritize root-cause analysis, evidence, and verification steps before proposing fixes.',
+    hint: 'Root-cause and evidence.',
+  },
+  ask: {
+    label: 'Ask',
+    promptPrefix:
+      'Mode: Ask. Answer in read-only guidance mode. Explain clearly and avoid code changes unless explicitly requested.',
+    hint: 'Read-only Q&A guidance.',
+  },
+}
 
 function looksIncomplete(content: string): boolean {
   const t = content.trim().toLowerCase()
@@ -263,13 +503,68 @@ function isLikelyThinkingUpdate(content: string): boolean {
 
   return false
 }
+
+function filterMessagesForPresentation(
+  messages: ChatMessage[],
+  responseStyle: 'concise' | 'standard' | 'detailed',
+): ChatMessage[] {
+  if (responseStyle === 'detailed') return messages
+  if (responseStyle === 'concise') {
+    return messages.filter((m) => !(m.role === 'assistant' && isLikelyThinkingUpdate(m.content)))
+  }
+  const next: ChatMessage[] = []
+  for (let i = 0; i < messages.length; i += 1) {
+    const current = messages[i]
+    const isThinking = current.role === 'assistant' && isLikelyThinkingUpdate(current.content)
+    if (!isThinking) {
+      next.push(current)
+      continue
+    }
+
+    // Group consecutive thinking updates and keep only the latest one
+    // when there is no final assistant response in the same turn.
+    let endOfThinkingRun = i
+    while (
+      endOfThinkingRun + 1 < messages.length &&
+      messages[endOfThinkingRun + 1].role === 'assistant' &&
+      isLikelyThinkingUpdate(messages[endOfThinkingRun + 1].content)
+    ) {
+      endOfThinkingRun += 1
+    }
+
+    let turnBoundary = endOfThinkingRun + 1
+    while (turnBoundary < messages.length && messages[turnBoundary].role !== 'user') {
+      turnBoundary += 1
+    }
+    const hasFinalAssistantInTurn = messages
+      .slice(endOfThinkingRun + 1, turnBoundary)
+      .some((m) => m.role === 'assistant' && !isLikelyThinkingUpdate(m.content))
+
+    if (!hasFinalAssistantInTurn) {
+      const latestThinking = messages[endOfThinkingRun]
+      const prev = next[next.length - 1]
+      const isDuplicate =
+        prev &&
+        prev.role === 'assistant' &&
+        isLikelyThinkingUpdate(prev.content) &&
+        prev.content.trim() === latestThinking.content.trim()
+      if (!isDuplicate) {
+        next.push(latestThinking)
+      }
+    }
+    i = endOfThinkingRun
+  }
+  return next
+}
 const THEME_STORAGE_KEY = 'agentorchestrator.theme'
 const WORKSPACE_STORAGE_KEY = 'agentorchestrator.workspaceRoot'
 const WORKSPACE_LIST_STORAGE_KEY = 'agentorchestrator.workspaceList'
 const WORKSPACE_SETTINGS_STORAGE_KEY = 'agentorchestrator.workspaceSettings'
+const WORKSPACE_DOCK_SIDE_STORAGE_KEY = 'agentorchestrator.workspaceDockSide'
 const MODEL_CONFIG_STORAGE_KEY = 'agentorchestrator.modelConfig'
 const EXPLORER_PREFS_STORAGE_KEY = 'agentorchestrator.explorerPrefsByWorkspace'
 const CHAT_HISTORY_STORAGE_KEY = 'agentorchestrator.chatHistory'
+const APP_SETTINGS_STORAGE_KEY = 'agentorchestrator.appSettings'
 const MIN_FONT_SCALE = 0.75
 const MAX_FONT_SCALE = 1.5
 const FONT_SCALE_STEP = 0.05
@@ -280,6 +575,33 @@ const TURN_START_TIMEOUT_MS = 15000
 const STALL_WATCHDOG_MS = 30000
 const COLLAPSIBLE_CODE_MIN_LINES = 14
 const MAX_CHAT_HISTORY_ENTRIES = 80
+const DEFAULT_GPT_CONTEXT_TOKENS = 200_000
+const CONTEXT_OUTPUT_RESERVE_RATIO = 0.2
+const CONTEXT_MIN_OUTPUT_RESERVE_TOKENS = 4_096
+const CONTEXT_MAX_OUTPUT_RESERVE_TOKENS = 32_768
+const TOKEN_ESTIMATE_CHARS_PER_TOKEN = 4
+const TOKEN_ESTIMATE_WORDS_MULTIPLIER = 1.35
+const TOKEN_ESTIMATE_MESSAGE_OVERHEAD = 8
+const TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS = 850
+const TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS = 700
+const APP_STATE_AUTOSAVE_MS = 800
+const DEFAULT_THEME_PRESET_ID = 'default'
+const THEME_PRESETS: ThemePreset[] = [
+  { id: 'default', name: 'default', accent500: '#3b82f6', accent600: '#2563eb', accent700: '#1d4ed8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(30,58,138,0.28)', dark950: '#0a0a0a', dark900: '#171717' },
+  { id: 'obsidian-black', name: 'Obsidian Black', accent500: '#7c3aed', accent600: '#6d28d9', accent700: '#5b21b6', accentText: '#ddd6fe', accentSoft: '#ede9fe', accentSoftDark: 'rgba(124,58,237,0.24)', dark950: '#000000', dark900: '#0a0a0a' },
+  { id: 'dracula', name: 'Dracula', accent500: '#bd93f9', accent600: '#a87ef5', accent700: '#8f62ea', accentText: '#f3e8ff', accentSoft: '#f5f3ff', accentSoftDark: 'rgba(189,147,249,0.25)', dark950: '#191a21', dark900: '#232533' },
+  { id: 'nord', name: 'Nord', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#2e3440', dark900: '#3b4252' },
+  { id: 'solarized-dark', name: 'Solarized Dark', accent500: '#2aa198', accent600: '#268e87', accent700: '#1f7a74', accentText: '#d1fae5', accentSoft: '#dcfce7', accentSoftDark: 'rgba(42,161,152,0.26)', dark950: '#002b36', dark900: '#073642' },
+  { id: 'gruvbox-dark', name: 'Gruvbox Dark', accent500: '#d79921', accent600: '#b57614', accent700: '#9a5f10', accentText: '#fef3c7', accentSoft: '#fffbeb', accentSoftDark: 'rgba(215,153,33,0.26)', dark950: '#1d2021', dark900: '#282828' },
+  { id: 'tokyo-night', name: 'Tokyo Night', accent500: '#7aa2f7', accent600: '#5f88e8', accent700: '#4c74d0', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(122,162,247,0.26)', dark950: '#1a1b26', dark900: '#24283b' },
+  { id: 'catppuccin-mocha', name: 'Catppuccin Mocha', accent500: '#cba6f7', accent600: '#b68cf0', accent700: '#9f73e3', accentText: '#f5e8ff', accentSoft: '#faf5ff', accentSoftDark: 'rgba(203,166,247,0.26)', dark950: '#1e1e2e', dark900: '#313244' },
+  { id: 'github-dark', name: 'GitHub Dark', accent500: '#58a6ff', accent600: '#3b82d6', accent700: '#2f6fb8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(88,166,255,0.26)', dark950: '#0d1117', dark900: '#161b22' },
+  { id: 'monokai', name: 'Monokai', accent500: '#a6e22e', accent600: '#84cc16', accent700: '#65a30d', accentText: '#ecfccb', accentSoft: '#f7fee7', accentSoftDark: 'rgba(166,226,46,0.22)', dark950: '#1f1f1f', dark900: '#272822' },
+  { id: 'one-dark', name: 'One Dark', accent500: '#61afef', accent600: '#3d8fd9', accent700: '#2f75ba', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(97,175,239,0.26)', dark950: '#1e2127', dark900: '#282c34' },
+  { id: 'ayu-mirage', name: 'Ayu Mirage', accent500: '#ffb454', accent600: '#f59e0b', accent700: '#d97706', accentText: '#ffedd5', accentSoft: '#fff7ed', accentSoftDark: 'rgba(255,180,84,0.24)', dark950: '#1f2430', dark900: '#242936' },
+  { id: 'material-ocean', name: 'Material Ocean', accent500: '#82aaff', accent600: '#5d8bef', accent700: '#4a74d1', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(130,170,255,0.26)', dark950: '#0f111a', dark900: '#1a1c25' },
+  { id: 'synthwave-84', name: 'Synthwave 84', accent500: '#ff7edb', accent600: '#ec4899', accent700: '#be185d', accentText: '#fce7f3', accentSoft: '#fdf2f8', accentSoftDark: 'rgba(255,126,219,0.26)', dark950: '#241b2f', dark900: '#2b213a' },
+]
 
 function getNextFontScale(current: number, deltaY: number) {
   const direction = deltaY < 0 ? 1 : -1
@@ -309,14 +631,97 @@ function toLocalFileUrl(filePath: string) {
   return encodeURI(normalized)
 }
 
+function normalizeWorkspacePathForCompare(value: string) {
+  return value.trim().replace(/\//g, '\\').toLowerCase()
+}
+
+function decodeUriComponentSafe(value: string) {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function stripLinkQueryAndHash(value: string) {
+  const q = value.indexOf('?')
+  const h = value.indexOf('#')
+  const end = Math.min(q >= 0 ? q : Number.POSITIVE_INFINITY, h >= 0 ? h : Number.POSITIVE_INFINITY)
+  return Number.isFinite(end) ? value.slice(0, end) : value
+}
+
+function stripFileLineAndColumnSuffix(pathLike: string) {
+  const m = pathLike.match(/^(.*?)(?::\d+)(?::\d+)?$/)
+  return m?.[1] ? m[1] : pathLike
+}
+
+function normalizeWorkspaceRelativePath(pathLike: string): string | null {
+  const normalized = pathLike
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/^\.\/+/, '')
+    .trim()
+  if (!normalized || normalized.startsWith('/')) return null
+  const segments = normalized.split('/').filter(Boolean)
+  if (segments.length === 0) return null
+  if (segments.some((segment) => segment === '.' || segment === '..')) return null
+  return segments.join('/')
+}
+
+function toWorkspaceRelativePathIfInsideRoot(workspaceRoot: string, absolutePath: string): string | null {
+  const root = workspaceRoot.replace(/\\/g, '/').replace(/\/+$/, '')
+  if (!root) return null
+  let target = absolutePath.replace(/\\/g, '/')
+  if (/^\/[a-zA-Z]:\//.test(target)) target = target.slice(1)
+  const rootCompare = root.toLowerCase()
+  const targetCompare = target.toLowerCase()
+  if (targetCompare === rootCompare) return null
+  if (!targetCompare.startsWith(`${rootCompare}/`)) return null
+  return normalizeWorkspaceRelativePath(target.slice(root.length + 1))
+}
+
+function resolveWorkspaceRelativePathFromChatHref(workspaceRoot: string, href: string): string | null {
+  const rawHref = String(href ?? '').trim()
+  if (!workspaceRoot || !rawHref || rawHref.startsWith('#')) return null
+
+  const withoutQueryOrHash = stripLinkQueryAndHash(rawHref)
+  if (!withoutQueryOrHash) return null
+  const decoded = decodeUriComponentSafe(stripFileLineAndColumnSuffix(withoutQueryOrHash)).replace(/\\/g, '/')
+  if (!decoded) return null
+
+  if (/^file:\/\//i.test(decoded)) {
+    try {
+      const parsed = new URL(decoded)
+      let filePath = decodeUriComponentSafe(parsed.pathname || '')
+      if (parsed.host) filePath = `//${parsed.host}${filePath}`
+      return toWorkspaceRelativePathIfInsideRoot(workspaceRoot, filePath)
+    } catch {
+      return null
+    }
+  }
+
+  const isWindowsAbsolute = /^[a-zA-Z]:\//.test(decoded)
+  const hasUriScheme = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(decoded)
+  if (hasUriScheme && !isWindowsAbsolute) return null
+  if (isWindowsAbsolute || decoded.startsWith('/')) {
+    return toWorkspaceRelativePathIfInsideRoot(workspaceRoot, decoded)
+  }
+  return normalizeWorkspaceRelativePath(decoded)
+}
+
 function getInitialTheme(): Theme {
   const stored = (globalThis.localStorage?.getItem(THEME_STORAGE_KEY) ?? '').toLowerCase()
   if (stored === 'light' || stored === 'dark') return stored
-  return globalThis.matchMedia?.('(prefers-color-scheme: dark)')?.matches ? 'dark' : 'light'
+  return 'dark'
 }
 
 function getInitialWorkspaceRoot() {
   return globalThis.localStorage?.getItem(WORKSPACE_STORAGE_KEY) ?? DEFAULT_WORKSPACE_ROOT
+}
+
+function getInitialWorkspaceDockSide(): WorkspaceDockSide {
+  const stored = (globalThis.localStorage?.getItem(WORKSPACE_DOCK_SIDE_STORAGE_KEY) ?? '').toLowerCase()
+  return stored === 'left' ? 'left' : 'right'
 }
 
 function getInitialModelConfig(): ModelConfig {
@@ -387,42 +792,291 @@ function parseHistoryMessages(raw: unknown): ChatMessage[] {
   return next
 }
 
+function parseChatHistoryEntries(raw: unknown, fallbackWorkspaceRoot: string): ChatHistoryEntry[] {
+  if (!Array.isArray(raw)) return []
+  const entries: ChatHistoryEntry[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Partial<ChatHistoryEntry>
+    const messages = parseHistoryMessages(record.messages)
+    if (messages.length === 0) continue
+    const title = typeof record.title === 'string' && record.title.trim() ? record.title.trim() : 'Untitled chat'
+    const savedAt = typeof record.savedAt === 'number' ? record.savedAt : Date.now()
+    const sandbox: SandboxMode =
+      record.sandbox === 'read-only' || record.sandbox === 'workspace-write' || record.sandbox === 'danger-full-access'
+        ? record.sandbox
+        : 'workspace-write'
+    const permissionMode: PermissionMode = record.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
+    entries.push({
+      id: typeof record.id === 'string' && record.id ? record.id : newId(),
+      title,
+      savedAt,
+      workspaceRoot:
+        typeof record.workspaceRoot === 'string' && record.workspaceRoot ? record.workspaceRoot : fallbackWorkspaceRoot,
+      model: typeof record.model === 'string' && record.model ? record.model : DEFAULT_MODEL,
+      permissionMode,
+      sandbox,
+      fontScale: typeof record.fontScale === 'number' ? Math.max(MIN_FONT_SCALE, Math.min(MAX_FONT_SCALE, record.fontScale)) : 1,
+      messages,
+    })
+  }
+  return entries
+}
+
 function getInitialChatHistory(): ChatHistoryEntry[] {
   try {
     const raw = globalThis.localStorage?.getItem(CHAT_HISTORY_STORAGE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    const entries: ChatHistoryEntry[] = []
-    for (const item of parsed) {
-      if (!item || typeof item !== 'object') continue
-      const record = item as Partial<ChatHistoryEntry>
-      const messages = parseHistoryMessages(record.messages)
-      if (messages.length === 0) continue
-      const title = typeof record.title === 'string' && record.title.trim() ? record.title.trim() : 'Untitled chat'
-      const savedAt = typeof record.savedAt === 'number' ? record.savedAt : Date.now()
-      const sandbox: SandboxMode =
-        record.sandbox === 'read-only' || record.sandbox === 'workspace-write' || record.sandbox === 'danger-full-access'
-          ? record.sandbox
-          : 'workspace-write'
-      const permissionMode: PermissionMode = record.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
-      entries.push({
-        id: typeof record.id === 'string' && record.id ? record.id : newId(),
-        title,
-        savedAt,
-        workspaceRoot: typeof record.workspaceRoot === 'string' && record.workspaceRoot ? record.workspaceRoot : getInitialWorkspaceRoot(),
-        model: typeof record.model === 'string' && record.model ? record.model : DEFAULT_MODEL,
-        permissionMode,
-        sandbox,
-        fontScale: typeof record.fontScale === 'number' ? Math.max(MIN_FONT_SCALE, Math.min(MAX_FONT_SCALE, record.fontScale)) : 1,
-        messages,
-      })
-    }
-    return entries
+    return parseChatHistoryEntries(parsed, getInitialWorkspaceRoot())
       .sort((a, b) => b.savedAt - a.savedAt)
       .slice(0, MAX_CHAT_HISTORY_ENTRIES)
   } catch {
     return []
+  }
+}
+
+function getInitialApplicationSettings(): ApplicationSettings {
+  try {
+    const raw = globalThis.localStorage?.getItem(APP_SETTINGS_STORAGE_KEY)
+    if (!raw) {
+      return {
+        restoreSessionOnStartup: true,
+        themePresetId: DEFAULT_THEME_PRESET_ID,
+        responseStyle: 'standard',
+      }
+    }
+    const parsed = JSON.parse(raw) as Partial<ApplicationSettings>
+    return {
+      restoreSessionOnStartup:
+        typeof parsed?.restoreSessionOnStartup === 'boolean' ? parsed.restoreSessionOnStartup : true,
+      themePresetId:
+        typeof parsed?.themePresetId === 'string' && parsed.themePresetId
+          ? parsed.themePresetId
+          : DEFAULT_THEME_PRESET_ID,
+      responseStyle:
+        parsed?.responseStyle === 'concise' || parsed?.responseStyle === 'standard' || parsed?.responseStyle === 'detailed'
+          ? parsed.responseStyle
+          : 'standard',
+    }
+  } catch {
+    return {
+      restoreSessionOnStartup: true,
+      themePresetId: DEFAULT_THEME_PRESET_ID,
+      responseStyle: 'standard',
+    }
+  }
+}
+
+function mergeChatHistoryEntries(primary: ChatHistoryEntry[], secondary: ChatHistoryEntry[]): ChatHistoryEntry[] {
+  const byId = new Map<string, ChatHistoryEntry>()
+  for (const entry of [...primary, ...secondary]) {
+    if (byId.has(entry.id)) continue
+    byId.set(entry.id, entry)
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => b.savedAt - a.savedAt)
+    .slice(0, MAX_CHAT_HISTORY_ENTRIES)
+}
+
+function parsePanelAttachments(raw: unknown): PastedImageAttachment[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((x): x is PastedImageAttachment => Boolean(x && typeof x === 'object'))
+    .map((x) => ({
+      id: typeof x.id === 'string' && x.id ? x.id : newId(),
+      path: typeof x.path === 'string' ? x.path : '',
+      label: typeof x.label === 'string' && x.label ? x.label : 'attachment',
+      mimeType: typeof x.mimeType === 'string' && x.mimeType ? x.mimeType : undefined,
+    }))
+    .filter((x) => Boolean(x.path))
+}
+
+function clampFontScale(value: unknown, fallback = 1) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.max(MIN_FONT_SCALE, Math.min(MAX_FONT_SCALE, value))
+}
+
+function parseInteractionMode(value: unknown): AgentInteractionMode {
+  return value === 'plan' || value === 'debug' || value === 'ask' ? value : 'agent'
+}
+
+function parsePersistedAgentPanel(raw: unknown, fallbackWorkspaceRoot: string): AgentPanelState | null {
+  if (!raw || typeof raw !== 'object') return null
+  const rec = raw as PersistedAgentPanelState
+  const messages = parseHistoryMessages(rec.messages)
+  if (messages.length === 0) return null
+  const id = typeof rec.id === 'string' && rec.id ? rec.id : newId()
+  const title = typeof rec.title === 'string' && rec.title.trim() ? rec.title.trim() : `Agent ${id.slice(-4)}`
+  const permissionMode: PermissionMode = rec.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
+  const sandbox: SandboxMode =
+    rec.sandbox === 'read-only' || rec.sandbox === 'workspace-write' || rec.sandbox === 'danger-full-access'
+      ? rec.sandbox
+      : 'workspace-write'
+  const cwd =
+    typeof rec.cwd === 'string' && rec.cwd.trim()
+      ? rec.cwd
+      : fallbackWorkspaceRoot || getInitialWorkspaceRoot()
+  return {
+    id,
+    historyId: typeof rec.historyId === 'string' && rec.historyId ? rec.historyId : newId(),
+    title,
+    cwd,
+    model: typeof rec.model === 'string' && rec.model ? rec.model : DEFAULT_MODEL,
+    interactionMode: parseInteractionMode(rec.interactionMode),
+    permissionMode,
+    sandbox,
+    status: typeof rec.status === 'string' && rec.status.trim() ? rec.status.trim() : 'Restored from previous session.',
+    connected: false,
+    streaming: false,
+    messages,
+    attachments: parsePanelAttachments(rec.attachments),
+    input: typeof rec.input === 'string' ? rec.input : '',
+    pendingInputs: Array.isArray(rec.pendingInputs) ? rec.pendingInputs.filter((x): x is string => typeof x === 'string') : [],
+    fontScale: clampFontScale(rec.fontScale),
+    usage: undefined,
+  }
+}
+
+function parsePersistedEditorPanel(raw: unknown, fallbackWorkspaceRoot: string): EditorPanelState | null {
+  if (!raw || typeof raw !== 'object') return null
+  const rec = raw as PersistedEditorPanelState
+  const relativePath = typeof rec.relativePath === 'string' && rec.relativePath ? rec.relativePath : ''
+  if (!relativePath) return null
+  const content = typeof rec.content === 'string' ? rec.content : ''
+  return {
+    id: typeof rec.id === 'string' && rec.id ? rec.id : `editor-${newId()}`,
+    workspaceRoot:
+      typeof rec.workspaceRoot === 'string' && rec.workspaceRoot.trim()
+        ? rec.workspaceRoot
+        : fallbackWorkspaceRoot || getInitialWorkspaceRoot(),
+    relativePath,
+    title: typeof rec.title === 'string' && rec.title.trim() ? rec.title.trim() : fileNameFromRelativePath(relativePath),
+    fontScale: clampFontScale(rec.fontScale),
+    content,
+    size: typeof rec.size === 'number' && Number.isFinite(rec.size) ? Math.max(0, rec.size) : content.length,
+    loading: false,
+    saving: false,
+    dirty: Boolean(rec.dirty),
+    binary: Boolean(rec.binary),
+    error: typeof rec.error === 'string' && rec.error ? rec.error : undefined,
+    savedAt: typeof rec.savedAt === 'number' && Number.isFinite(rec.savedAt) ? rec.savedAt : undefined,
+  }
+}
+
+function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: string): ParsedAppState | null {
+  if (!raw || typeof raw !== 'object') return null
+  const rec = raw as PersistedAppState
+  const workspaceRoot =
+    typeof rec.workspaceRoot === 'string' && rec.workspaceRoot.trim()
+      ? rec.workspaceRoot.trim()
+      : null
+  const workspaceList = Array.isArray(rec.workspaceList)
+    ? rec.workspaceList
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      .map((x) => x.trim())
+    : null
+  const workspaceSnapshotsByRoot: ParsedAppState['workspaceSnapshotsByRoot'] = {}
+  if (rec.workspaceSnapshotsByRoot && typeof rec.workspaceSnapshotsByRoot === 'object') {
+    const snapshotsRecord = rec.workspaceSnapshotsByRoot as Record<string, unknown>
+    for (const [workspacePath, snapshotRaw] of Object.entries(snapshotsRecord)) {
+      if (!workspacePath || typeof workspacePath !== 'string') continue
+      if (!snapshotRaw || typeof snapshotRaw !== 'object') continue
+      const snapshot = snapshotRaw as Partial<WorkspaceUiSnapshot>
+      const parsedPanels = Array.isArray(snapshot.panels)
+        ? snapshot.panels
+            .map((panel) => parsePersistedAgentPanel(panel, workspacePath))
+            .filter((panel): panel is AgentPanelState => Boolean(panel))
+        : []
+      const parsedEditors = Array.isArray(snapshot.editorPanels)
+        ? snapshot.editorPanels
+            .map((panel) => parsePersistedEditorPanel(panel, workspacePath))
+            .filter((panel): panel is EditorPanelState => Boolean(panel))
+        : []
+      workspaceSnapshotsByRoot[workspacePath] = {
+        layoutMode:
+          snapshot.layoutMode === 'vertical' || snapshot.layoutMode === 'horizontal' || snapshot.layoutMode === 'grid'
+            ? snapshot.layoutMode
+            : 'vertical',
+        showWorkspaceWindow: typeof snapshot.showWorkspaceWindow === 'boolean' ? snapshot.showWorkspaceWindow : true,
+        dockTab:
+          snapshot.dockTab === 'orchestrator' || snapshot.dockTab === 'explorer' || snapshot.dockTab === 'git' || snapshot.dockTab === 'settings'
+            ? snapshot.dockTab
+            : 'explorer',
+        workspaceDockSide: snapshot.workspaceDockSide === 'left' || snapshot.workspaceDockSide === 'right' ? snapshot.workspaceDockSide : 'right',
+        panels: parsedPanels,
+        editorPanels: parsedEditors,
+        activePanelId: typeof snapshot.activePanelId === 'string' ? snapshot.activePanelId : null,
+        focusedEditorId: typeof snapshot.focusedEditorId === 'string' ? snapshot.focusedEditorId : null,
+        selectedWorkspaceFile: typeof snapshot.selectedWorkspaceFile === 'string' ? snapshot.selectedWorkspaceFile : null,
+        expandedDirectories:
+          snapshot.expandedDirectories && typeof snapshot.expandedDirectories === 'object'
+            ? Object.fromEntries(
+                Object.entries(snapshot.expandedDirectories as Record<string, unknown>).filter(
+                  ([k, v]) => typeof k === 'string' && typeof v === 'boolean',
+                ),
+              ) as Record<string, boolean>
+            : {},
+      }
+    }
+  }
+  const panels = Array.isArray(rec.panels)
+    ? rec.panels
+      .map((item) => parsePersistedAgentPanel(item, fallbackWorkspaceRoot))
+      .filter((x): x is AgentPanelState => Boolean(x))
+      .slice(0, MAX_PANELS)
+    : []
+  const editorPanels = Array.isArray(rec.editorPanels)
+    ? rec.editorPanels
+      .map((item) => parsePersistedEditorPanel(item, fallbackWorkspaceRoot))
+      .filter((x): x is EditorPanelState => Boolean(x))
+    : []
+  const dockTab: ParsedAppState['dockTab'] =
+    rec.dockTab === 'orchestrator' || rec.dockTab === 'explorer' || rec.dockTab === 'git' || rec.dockTab === 'settings'
+      ? rec.dockTab
+      : null
+  const layoutMode: ParsedAppState['layoutMode'] =
+    rec.layoutMode === 'vertical' || rec.layoutMode === 'horizontal' || rec.layoutMode === 'grid'
+    ? rec.layoutMode
+    : null
+  const workspaceDockSide: ParsedAppState['workspaceDockSide'] =
+    rec.workspaceDockSide === 'left' || rec.workspaceDockSide === 'right' ? rec.workspaceDockSide : null
+  const selectedWorkspaceFile: ParsedAppState['selectedWorkspaceFile'] =
+    typeof rec.selectedWorkspaceFile === 'string' && rec.selectedWorkspaceFile
+      ? rec.selectedWorkspaceFile
+      : rec.selectedWorkspaceFile === null
+        ? null
+        : undefined
+  const activePanelId: ParsedAppState['activePanelId'] =
+    typeof rec.activePanelId === 'string' && rec.activePanelId ? rec.activePanelId : null
+  const focusedEditorId: ParsedAppState['focusedEditorId'] =
+    typeof rec.focusedEditorId === 'string' && rec.focusedEditorId
+      ? rec.focusedEditorId
+      : rec.focusedEditorId === null
+        ? null
+        : undefined
+  const expandedDirectories: ParsedAppState['expandedDirectories'] =
+    rec.expandedDirectories && typeof rec.expandedDirectories === 'object'
+      ? (Object.fromEntries(
+          Object.entries(rec.expandedDirectories as Record<string, unknown>).filter(
+            ([k, v]) => typeof k === 'string' && typeof v === 'boolean',
+          ),
+        ) as Record<string, boolean>)
+      : undefined
+  return {
+    workspaceRoot,
+    workspaceList,
+    workspaceSnapshotsByRoot,
+    panels,
+    editorPanels,
+    dockTab,
+    layoutMode,
+    workspaceDockSide,
+    selectedWorkspaceFile,
+    activePanelId,
+    focusedEditorId,
+    showWorkspaceWindow: typeof rec.showWorkspaceWindow === 'boolean' ? rec.showWorkspaceWindow : undefined,
+    expandedDirectories,
   }
 }
 
@@ -571,12 +1225,15 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
   })
 }
 
-function makeDefaultPanel(id: string, cwd: string): AgentPanelState {
+function makeDefaultPanel(id: string, cwd: string, historyId = newId()): AgentPanelState {
+  const startupModel = DEFAULT_MODEL
   return {
     id,
+    historyId,
     title: `Agent ${id.slice(-4)}`,
     cwd,
-    model: DEFAULT_MODEL,
+    model: startupModel,
+    interactionMode: 'agent',
     permissionMode: 'verify-first',
     sandbox: 'workspace-write',
     status: 'Not connected',
@@ -586,7 +1243,13 @@ function makeDefaultPanel(id: string, cwd: string): AgentPanelState {
       {
         id: newId(),
         role: 'system',
-        content: `Local agent using ${DEFAULT_MODEL}. Complete all tasks fully. Do not stop after describing a plan - execute the plan. Continue until the work is done.`,
+        content: `Model: ${startupModel}`,
+        format: 'text',
+      },
+      {
+        id: newId(),
+        role: 'assistant',
+        content: STARTUP_READY_MESSAGE,
         format: 'text',
       },
     ],
@@ -596,6 +1259,20 @@ function makeDefaultPanel(id: string, cwd: string): AgentPanelState {
     fontScale: 1,
     usage: undefined,
   }
+}
+
+function withModelBanner(messages: ChatMessage[], model: string): ChatMessage[] {
+  const banner = `${MODEL_BANNER_PREFIX}${model}`
+  if (messages[0]?.role === 'system' && messages[0].content.startsWith(MODEL_BANNER_PREFIX)) {
+    return [{ ...messages[0], content: banner, format: 'text' }, ...messages.slice(1)]
+  }
+  return [{ id: newId(), role: 'system', content: banner, format: 'text' }, ...messages]
+}
+
+function withReadyAck(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages[messages.length - 1]
+  if (last?.role === 'assistant' && last.content.trim() === STARTUP_READY_MESSAGE) return messages
+  return [...messages, { id: newId(), role: 'assistant', content: STARTUP_READY_MESSAGE, format: 'text' }]
 }
 
 function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSettings> {
@@ -675,6 +1352,17 @@ export default function App() {
   })
   const [showThemeModal, setShowThemeModal] = useState(false)
   const [showModelSetupModal, setShowModelSetupModal] = useState(false)
+  const [showAppSettingsModal, setShowAppSettingsModal] = useState(false)
+  const [applicationSettings, setApplicationSettings] = useState<ApplicationSettings>(() => getInitialApplicationSettings())
+  const [diagnosticsInfo, setDiagnosticsInfo] = useState<{
+    userDataPath: string
+    storageDir: string
+    chatHistoryPath: string
+    appStatePath: string
+    runtimeLogPath: string
+  } | null>(null)
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
+  const [diagnosticsActionStatus, setDiagnosticsActionStatus] = useState<string | null>(null)
   const [modelConfig, setModelConfig] = useState<ModelConfig>(() => getInitialModelConfig())
   const [editingModel, setEditingModel] = useState<ModelInterface | null>(null)
   const [modelForm, setModelForm] = useState<ModelInterface>({
@@ -683,7 +1371,8 @@ export default function App() {
     provider: 'codex',
     enabled: true,
   })
-  const [dockTab, setDockTab] = useState<'explorer' | 'git' | 'settings'>('explorer')
+  const [dockTab, setDockTab] = useState<'orchestrator' | 'explorer' | 'git' | 'settings'>('explorer')
+  const [workspaceDockSide, setWorkspaceDockSide] = useState<WorkspaceDockSide>(() => getInitialWorkspaceDockSide())
   const [workspaceTree, setWorkspaceTree] = useState<WorkspaceTreeNode[]>([])
   const [workspaceTreeLoading, setWorkspaceTreeLoading] = useState(false)
   const [workspaceTreeError, setWorkspaceTreeError] = useState<string | null>(null)
@@ -706,12 +1395,19 @@ export default function App() {
   const [activityOpenByPanel, setActivityOpenByPanel] = useState<Record<string, boolean>>({})
   const [panelDebugById, setPanelDebugById] = useState<Record<string, PanelDebugEntry[]>>({})
   const [debugOpenByPanel, setDebugOpenByPanel] = useState<Record<string, boolean>>({})
+  const [settingsPopoverByPanel, setSettingsPopoverByPanel] = useState<Record<string, 'mode' | 'sandbox' | 'permission' | null>>({})
   const [codeBlockOpenById, setCodeBlockOpenById] = useState<Record<string, boolean>>({})
   const [thinkingOpenByMessageId, setThinkingOpenByMessageId] = useState<Record<string, boolean>>({})
   const [chatHistory, setChatHistory] = useState<ChatHistoryEntry[]>(() => getInitialChatHistory())
   const [selectedHistoryId, setSelectedHistoryId] = useState('')
 
   const modelList = modelConfig.interfaces.filter((m) => m.enabled).map((m) => m.id)
+  const workspaceScopedHistory = useMemo(() => {
+    const normalizedWorkspaceRoot = normalizeWorkspacePathForCompare(workspaceRoot || '')
+    return chatHistory.filter(
+      (entry) => normalizeWorkspacePathForCompare(entry.workspaceRoot || '') === normalizedWorkspaceRoot,
+    )
+  }, [chatHistory, workspaceRoot])
   function getModelOptions(includeCurrent?: string): string[] {
     const base = [...modelList]
     if (includeCurrent && !base.includes(includeCurrent)) base.push(includeCurrent)
@@ -733,19 +1429,57 @@ export default function App() {
   const editorPanelsRef = useRef<EditorPanelState[]>([])
   const focusedEditorIdRef = useRef<string | null>(null)
   const reconnectingRef = useRef(new Set<string>())
+  const workspaceRootRef = useRef(workspaceRoot)
+  const workspaceListRef = useRef(workspaceList)
+  const activeWorkspaceLockRef = useRef('')
+  const appStateHydratedRef = useRef(false)
+  const appStateSaveTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
+  const workspaceSnapshotsRef = useRef<Record<string, WorkspaceUiSnapshot>>({})
+  const startupReadyNotifiedRef = useRef(false)
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('vertical')
   const [showWorkspaceWindow, setShowWorkspaceWindow] = useState(true)
+  const [appStateHydrated, setAppStateHydrated] = useState(false)
+  const [workspaceBootstrapComplete, setWorkspaceBootstrapComplete] = useState(false)
+  const [pendingWorkspaceSwitch, setPendingWorkspaceSwitch] = useState<{
+    targetRoot: string
+    source: 'menu' | 'picker' | 'dropdown' | 'workspace-create'
+  } | null>(null)
 
   const [panels, setPanels] = useState<AgentPanelState[]>(() => [
     makeDefaultPanel('default', getInitialWorkspaceRoot()),
   ])
   const [activePanelId, setActivePanelId] = useState<string>('default')
+  const activeThemePreset = useMemo(
+    () => THEME_PRESETS.find((preset) => preset.id === applicationSettings.themePresetId) ?? THEME_PRESETS[0],
+    [applicationSettings.themePresetId],
+  )
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
     localStorage.setItem(THEME_STORAGE_KEY, theme)
-  }, [theme])
+    void api.setWindowTheme?.(theme).catch(() => {})
+  }, [api, theme])
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.style.setProperty('--theme-accent-500', activeThemePreset.accent500)
+    root.style.setProperty('--theme-accent-600', activeThemePreset.accent600)
+    root.style.setProperty('--theme-accent-700', activeThemePreset.accent700)
+    root.style.setProperty('--theme-accent-text', activeThemePreset.accentText)
+    root.style.setProperty('--theme-accent-soft', activeThemePreset.accentSoft)
+    root.style.setProperty('--theme-accent-soft-dark', activeThemePreset.accentSoftDark)
+    root.style.setProperty('--theme-dark-950', activeThemePreset.dark950)
+    root.style.setProperty('--theme-dark-900', activeThemePreset.dark900)
+  }, [activeThemePreset])
+
+  useEffect(() => {
+    workspaceRootRef.current = workspaceRoot
+  }, [workspaceRoot])
+
+  useEffect(() => {
+    workspaceListRef.current = workspaceList
+  }, [workspaceList])
 
   useEffect(() => {
     localStorage.setItem(WORKSPACE_STORAGE_KEY, workspaceRoot)
@@ -769,12 +1503,46 @@ export default function App() {
   }, [explorerPrefsByWorkspace])
 
   useEffect(() => {
+    localStorage.setItem(WORKSPACE_DOCK_SIDE_STORAGE_KEY, workspaceDockSide)
+  }, [workspaceDockSide])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(applicationSettings))
+    } catch {
+      // best-effort only
+    }
+  }, [applicationSettings])
+
+  useEffect(() => {
     try {
       localStorage.setItem(CHAT_HISTORY_STORAGE_KEY, JSON.stringify(chatHistory))
     } catch {
       // best-effort only
     }
   }, [chatHistory])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const loaded = await api.loadChatHistory?.()
+        if (cancelled) return
+        const parsed = parseChatHistoryEntries(loaded, workspaceRootRef.current || getInitialWorkspaceRoot())
+        if (parsed.length === 0) return
+        setChatHistory((prev) => mergeChatHistoryEntries(parsed, prev))
+      } catch {
+        // best-effort only
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [api])
+
+  useEffect(() => {
+    void api.saveChatHistory?.(chatHistory).catch(() => {})
+  }, [api, chatHistory])
 
   // Keep workspaceRoot in the list when it changes (e.g. manually selected)
   useEffect(() => {
@@ -783,17 +1551,21 @@ export default function App() {
   }, [workspaceRoot])
 
   useEffect(() => {
-    const ws = workspaceSettingsByPath[workspaceRoot]
-    if (!ws) return
+    if (!workspaceRoot) return
     setPanels((prev) =>
-      prev.map((p) => ({
-        ...p,
-        cwd: workspaceRoot,
-        model: ws.defaultModel,
-        permissionMode: ws.permissionMode,
-      })),
+      prev.map((p) =>
+        normalizeWorkspacePathForCompare(p.cwd) === normalizeWorkspacePathForCompare(workspaceRoot)
+          ? p
+          : {
+              ...p,
+              cwd: workspaceRoot,
+              connected: false,
+              streaming: false,
+              status: 'Workspace changed. Reconnect on next send.',
+            },
+      ),
     )
-  }, [workspaceRoot, workspaceSettingsByPath])
+  }, [workspaceRoot])
 
   useEffect(() => {
     if (panels.length === 0) return
@@ -823,6 +1595,207 @@ export default function App() {
       setFocusedEditorId(null)
     }
   }, [editorPanels, focusedEditorId])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      if (!applicationSettings.restoreSessionOnStartup) {
+        appStateHydratedRef.current = true
+        setAppStateHydrated(true)
+        return
+      }
+      try {
+        const loaded = await api.loadAppState?.()
+        if (cancelled || !loaded) return
+        const restored = parsePersistedAppState(loaded, workspaceRootRef.current || getInitialWorkspaceRoot())
+        if (!restored) return
+
+        workspaceSnapshotsRef.current = restored.workspaceSnapshotsByRoot
+        if (restored.workspaceList && restored.workspaceList.length > 0) {
+          setWorkspaceList((prev) => {
+            const merged = [...new Set([...restored.workspaceList!, ...prev])]
+            return merged.length > 0 ? merged : prev
+          })
+        }
+        if (restored.workspaceRoot) {
+          setWorkspaceRoot(restored.workspaceRoot)
+        }
+
+        if (restored.panels.length > 0) {
+          setPanels(restored.panels)
+          const restoredActivePanelId =
+            restored.activePanelId && restored.panels.some((panel) => panel.id === restored.activePanelId)
+              ? restored.activePanelId
+              : restored.panels[0].id
+          setActivePanelId(restoredActivePanelId)
+        }
+        if (restored.editorPanels.length > 0) {
+          setEditorPanels(restored.editorPanels)
+        }
+        if (typeof restored.showWorkspaceWindow === 'boolean') {
+          setShowWorkspaceWindow(restored.showWorkspaceWindow)
+        }
+        if (restored.layoutMode) setLayoutMode(restored.layoutMode)
+        if (restored.dockTab) setDockTab(restored.dockTab)
+        if (restored.workspaceDockSide) setWorkspaceDockSide(restored.workspaceDockSide)
+        if (restored.selectedWorkspaceFile !== undefined) setSelectedWorkspaceFile(restored.selectedWorkspaceFile)
+        if (restored.expandedDirectories) setExpandedDirectories(restored.expandedDirectories)
+        if (restored.focusedEditorId !== undefined) {
+          const editorId = restored.focusedEditorId
+          const validEditorId = editorId && restored.editorPanels.some((panel) => panel.id === editorId) ? editorId : null
+          setFocusedEditorId(validEditorId)
+        }
+      } catch {
+        // best-effort only
+      } finally {
+        appStateHydratedRef.current = true
+        setAppStateHydrated(true)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [api, applicationSettings.restoreSessionOnStartup])
+
+  useEffect(() => {
+    if (!showAppSettingsModal) return
+    setDiagnosticsError(null)
+    void (async () => {
+      try {
+        const info = await api.getDiagnosticsInfo?.()
+        if (!info) return
+        setDiagnosticsInfo(info)
+      } catch (err) {
+        setDiagnosticsError(formatError(err))
+      }
+    })()
+  }, [api, showAppSettingsModal])
+
+  useEffect(() => {
+    if (!appStateHydratedRef.current) return
+    if (!api.saveAppState) return
+    if (appStateSaveTimerRef.current !== null) {
+      globalThis.clearTimeout(appStateSaveTimerRef.current)
+    }
+    appStateSaveTimerRef.current = globalThis.setTimeout(() => {
+      const snapshotsForPersist: Record<string, WorkspaceUiSnapshot> = { ...workspaceSnapshotsRef.current }
+      const currentWorkspace = workspaceRootRef.current?.trim()
+      if (currentWorkspace) {
+        snapshotsForPersist[currentWorkspace] = buildWorkspaceSnapshot(currentWorkspace)
+      }
+      const payload = {
+        version: 1,
+        savedAt: Date.now(),
+        workspaceRoot,
+        workspaceList,
+        workspaceSnapshotsByRoot: Object.fromEntries(
+          Object.entries(snapshotsForPersist).map(([workspacePath, snapshot]) => [
+            workspacePath,
+            {
+              layoutMode: snapshot.layoutMode,
+              showWorkspaceWindow: snapshot.showWorkspaceWindow,
+              dockTab: snapshot.dockTab,
+              workspaceDockSide: snapshot.workspaceDockSide,
+              panels: snapshot.panels.map((panel) => ({
+                id: panel.id,
+                historyId: panel.historyId,
+                title: panel.title,
+                cwd: panel.cwd,
+                model: panel.model,
+                interactionMode: panel.interactionMode,
+                permissionMode: panel.permissionMode,
+                sandbox: panel.sandbox,
+                status: panel.status,
+                messages: cloneChatMessages(panel.messages),
+                attachments: panel.attachments.map((item) => ({ ...item })),
+                input: panel.input,
+                pendingInputs: [...panel.pendingInputs],
+                fontScale: panel.fontScale,
+              })),
+              editorPanels: snapshot.editorPanels.map((panel) => ({
+                id: panel.id,
+                workspaceRoot: panel.workspaceRoot,
+                relativePath: panel.relativePath,
+                title: panel.title,
+                fontScale: panel.fontScale,
+                content: panel.content,
+                size: panel.size,
+                dirty: panel.dirty,
+                binary: panel.binary,
+                error: panel.error,
+                savedAt: panel.savedAt,
+              })),
+              activePanelId: snapshot.activePanelId,
+              focusedEditorId: snapshot.focusedEditorId,
+              selectedWorkspaceFile: snapshot.selectedWorkspaceFile,
+              expandedDirectories: snapshot.expandedDirectories,
+            },
+          ]),
+        ),
+        layoutMode,
+        showWorkspaceWindow,
+        dockTab,
+        workspaceDockSide,
+        activePanelId,
+        focusedEditorId,
+        selectedWorkspaceFile,
+        expandedDirectories,
+        panels: panels.map((panel) => ({
+          id: panel.id,
+          historyId: panel.historyId,
+          title: panel.title,
+          cwd: panel.cwd,
+          model: panel.model,
+          interactionMode: panel.interactionMode,
+          permissionMode: panel.permissionMode,
+          sandbox: panel.sandbox,
+          status: panel.status,
+          messages: cloneChatMessages(panel.messages),
+          attachments: panel.attachments.map((item) => ({ ...item })),
+          input: panel.input,
+          pendingInputs: [...panel.pendingInputs],
+          fontScale: panel.fontScale,
+        })),
+        editorPanels: editorPanels.map((panel) => ({
+          id: panel.id,
+          workspaceRoot: panel.workspaceRoot,
+          relativePath: panel.relativePath,
+          title: panel.title,
+          fontScale: panel.fontScale,
+          content: panel.content,
+          size: panel.size,
+          dirty: panel.dirty,
+          binary: panel.binary,
+          error: panel.error,
+          savedAt: panel.savedAt,
+        })),
+      }
+      void api.saveAppState(payload).catch(() => {})
+      appStateSaveTimerRef.current = null
+    }, APP_STATE_AUTOSAVE_MS)
+
+    return () => {
+      if (appStateSaveTimerRef.current !== null) {
+        globalThis.clearTimeout(appStateSaveTimerRef.current)
+        appStateSaveTimerRef.current = null
+      }
+    }
+  }, [
+    api,
+    activePanelId,
+    dockTab,
+    editorPanels,
+    expandedDirectories,
+    focusedEditorId,
+    layoutMode,
+    panels,
+    selectedWorkspaceFile,
+    showWorkspaceWindow,
+    workspaceList,
+    workspaceRoot,
+    workspaceDockSide,
+  ])
 
   useEffect(() => {
     for (const p of panels) {
@@ -885,18 +1858,349 @@ export default function App() {
     [],
   )
 
-  function applyWorkspaceRoot(nextRoot: string) {
-    if (!nextRoot) return
-    setWorkspaceRoot(nextRoot)
-    // Workspace is central: propagate to all panels and force reconnect on next send.
-    setPanels((prev) =>
-      prev.map((p) => ({
-        ...p,
-        cwd: nextRoot,
+  useEffect(() => {
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target
+      if (!(target instanceof HTMLElement)) return
+      if (target.closest('[data-settings-popover-root="true"]')) return
+      setSettingsPopoverByPanel({})
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSettingsPopoverByPanel({})
+    }
+    window.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('mousedown', onMouseDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [])
+
+  function formatWorkspaceClaimFailure(requestedRoot: string, result: WorkspaceLockAcquireResult) {
+    if (result.ok) return ''
+    if (result.reason === 'in-use') {
+      const owner = result.owner
+      const detail =
+        owner && owner.pid
+          ? `Locked by PID ${owner.pid}${owner.hostname ? ` on ${owner.hostname}` : ''} (heartbeat ${new Date(owner.heartbeatAt).toLocaleString()}).`
+          : 'Another Barnaby instance is already active in this workspace.'
+      return `Cannot open workspace:\n${requestedRoot}\n\n${detail}`
+    }
+    if (result.reason === 'invalid-workspace') {
+      return `Cannot open workspace:\n${requestedRoot}\n\n${result.message}`
+    }
+    return `Cannot open workspace:\n${requestedRoot}\n\n${result.message || 'Unknown error.'}`
+  }
+
+  function makeWorkspaceDefaultPanel(nextWorkspaceRoot: string) {
+    const ws = workspaceSettingsByPath[nextWorkspaceRoot]
+    const panel = makeDefaultPanel('default', nextWorkspaceRoot)
+    if (ws?.defaultModel) {
+      panel.model = ws.defaultModel
+      panel.messages = withModelBanner(panel.messages, ws.defaultModel)
+    }
+    if (ws?.permissionMode) panel.permissionMode = ws.permissionMode
+    if (ws?.sandbox) panel.sandbox = ws.sandbox
+    return panel
+  }
+
+  function buildWorkspaceSnapshot(nextWorkspaceRoot: string): WorkspaceUiSnapshot {
+    const normalizedWorkspaceRoot = normalizeWorkspacePathForCompare(nextWorkspaceRoot)
+    const workspacePanels = panelsRef.current
+      .filter((panel) => normalizeWorkspacePathForCompare(panel.cwd) === normalizedWorkspaceRoot)
+      .map((panel) => ({
+        ...panel,
         connected: false,
-        status: 'Workspace changed. Reconnect on next send.',
-      })),
+        streaming: false,
+        status: panel.connected || panel.streaming ? 'Disconnected after workspace switch.' : panel.status,
+        messages: cloneChatMessages(panel.messages),
+        attachments: panel.attachments.map((attachment) => ({ ...attachment })),
+        pendingInputs: [...panel.pendingInputs],
+      }))
+    const workspaceEditors = editorPanelsRef.current
+      .filter((panel) => normalizeWorkspacePathForCompare(panel.workspaceRoot) === normalizedWorkspaceRoot)
+      .map((panel) => ({ ...panel }))
+    return {
+      layoutMode,
+      showWorkspaceWindow,
+      dockTab,
+      workspaceDockSide,
+      panels: workspacePanels,
+      editorPanels: workspaceEditors,
+      activePanelId: panelsRef.current.some((panel) => panel.id === activePanelId) ? activePanelId : workspacePanels[0]?.id ?? null,
+      focusedEditorId: focusedEditorIdRef.current,
+      selectedWorkspaceFile,
+      expandedDirectories: { ...expandedDirectories },
+    }
+  }
+
+  function applyWorkspaceSnapshot(nextWorkspaceRoot: string) {
+    const snapshot = workspaceSnapshotsRef.current[nextWorkspaceRoot]
+    if (!snapshot) {
+      const panel = makeWorkspaceDefaultPanel(nextWorkspaceRoot)
+      setLayoutMode('vertical')
+      setShowWorkspaceWindow(true)
+      setDockTab('explorer')
+      setWorkspaceDockSide(getInitialWorkspaceDockSide())
+      setExpandedDirectories({})
+      setSelectedWorkspaceFile(null)
+      setEditorPanels([])
+      setFocusedEditorId(null)
+      setPanels([panel])
+      setActivePanelId(panel.id)
+      return
+    }
+    setLayoutMode(snapshot.layoutMode)
+    setShowWorkspaceWindow(snapshot.showWorkspaceWindow)
+    setDockTab(snapshot.dockTab)
+    setWorkspaceDockSide(snapshot.workspaceDockSide)
+    setExpandedDirectories({ ...snapshot.expandedDirectories })
+    setSelectedWorkspaceFile(snapshot.selectedWorkspaceFile)
+    setEditorPanels(snapshot.editorPanels.map((panel) => ({ ...panel })))
+    const restoredPanels = snapshot.panels.map((panel) => ({
+      ...panel,
+      cwd: nextWorkspaceRoot,
+      connected: false,
+      streaming: false,
+      status: 'Restored for workspace.',
+      messages: cloneChatMessages(panel.messages),
+      attachments: panel.attachments.map((attachment) => ({ ...attachment })),
+      pendingInputs: [...panel.pendingInputs],
+    }))
+    if (restoredPanels.length > 0) {
+      setPanels(restoredPanels)
+      const nextActivePanelId =
+        snapshot.activePanelId && restoredPanels.some((panel) => panel.id === snapshot.activePanelId)
+          ? snapshot.activePanelId
+          : restoredPanels[0].id
+      setActivePanelId(nextActivePanelId)
+    } else {
+      const panel = makeWorkspaceDefaultPanel(nextWorkspaceRoot)
+      setPanels([panel])
+      setActivePanelId(panel.id)
+    }
+    const nextFocusedEditor =
+      snapshot.focusedEditorId && snapshot.editorPanels.some((panel) => panel.id === snapshot.focusedEditorId)
+        ? snapshot.focusedEditorId
+        : null
+    setFocusedEditorId(nextFocusedEditor)
+  }
+
+  async function applyWorkspaceRoot(nextRoot: string, options?: { showFailureAlert?: boolean; rebindPanels?: boolean }) {
+    const targetRoot = nextRoot.trim()
+    if (!targetRoot) return null
+    const showFailureAlert = options?.showFailureAlert ?? true
+    const rebindPanels = options?.rebindPanels ?? false
+
+    let lockResult: WorkspaceLockAcquireResult
+    try {
+      lockResult = await api.claimWorkspace(targetRoot)
+    } catch (err) {
+      if (showFailureAlert) {
+        alert(`Cannot open workspace:\n${targetRoot}\n\n${formatError(err)}`)
+      }
+      return null
+    }
+
+    if (!lockResult.ok) {
+      if (showFailureAlert) {
+        alert(formatWorkspaceClaimFailure(targetRoot, lockResult))
+      }
+      return null
+    }
+
+    const resolvedRoot = lockResult.workspaceRoot
+    const previousLockedRoot = activeWorkspaceLockRef.current
+    activeWorkspaceLockRef.current = resolvedRoot
+    if (previousLockedRoot && previousLockedRoot !== resolvedRoot) {
+      void api.releaseWorkspace(previousLockedRoot).catch(() => {})
+    }
+
+    if (workspaceRootRef.current === resolvedRoot) return resolvedRoot
+
+    setWorkspaceRoot(resolvedRoot)
+    if (rebindPanels) {
+      // Workspace is central: propagate to all panels and force reconnect on next send.
+      setPanels((prev) =>
+        prev.map((p) => ({
+          ...p,
+          cwd: resolvedRoot,
+          connected: false,
+          status: 'Workspace changed. Reconnect on next send.',
+        })),
+      )
+    }
+    return resolvedRoot
+  }
+
+  function requestWorkspaceSwitch(targetRoot: string, source: 'menu' | 'picker' | 'dropdown' | 'workspace-create') {
+    const next = targetRoot.trim()
+    if (!next) return
+    const current = workspaceRootRef.current?.trim() ?? ''
+    if (normalizeWorkspacePathForCompare(next) === normalizeWorkspacePathForCompare(current)) return
+    if (!current) {
+      void (async () => {
+        const openedRoot = await applyWorkspaceRoot(next, { showFailureAlert: true, rebindPanels: false })
+        if (!openedRoot) return
+        applyWorkspaceSnapshot(openedRoot)
+        if (source === 'picker') setShowWorkspacePicker(false)
+        if (source === 'workspace-create') setShowWorkspaceModal(false)
+      })()
+      return
+    }
+    setPendingWorkspaceSwitch({ targetRoot: next, source })
+  }
+
+  async function confirmWorkspaceSwitch() {
+    const pending = pendingWorkspaceSwitch
+    if (!pending) return
+    setPendingWorkspaceSwitch(null)
+
+    const currentWorkspace = workspaceRootRef.current?.trim()
+    const panelIds = [...new Set(panelsRef.current.map((panel) => panel.id))]
+    if (currentWorkspace) {
+      workspaceSnapshotsRef.current[currentWorkspace] = buildWorkspaceSnapshot(currentWorkspace)
+    }
+
+    const openedRoot = await applyWorkspaceRoot(pending.targetRoot, { showFailureAlert: true, rebindPanels: false })
+    if (!openedRoot) return
+
+    await Promise.all(panelIds.map((id) => api.disconnect(id).catch(() => {})))
+
+    setPanels([])
+    setEditorPanels([])
+    setActivePanelId('default')
+    setFocusedEditorId(null)
+    setSelectedHistoryId('')
+    setSelectedWorkspaceFile(null)
+    setExpandedDirectories({})
+    applyWorkspaceSnapshot(openedRoot)
+    if (pending.source === 'picker') setShowWorkspacePicker(false)
+    if (pending.source === 'workspace-create') setShowWorkspaceModal(false)
+  }
+
+  useEffect(() => {
+    if (!appStateHydrated) return
+    setWorkspaceBootstrapComplete(false)
+    let disposed = false
+    const bootstrapWorkspace = async () => {
+      const preferredRoot = workspaceRootRef.current?.trim()
+      if (!preferredRoot) return
+
+      const openedPreferred = await applyWorkspaceRoot(preferredRoot, { showFailureAlert: false, rebindPanels: false })
+      if (disposed || openedPreferred) return
+
+      for (const candidate of workspaceListRef.current) {
+        const next = candidate.trim()
+        if (!next || next === preferredRoot) continue
+        const opened = await applyWorkspaceRoot(next, { showFailureAlert: false, rebindPanels: false })
+        if (disposed) return
+        if (opened) {
+          applyWorkspaceSnapshot(opened)
+          return
+        }
+      }
+
+      if (!disposed) {
+        setWorkspaceRoot('')
+        alert('No workspace is available right now. Another Barnaby instance is already using each saved workspace.')
+      }
+    }
+
+    void (async () => {
+      try {
+        await bootstrapWorkspace()
+      } finally {
+        if (!disposed) setWorkspaceBootstrapComplete(true)
+      }
+    })()
+    return () => {
+      disposed = true
+    }
+  }, [appStateHydrated])
+
+  useEffect(() => {
+    if (startupReadyNotifiedRef.current) return
+    if (!appStateHydrated) return
+    if (!workspaceBootstrapComplete) return
+    if (workspaceTreeLoading || gitStatusLoading) return
+    startupReadyNotifiedRef.current = true
+    void api.notifyRendererReady?.().catch(() => {})
+  }, [api, appStateHydrated, workspaceBootstrapComplete, workspaceTreeLoading, gitStatusLoading])
+
+  useEffect(
+    () => () => {
+      const lockedRoot = activeWorkspaceLockRef.current
+      if (!lockedRoot) return
+      void api.releaseWorkspace(lockedRoot).catch(() => {})
+      activeWorkspaceLockRef.current = ''
+    },
+    [api],
+  )
+
+  function upsertPanelToHistory(panel: AgentPanelState) {
+    const hasConversation = panel.messages.some(
+      (m) => m.role === 'user' || (m.role === 'assistant' && m.content.trim() !== STARTUP_READY_MESSAGE),
     )
+    if (!hasConversation) return
+    const entryId = panel.historyId || newId()
+    const title = getConversationPrecis(panel) || panel.title || 'Untitled chat'
+    const entry: ChatHistoryEntry = {
+      id: entryId,
+      title,
+      savedAt: Date.now(),
+      workspaceRoot: panel.cwd || workspaceRoot,
+      model: panel.model || DEFAULT_MODEL,
+      permissionMode: panel.permissionMode,
+      sandbox: panel.sandbox,
+      fontScale: panel.fontScale,
+      messages: cloneChatMessages(panel.messages),
+    }
+    setChatHistory((prev) => [entry, ...prev.filter((item) => item.id !== entryId)].slice(0, MAX_CHAT_HISTORY_ENTRIES))
+  }
+
+  function openChatFromHistory(historyId: string) {
+    const entry = workspaceScopedHistory.find((x) => x.id === historyId)
+    if (!entry) return
+    const existing = panelsRef.current.find((x) => x.historyId === historyId)
+    if (existing) {
+      setActivePanelId(existing.id)
+      setFocusedEditorId(null)
+      return
+    }
+    if (panelsRef.current.length >= MAX_PANELS) {
+      alert(`Maximum ${MAX_PANELS} panels open. Close one panel first.`)
+      return
+    }
+    const panelId = newId()
+    const restoredMessages = cloneChatMessages(entry.messages)
+    setPanels((prev) => {
+      if (prev.length >= MAX_PANELS) return prev
+      return [
+        ...prev,
+        {
+          id: panelId,
+          historyId: entry.id,
+          title: entry.title,
+          cwd: entry.workspaceRoot || workspaceRoot,
+          model: entry.model || DEFAULT_MODEL,
+          interactionMode: 'agent',
+          permissionMode: entry.permissionMode,
+          sandbox: entry.sandbox,
+          status: `Loaded from history (${new Date(entry.savedAt).toLocaleString()})`,
+          connected: false,
+          streaming: false,
+          messages: restoredMessages,
+          attachments: [],
+          input: '',
+          pendingInputs: [],
+          fontScale: entry.fontScale,
+          usage: undefined,
+        },
+      ]
+    })
+    setActivePanelId(panelId)
+    setFocusedEditorId(null)
   }
 
   function archivePanelToHistory(panel: AgentPanelState) {
@@ -1072,6 +2376,30 @@ export default function App() {
     } satisfies WorkspaceSettings
   }
 
+  function normalizeWorkspaceSettingsForm(form: WorkspaceSettings): WorkspaceSettings {
+    const sandbox = form.sandbox
+    const permissionMode = sandbox === 'read-only' ? 'verify-first' : form.permissionMode
+    return {
+      path: form.path.trim(),
+      defaultModel: form.defaultModel.trim() || DEFAULT_MODEL,
+      permissionMode,
+      sandbox,
+      debug: Boolean(form.debug),
+    }
+  }
+
+  function workspaceFormsEqual(a: WorkspaceSettings, b: WorkspaceSettings): boolean {
+    const left = normalizeWorkspaceSettingsForm(a)
+    const right = normalizeWorkspaceSettingsForm(b)
+    return (
+      left.path === right.path &&
+      left.defaultModel === right.defaultModel &&
+      left.permissionMode === right.permissionMode &&
+      left.sandbox === right.sandbox &&
+      left.debug === right.debug
+    )
+  }
+
   function openWorkspaceSettings(mode: 'new' | 'edit') {
     setWorkspaceModalMode(mode)
     setWorkspaceForm(buildWorkspaceForm(mode))
@@ -1079,20 +2407,13 @@ export default function App() {
   }
 
   function openWorkspaceSettingsTab() {
-    if (dockTab !== 'settings') {
-      setWorkspaceForm(buildWorkspaceForm('edit'))
-    }
+    setWorkspaceForm(buildWorkspaceForm('edit'))
+    setShowWorkspaceModal(false)
     setDockTab('settings')
   }
 
   async function saveWorkspaceSettings() {
-    const next = {
-      path: workspaceForm.path.trim(),
-      defaultModel: workspaceForm.defaultModel.trim() || DEFAULT_MODEL,
-      permissionMode: workspaceForm.permissionMode,
-      sandbox: workspaceForm.sandbox,
-      debug: Boolean(workspaceForm.debug),
-    } satisfies WorkspaceSettings
+    const next = normalizeWorkspaceSettingsForm(workspaceForm)
     if (!next.path) return
 
     try {
@@ -1103,11 +2424,11 @@ export default function App() {
 
     setWorkspaceSettingsByPath((prev) => ({ ...prev, [next.path]: next }))
     setWorkspaceList((prev) => (prev.includes(next.path) ? prev : [next.path, ...prev]))
-    applyWorkspaceRoot(next.path)
     setShowWorkspaceModal(false)
+    requestWorkspaceSwitch(next.path, 'workspace-create')
   }
 
-  function deleteWorkspace(pathToDelete: string) {
+  async function deleteWorkspace(pathToDelete: string) {
     const remaining = workspaceList.filter((p) => p !== pathToDelete)
     setWorkspaceList(remaining)
     setWorkspaceSettingsByPath((prev) => {
@@ -1115,9 +2436,29 @@ export default function App() {
       delete next[pathToDelete]
       return next
     })
-    if (workspaceRoot === pathToDelete) {
-      if (remaining.length > 0) applyWorkspaceRoot(remaining[0])
-      else setWorkspaceRoot('')
+
+    if (activeWorkspaceLockRef.current === pathToDelete) {
+      try {
+        await api.releaseWorkspace(pathToDelete)
+      } catch {
+        // best effort only
+      }
+      activeWorkspaceLockRef.current = ''
+    }
+
+    if (workspaceRootRef.current === pathToDelete) {
+      let switched = false
+      for (const nextRoot of remaining) {
+        const opened = await applyWorkspaceRoot(nextRoot, { showFailureAlert: false, rebindPanels: false })
+        if (opened) {
+          applyWorkspaceSnapshot(opened)
+          switched = true
+          break
+        }
+      }
+      if (!switched) {
+        setWorkspaceRoot('')
+      }
     }
     setShowWorkspaceModal(false)
   }
@@ -1246,12 +2587,17 @@ export default function App() {
       if (evt?.type === 'assistantCompleted') {
         appendPanelDebug(agentWindowId, 'event:assistantCompleted', 'Assistant turn completed')
         flushWindowDelta(agentWindowId)
+        let snapshotForHistory: AgentPanelState | null = null
         setPanels((prev) =>
           prev.map((w) => {
             if (w.id !== agentWindowId) return w
             const msgs = w.messages
             const last = msgs[msgs.length - 1]
-            if (!last || last.role !== 'assistant') return { ...w, streaming: false }
+            if (!last || last.role !== 'assistant') {
+              const updated = { ...w, streaming: false }
+              snapshotForHistory = updated
+              return updated
+            }
             let pendingInputs: string[] = w.pendingInputs
             let nextMessages: ChatMessage[] = [...msgs.slice(0, -1), { ...last, format: 'markdown' as const }]
             if (looksIncomplete(last.content)) {
@@ -1265,9 +2611,12 @@ export default function App() {
             } else {
               autoContinueCountRef.current.delete(agentWindowId)
             }
-            return { ...w, streaming: false, pendingInputs, messages: nextMessages }
+            const updated = { ...w, streaming: false, pendingInputs, messages: nextMessages }
+            snapshotForHistory = updated
+            return updated
           }),
         )
+        if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
         queueMicrotask(() => kickQueuedMessage(agentWindowId))
       }
 
@@ -1312,17 +2661,21 @@ export default function App() {
         return
       }
       if (action === 'openWorkspace' && typeof actionPath === 'string') {
-        applyWorkspaceRoot(actionPath)
+        requestWorkspaceSwitch(actionPath, 'menu')
         setShowWorkspacePicker(false)
         return
       }
       if (action === 'closeWorkspace') {
         if (workspaceList.length <= 1) return
-        deleteWorkspace(workspaceRoot)
+        void deleteWorkspace(workspaceRoot)
         return
       }
       if (action === 'openThemeModal') {
-        setShowThemeModal(true)
+        setShowAppSettingsModal(true)
+        return
+      }
+      if (action === 'openAppSettings') {
+        setShowAppSettingsModal(true)
         return
       }
       if (action === 'openModelSetup') {
@@ -1364,6 +2717,69 @@ export default function App() {
     const p = usage?.primary
     if (!p || typeof p.usedPercent !== 'number') return null
     return Math.max(0, Math.min(100, p.usedPercent))
+  }
+
+  function estimateTokenCountFromText(text: string) {
+    const trimmed = text.trim()
+    if (!trimmed) return 0
+    const charBased = Math.ceil(trimmed.length / TOKEN_ESTIMATE_CHARS_PER_TOKEN)
+    const wordCount = trimmed.split(/\s+/).filter(Boolean).length
+    const wordBased = Math.ceil(wordCount * TOKEN_ESTIMATE_WORDS_MULTIPLIER)
+    return Math.max(charBased, wordBased)
+  }
+
+  function getKnownContextTokensForModel(model: string, provider: ModelProvider): number | null {
+    if (provider !== 'codex') return null
+    const normalized = model.trim().toLowerCase()
+    if (!normalized.startsWith('gpt-')) return null
+    if (normalized.startsWith('gpt-5')) return DEFAULT_GPT_CONTEXT_TOKENS
+    return DEFAULT_GPT_CONTEXT_TOKENS
+  }
+
+  function estimatePanelContextUsage(panel: AgentPanelState): {
+    estimatedInputTokens: number
+    safeInputBudgetTokens: number
+    modelContextTokens: number
+    outputReserveTokens: number
+    usedPercent: number
+  } | null {
+    const provider = getModelProvider(panel.model)
+    const modelContextTokens = getKnownContextTokensForModel(panel.model, provider)
+    if (!modelContextTokens) return null
+
+    let estimatedInputTokens = TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS
+    for (const message of panel.messages) {
+      estimatedInputTokens += TOKEN_ESTIMATE_MESSAGE_OVERHEAD
+      estimatedInputTokens += estimateTokenCountFromText(message.content)
+      estimatedInputTokens += (message.attachments?.length ?? 0) * TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS
+    }
+
+    for (const queued of panel.pendingInputs) {
+      estimatedInputTokens += TOKEN_ESTIMATE_MESSAGE_OVERHEAD
+      estimatedInputTokens += estimateTokenCountFromText(queued)
+    }
+
+    const draft = panel.input.trim()
+    if (draft) {
+      estimatedInputTokens += TOKEN_ESTIMATE_MESSAGE_OVERHEAD
+      estimatedInputTokens += estimateTokenCountFromText(draft)
+    }
+    estimatedInputTokens += panel.attachments.length * TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS
+
+    const outputReserveTokens = Math.min(
+      CONTEXT_MAX_OUTPUT_RESERVE_TOKENS,
+      Math.max(CONTEXT_MIN_OUTPUT_RESERVE_TOKENS, Math.round(modelContextTokens * CONTEXT_OUTPUT_RESERVE_RATIO)),
+    )
+    const safeInputBudgetTokens = Math.max(1, modelContextTokens - outputReserveTokens)
+    const usedPercent = (estimatedInputTokens / safeInputBudgetTokens) * 100
+
+    return {
+      estimatedInputTokens,
+      safeInputBudgetTokens,
+      modelContextTokens,
+      outputReserveTokens,
+      usedPercent,
+    }
   }
 
   function sandboxModeDescription(mode: SandboxMode) {
@@ -1589,6 +3005,23 @@ export default function App() {
     }
   }
 
+  async function onChatLinkClick(href: string) {
+    const target = String(href ?? '').trim()
+    if (!target) return
+    const filePath = workspaceRoot ? resolveWorkspaceRelativePathFromChatHref(workspaceRoot, target) : null
+    if (filePath) {
+      await openEditorForRelativePath(filePath)
+      return
+    }
+    if (api.openExternalUrl) {
+      await api.openExternalUrl(target)
+      return
+    }
+    if (/^https?:\/\//i.test(target)) {
+      window.open(target, '_blank', 'noopener,noreferrer')
+    }
+  }
+
   function updateEditorContent(editorId: string, nextContent: string) {
     setEditorPanels((prev) =>
       prev.map((p) =>
@@ -1743,44 +3176,44 @@ export default function App() {
     return 'border border-neutral-300 text-neutral-800 dark:border-neutral-700 dark:text-neutral-100'
   }
 
+  function isDeletedGitEntry(entry: GitStatusEntry) {
+    if (entry.untracked) return false
+    return entry.indexStatus === 'D' || entry.workingTreeStatus === 'D'
+  }
+
   function formatCheckedAt(ts?: number) {
     if (!ts) return 'Never'
     const dt = new Date(ts)
     return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
-  function createAgentPanel() {
+  function createAgentPanel(sourcePanelId?: string) {
+    if (panelsRef.current.length >= MAX_PANELS) return
+
+    const sourcePanel = sourcePanelId ? panelsRef.current.find((panel) => panel.id === sourcePanelId) : undefined
+    const panelWorkspace = sourcePanel?.cwd || workspaceRoot
+    const ws = workspaceSettingsByPath[panelWorkspace] ?? workspaceSettingsByPath[workspaceRoot]
+    const id = newId()
+    const startupModel = sourcePanel?.model ?? ws?.defaultModel ?? DEFAULT_MODEL
+    const p = makeDefaultPanel(id, panelWorkspace)
+    p.model = startupModel
+    p.messages = withModelBanner(p.messages, startupModel)
+    p.interactionMode = parseInteractionMode(sourcePanel?.interactionMode)
+    p.permissionMode = sourcePanel?.permissionMode ?? ws?.permissionMode ?? p.permissionMode
+    p.sandbox = sourcePanel?.sandbox ?? ws?.sandbox ?? p.sandbox
+    p.fontScale = sourcePanel?.fontScale ?? p.fontScale
+    const nextPanelCount = panelsRef.current.length + 1
     setPanels((prev) => {
       if (prev.length >= MAX_PANELS) return prev
-      const id = newId()
-      const ws = workspaceSettingsByPath[workspaceRoot]
-      const p = makeDefaultPanel(id, workspaceRoot)
-      if (ws) {
-        p.model = ws.defaultModel
-        p.permissionMode = ws.permissionMode
-        p.sandbox = ws.sandbox
-      }
       return [...prev, p]
     })
+    if (nextPanelCount > 3) setLayoutMode('grid')
+    setActivePanelId(id)
+    setFocusedEditorId(null)
   }
 
   function splitAgentPanel(sourcePanelId: string) {
-    setPanels((prev) => {
-      if (prev.length >= MAX_PANELS) return prev
-      const sourceIdx = prev.findIndex((p) => p.id === sourcePanelId)
-      if (sourceIdx < 0) return prev
-      const id = newId()
-      const ws = workspaceSettingsByPath[workspaceRoot]
-      const p = makeDefaultPanel(id, workspaceRoot)
-      if (ws) {
-        p.model = ws.defaultModel
-        p.permissionMode = ws.permissionMode
-        p.sandbox = ws.sandbox
-      }
-      const next = [...prev]
-      next.splice(sourceIdx + 1, 0, p)
-      return next
-    })
+    createAgentPanel(sourcePanelId)
   }
 
   function renderWorkspaceTile() {
@@ -1793,60 +3226,113 @@ export default function App() {
           <div className="text-xs font-semibold text-neutral-700 dark:text-neutral-200">Workspace Window</div>
         </div>
         <div className="px-2.5 py-2 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center gap-1.5 bg-neutral-100 dark:bg-neutral-900/80">
+          <div className="inline-flex items-center gap-1.5">
+            <button
+              type="button"
+              title="Agent Orchestrator"
+              aria-label="Agent Orchestrator"
+              className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+                dockTab === 'orchestrator'
+                  ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+              }`}
+              onClick={() => setDockTab('orchestrator')}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="2.5" y="2.5" width="11" height="11" rx="1.8" stroke="currentColor" strokeWidth="1.1" />
+                <circle cx="6" cy="6" r="1.2" fill="currentColor" />
+                <circle cx="10" cy="6" r="1.2" fill="currentColor" />
+                <circle cx="8" cy="10" r="1.2" fill="currentColor" />
+                <path d="M7 6H9" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M6.7 6.8L7.6 9.2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M9.3 6.8L8.4 9.2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              title="Workspace Folder"
+              aria-label="Workspace Folder"
+              className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+                dockTab === 'explorer'
+                  ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+              }`}
+              onClick={() => setDockTab('explorer')}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M2.5 4.5C2.5 3.95 2.95 3.5 3.5 3.5H6.2L7 4.5H12.5C13.05 4.5 13.5 4.95 13.5 5.5V11.5C13.5 12.05 13.05 12.5 12.5 12.5H3.5C2.95 12.5 2.5 12.05 2.5 11.5V4.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              title="Git"
+              aria-label="Git"
+              className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+                dockTab === 'git'
+                  ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+              }`}
+              onClick={() => setDockTab('git')}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="4" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.2" />
+                <circle cx="12" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.2" />
+                <circle cx="8" cy="12" r="1.5" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M5.3 4H10.7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <path d="M4.7 5.1L7.3 10.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <path d="M11.3 5.1L8.7 10.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              title="Workspace settings"
+              aria-label="Workspace settings"
+              className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+                dockTab === 'settings'
+                  ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+              }`}
+              onClick={openWorkspaceSettingsTab}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 2.2L9 3.1L10.4 2.8L11.2 4.1L12.6 4.4L12.5 5.9L13.6 6.8L12.8 8L13.6 9.2L12.5 10.1L12.6 11.6L11.2 11.9L10.4 13.2L9 12.9L8 13.8L7 12.9L5.6 13.2L4.8 11.9L3.4 11.6L3.5 10.1L2.4 9.2L3.2 8L2.4 6.8L3.5 5.9L3.4 4.4L4.8 4.1L5.6 2.8L7 3.1L8 2.2Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+                <circle cx="8" cy="8" r="1.9" stroke="currentColor" strokeWidth="1.1" />
+              </svg>
+            </button>
+          </div>
           <button
             type="button"
-            title="Explorer"
-            aria-label="Explorer"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
-              dockTab === 'explorer'
-                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
-            }`}
-            onClick={() => setDockTab('explorer')}
+            title={`Dock workspace window to ${workspaceDockSide === 'right' ? 'left' : 'right'}`}
+            aria-label={`Dock workspace window to ${workspaceDockSide === 'right' ? 'left' : 'right'}`}
+            className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+            onClick={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M2.5 4.5C2.5 3.95 2.95 3.5 3.5 3.5H6.2L7 4.5H12.5C13.05 4.5 13.5 4.95 13.5 5.5V11.5C13.5 12.05 13.05 12.5 12.5 12.5H3.5C2.95 12.5 2.5 12.05 2.5 11.5V4.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            title="Git"
-            aria-label="Git"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
-              dockTab === 'git'
-                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
-            }`}
-            onClick={() => setDockTab('git')}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <circle cx="4" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.2" />
-              <circle cx="12" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.2" />
-              <circle cx="8" cy="12" r="1.5" stroke="currentColor" strokeWidth="1.2" />
-              <path d="M5.3 4H10.7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              <path d="M4.7 5.1L7.3 10.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              <path d="M11.3 5.1L8.7 10.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            title="Workspace settings"
-            aria-label="Workspace settings"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
-              dockTab === 'settings'
-                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
-            }`}
-            onClick={openWorkspaceSettingsTab}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M8 2.2L9 3.1L10.4 2.8L11.2 4.1L12.6 4.4L12.5 5.9L13.6 6.8L12.8 8L13.6 9.2L12.5 10.1L12.6 11.6L11.2 11.9L10.4 13.2L9 12.9L8 13.8L7 12.9L5.6 13.2L4.8 11.9L3.4 11.6L3.5 10.1L2.4 9.2L3.2 8L2.4 6.8L3.5 5.9L3.4 4.4L4.8 4.1L5.6 2.8L7 3.1L8 2.2Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-              <circle cx="8" cy="8" r="1.9" stroke="currentColor" strokeWidth="1.1" />
+              <rect x="2.2" y="2.3" width="11.6" height="11.4" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
+              {workspaceDockSide === 'right' ? (
+                <>
+                  <path d="M10 3.2H13V12.8H10Z" fill="currentColor" fillOpacity="0.3" />
+                  <path d="M7.7 8H4.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+                  <path d="M6 6.4L4.4 8L6 9.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+                </>
+              ) : (
+                <>
+                  <path d="M3 3.2H6V12.8H3Z" fill="currentColor" fillOpacity="0.3" />
+                  <path d="M8.3 8H11.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+                  <path d="M10 6.4L11.6 8L10 9.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+                </>
+              )}
             </svg>
           </button>
         </div>
         <div className="flex-1 min-h-0">
-          {dockTab === 'explorer' ? renderExplorerPane() : dockTab === 'git' ? renderGitPane() : renderWorkspaceSettingsPane()}
+          {dockTab === 'orchestrator'
+            ? renderAgentOrchestratorPane()
+            : dockTab === 'explorer'
+              ? renderExplorerPane()
+              : dockTab === 'git'
+                ? renderGitPane()
+                : renderWorkspaceSettingsPane()}
         </div>
       </div>
     )
@@ -2137,7 +3623,10 @@ export default function App() {
   async function sendToAgent(winId: string, text: string, imagePaths: string[] = []) {
     const w = panels.find((x) => x.id === winId)
     if (!w) return
+    const interactionMode = parseInteractionMode(w.interactionMode)
     const provider = getModelProvider(w.model)
+    const modePrompt = INTERACTION_MODE_META[interactionMode].promptPrefix
+    const outgoingText = modePrompt ? `${modePrompt}\n\n${text}` : text
     try {
       appendPanelDebug(winId, 'send', `Received user message (${text.length} chars)`)
       setPanels((prev) =>
@@ -2181,7 +3670,7 @@ export default function App() {
       if (provider !== 'codex' && imagePaths.length > 0) {
         throw new Error('Image attachments are currently supported for Codex panels only.')
       }
-      await withTimeout(api.sendMessage(winId, text, imagePaths), TURN_START_TIMEOUT_MS, 'turn/start')
+      await withTimeout(api.sendMessage(winId, outgoingText, imagePaths), TURN_START_TIMEOUT_MS, 'turn/start')
       appendPanelDebug(winId, 'turn/start', 'Turn started')
     } catch (e: any) {
       const errMsg = formatConnectionError(e)
@@ -2245,45 +3734,50 @@ export default function App() {
       )
       return
     }
+    let snapshotForHistory: AgentPanelState | null = null
     setPanels((prev) =>
       prev.map((x) => {
         if (x.id !== winId) return x
         if (isBusy) {
           appendPanelDebug(winId, 'queue', `Panel busy - queued message (${text.length} chars)`)
-          return {
+          const queuedMessage: ChatMessage = { id: newId(), role: 'user', content: text, format: 'text' }
+          const updated: AgentPanelState = {
             ...x,
             input: '',
             pendingInputs: [...x.pendingInputs, text],
-            messages: [...x.messages, { id: newId(), role: 'user', content: text, format: 'text' }],
+            messages: [...x.messages, queuedMessage],
           }
+          snapshotForHistory = updated
+          return updated
         }
         appendPanelDebug(winId, 'queue', 'Panel idle - sending immediately')
-        return {
+        const userMessage: ChatMessage = {
+          id: newId(),
+          role: 'user',
+          content: text,
+          format: 'text',
+          attachments: messageAttachments.length > 0 ? messageAttachments : undefined,
+        }
+        const updated: AgentPanelState = {
           ...x,
           input: '',
           attachments: [],
           streaming: true,
           status: 'Preparing message...',
-          messages: [
-            ...x.messages,
-            {
-              id: newId(),
-              role: 'user',
-              content: text,
-              format: 'text',
-              attachments: messageAttachments.length > 0 ? messageAttachments : undefined,
-            },
-          ],
+          messages: [...x.messages, userMessage],
         }
+        snapshotForHistory = updated
+        return updated
       }),
     )
+    if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
 
     if (!isBusy) void sendToAgent(winId, text, imagePaths)
   }
 
   async function closePanel(panelId: string) {
     const panel = panelsRef.current.find((w) => w.id === panelId)
-    if (panel) archivePanelToHistory(panel)
+    if (panel) upsertPanelToHistory(panel)
     await api.disconnect(panelId).catch(() => {})
     setPanels((prev) => prev.filter((w) => w.id !== panelId))
   }
@@ -2298,7 +3792,6 @@ export default function App() {
               model: nextModel,
               connected: false,
               status: 'Switching model...',
-              messages: [...w.messages, { id: newId(), role: 'system', content: `Switching model to ${nextModel}...`, format: 'text' }],
             },
       ),
     )
@@ -2312,9 +3805,11 @@ export default function App() {
       setPanels((prev) =>
         prev.map((w) => {
           if (w.id !== winId) return w
-          const msgs = [...w.messages, { id: newId(), role: 'system' as const, content: `Connected with ${nextModel}.`, format: 'text' as const }]
-          if (msgs[0]?.role === 'system') msgs[0] = { ...msgs[0], content: `Local agent using ${nextModel}. Complete all tasks fully. Do not stop after describing a plan - execute the plan. Continue until the work is done.` }
-          return { ...w, cwd: workspaceRoot, messages: msgs }
+          return {
+            ...w,
+            cwd: workspaceRoot,
+            messages: withReadyAck(withModelBanner(w.messages, nextModel)),
+          }
         }),
       )
     } catch (e) {
@@ -2327,6 +3822,59 @@ export default function App() {
     }
   }
 
+  function setInteractionMode(panelId: string, nextMode: AgentInteractionMode) {
+    setPanels((prev) =>
+      prev.map((p) =>
+        p.id === panelId
+          ? {
+              ...p,
+              interactionMode: nextMode,
+              status: `Mode set to ${INTERACTION_MODE_META[nextMode].label}.`,
+            }
+          : p,
+      ),
+    )
+  }
+
+  function setPanelSandbox(panelId: string, next: SandboxMode) {
+    setPanels((prev) =>
+      prev.map((p) =>
+        p.id === panelId
+          ? {
+              ...p,
+              sandbox: next,
+              permissionMode: next === 'read-only' ? 'verify-first' : p.permissionMode,
+              connected: false,
+              status:
+                next === 'read-only'
+                  ? 'Sandbox set to read-only. Permissions locked to Verify first.'
+                  : `Sandbox set to ${next} (reconnect on next send).`,
+            }
+          : p,
+      ),
+    )
+    setSettingsPopoverByPanel((prev) => ({ ...prev, [panelId]: null }))
+  }
+
+  function setPanelPermission(panelId: string, next: PermissionMode) {
+    setPanels((prev) =>
+      prev.map((p) =>
+        p.id === panelId
+          ? {
+              ...p,
+              permissionMode: next,
+              connected: false,
+              status:
+                next === 'proceed-always'
+                  ? 'Permissions set: Proceed always (reconnect on next send).'
+                  : 'Permissions set: Verify first (reconnect on next send).',
+            }
+          : p,
+      ),
+    )
+    setSettingsPopoverByPanel((prev) => ({ ...prev, [panelId]: null }))
+  }
+
   function renderExplorerNode(node: WorkspaceTreeNode, depth = 0): React.ReactNode {
     const rowPadding = 8 + depth * 10
     if (node.type === 'file') {
@@ -2337,7 +3885,7 @@ export default function App() {
           type="button"
           role="treeitem"
           aria-selected={selected}
-          className={`w-full appearance-none text-left py-1 pr-2 rounded-md text-[12px] flex items-center gap-2 truncate border border-transparent bg-transparent hover:bg-transparent active:bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-blue-400/60 ${
+          className={`w-full appearance-none text-left py-1 pr-2 rounded-md text-xs font-mono flex items-center gap-2 truncate border border-transparent bg-transparent hover:bg-transparent active:bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-blue-400/60 ${
             selected
               ? 'border-blue-300 text-blue-800 dark:border-blue-800 dark:text-blue-100'
               : 'text-neutral-700 hover:border-neutral-300 dark:text-neutral-300 dark:hover:border-neutral-700'
@@ -2359,13 +3907,13 @@ export default function App() {
           type="button"
           role="treeitem"
           aria-expanded={expanded}
-          className="w-full appearance-none text-left py-1 pr-2 rounded-md text-[12px] flex items-center gap-2 truncate border border-transparent bg-transparent hover:bg-transparent active:bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-blue-400/60 text-neutral-700 hover:border-neutral-300 dark:text-neutral-200 dark:hover:border-neutral-700"
+          className="w-full appearance-none text-left py-1 pr-2 rounded-md text-xs font-mono flex items-center gap-2 truncate border border-transparent bg-transparent hover:bg-transparent active:bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-blue-400/60 text-neutral-700 hover:border-neutral-300 dark:text-neutral-200 dark:hover:border-neutral-700"
           style={{ paddingLeft: `${rowPadding}px` }}
           onClick={() => toggleDirectory(node.relativePath)}
           title={node.relativePath}
         >
           <span className="w-3 text-neutral-500 dark:text-neutral-400">{expanded ? '▾' : '▸'}</span>
-          <span className="truncate font-medium">{node.name}</span>
+          <span className="truncate">{node.name}</span>
         </button>
         {expanded && (
           <div role="group" className="ml-3 border-l border-neutral-200/70 dark:border-neutral-800/80 pl-1">
@@ -2381,7 +3929,7 @@ export default function App() {
       <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
         <div className="px-3 py-2.5 text-xs">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-medium text-neutral-700 dark:text-neutral-300">Workspace files</span>
+            <span className="font-medium text-neutral-700 dark:text-neutral-300">Workspace folder</span>
           </div>
           <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
             <div className="flex items-center gap-2">
@@ -2417,8 +3965,8 @@ export default function App() {
                 type="button"
                 className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
                 onClick={() => refreshWorkspaceTree()}
-                title="Refresh files"
-                aria-label="Refresh files"
+                title="Refresh workspace folder"
+                aria-label="Refresh workspace folder"
               >
                 <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true">
                   <path d="M10 6A4 4 0 1 1 8.83 3.17" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
@@ -2453,7 +4001,7 @@ export default function App() {
           </div>
         </div>
         <div className="flex-1 overflow-auto px-2 pb-2">
-          {workspaceTreeLoading && <p className="text-xs text-neutral-500 dark:text-neutral-400 px-1">Loading files...</p>}
+          {workspaceTreeLoading && <p className="text-xs text-neutral-500 dark:text-neutral-400 px-1">Loading workspace folder...</p>}
           {!workspaceTreeLoading && workspaceTreeError && (
             <p className="text-xs text-red-600 dark:text-red-400 px-1">{workspaceTreeError}</p>
           )}
@@ -2463,7 +4011,7 @@ export default function App() {
             </div>
           )}
           {!workspaceTreeLoading && !workspaceTreeError && (
-            <div role="tree" aria-label="Workspace files">
+            <div role="tree" aria-label="Workspace folder">
               {workspaceTree.map((node) => renderExplorerNode(node))}
             </div>
           )}
@@ -2528,7 +4076,7 @@ export default function App() {
             >
               <div className="flex items-start gap-2">
                 <span className={`px-1.5 py-0.5 rounded text-[10px] ${gitEntryClass(entry)}`}>{gitStatusText(entry)}</span>
-                <span className="truncate flex-1">{entry.relativePath}</span>
+                <span className={`truncate flex-1 ${isDeletedGitEntry(entry) ? 'line-through' : ''}`}>{entry.relativePath}</span>
               </div>
               {entry.renamedFrom && (
                 <div className="pl-8 text-[10px] text-neutral-500 dark:text-neutral-400 truncate">
@@ -2543,6 +4091,9 @@ export default function App() {
   }
 
   function renderWorkspaceSettingsPane() {
+    const baselineForm = buildWorkspaceForm('edit')
+    const isWorkspaceSettingsDirty = !workspaceFormsEqual(workspaceForm, baselineForm)
+    const canSaveWorkspaceSettings = isWorkspaceSettingsDirty && Boolean(workspaceForm.path.trim())
     return (
       <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
         <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
@@ -2560,10 +4111,15 @@ export default function App() {
                 />
                 <button
                   type="button"
-                  className={UI_BUTTON_SECONDARY_CLASS}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
                   onClick={browseForWorkspaceIntoForm}
+                  title="Browse for workspace folder"
+                  aria-label="Browse for workspace folder"
                 >
-                  Browse
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M2.5 4.5H6.2L7.4 5.7H13.5V11.8C13.5 12.4 13.1 12.8 12.5 12.8H3.5C2.9 12.8 2.5 12.4 2.5 11.8V4.5Z" stroke="currentColor" strokeWidth="1.1" />
+                    <path d="M2.5 6.2H13.5" stroke="currentColor" strokeWidth="1.1" />
+                  </svg>
                 </button>
               </div>
             </div>
@@ -2630,7 +4186,7 @@ export default function App() {
             )}
             <div className="space-y-1.5">
               <span className="text-neutral-600 dark:text-neutral-400">Debug controls</span>
-              <label className="inline-flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300">
+              <label className="flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300">
                 <input
                   type="checkbox"
                   checked={Boolean(workspaceForm.debug)}
@@ -2643,16 +4199,53 @@ export default function App() {
                 />
                 <span>Show panel activity/debug controls</span>
               </label>
+              <div className="pt-1 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  onClick={() => void saveWorkspaceSettings()}
+                  disabled={!canSaveWorkspaceSettings}
+                  title="Save workspace settings"
+                  aria-label="Save workspace settings"
+                >
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M3 3.2H11.6L13 4.6V12.8H3V3.2Z" stroke="currentColor" strokeWidth="1.1" />
+                    <path d="M5 3.2V6.6H10.7V3.2" stroke="currentColor" strokeWidth="1.1" />
+                    <rect x="5" y="9.2" width="6" height="2.6" stroke="currentColor" strokeWidth="1.1" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  onClick={() => setWorkspaceForm(baselineForm)}
+                  disabled={!isWorkspaceSettingsDirty}
+                  title="Revert unsaved changes"
+                  aria-label="Revert unsaved changes"
+                >
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M5.2 5.1H2.8V2.7" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M2.8 5.1C3.8 3.8 5.3 3 7 3C9.9 3 12.2 5.3 12.2 8.2C12.2 11.1 9.9 13.4 7 13.4C5.4 13.4 4 12.7 3.1 11.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
         </div>
-        <div className="px-3 py-3 border-t border-neutral-200/80 dark:border-neutral-800">
+      </div>
+    )
+  }
+
+  function renderAgentOrchestratorPane() {
+    return (
+      <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
+        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
+          <div className="font-medium text-neutral-700 dark:text-neutral-300">Agent Orchestrator</div>
           <button
             type="button"
-            className={`${UI_BUTTON_PRIMARY_CLASS} w-full`}
-            onClick={saveWorkspaceSettings}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-[11px] text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            onClick={() => window.open('https://barnaby.build/orchestrator', '_blank', 'noopener,noreferrer')}
           >
-            Save
+            More Informatin
           </button>
         </div>
       </div>
@@ -2660,7 +4253,38 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-full min-w-0 max-w-full overflow-hidden flex flex-col bg-neutral-100 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
+    <div className="theme-preset h-screen w-full min-w-0 max-w-full overflow-hidden flex flex-col bg-neutral-100 text-neutral-950 dark:bg-black dark:text-neutral-100">
+      <style>{`
+        .theme-preset .bg-blue-600 { background-color: var(--theme-accent-600) !important; }
+        .theme-preset .hover\\:bg-blue-500:hover { background-color: var(--theme-accent-500) !important; }
+        .theme-preset .border-blue-500 { border-color: var(--theme-accent-600) !important; }
+        .theme-preset .text-blue-700,
+        .theme-preset .text-blue-800,
+        .theme-preset .text-blue-900 { color: var(--theme-accent-700) !important; }
+        .theme-preset .bg-blue-50,
+        .theme-preset .bg-blue-100,
+        .theme-preset .bg-blue-50\\/90,
+        .theme-preset .bg-blue-50\\/70 { background-color: var(--theme-accent-soft) !important; }
+        .theme-preset .border-blue-200,
+        .theme-preset .border-blue-300 { border-color: color-mix(in srgb, var(--theme-accent-500) 40%, white) !important; }
+        .theme-preset .text-blue-950 { color: var(--theme-accent-700) !important; }
+        .dark .theme-preset .dark\\:bg-blue-950,
+        .dark .theme-preset .dark\\:bg-blue-950\\/20,
+        .dark .theme-preset .dark\\:bg-blue-950\\/25,
+        .dark .theme-preset .dark\\:bg-blue-950\\/30,
+        .dark .theme-preset .dark\\:bg-blue-950\\/40,
+        .dark .theme-preset .dark\\:bg-blue-950\\/50,
+        .dark .theme-preset .dark\\:bg-blue-900\\/40 { background-color: var(--theme-accent-soft-dark) !important; }
+        .dark .theme-preset .dark\\:text-blue-100,
+        .dark .theme-preset .dark\\:text-blue-200,
+        .dark .theme-preset .dark\\:text-blue-300 { color: var(--theme-accent-text) !important; }
+        .dark .theme-preset .dark\\:border-blue-900,
+        .dark .theme-preset .dark\\:border-blue-800,
+        .dark .theme-preset .dark\\:border-blue-900\\/60,
+        .dark .theme-preset .dark\\:border-blue-900\\/70 { border-color: color-mix(in srgb, var(--theme-accent-500) 50%, black) !important; }
+        .dark .theme-preset .dark\\:bg-neutral-950 { background-color: var(--theme-dark-950) !important; }
+        .dark .theme-preset .dark\\:bg-neutral-900 { background-color: var(--theme-dark-900) !important; }
+      `}</style>
       <div className="shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 px-4 py-3 bg-white dark:bg-neutral-950">
         <div className="flex flex-wrap items-center justify-between gap-2.5 text-xs min-w-0">
           <div className="flex items-center gap-1.5 min-w-0">
@@ -2668,7 +4292,9 @@ export default function App() {
             <select
               className={`h-9 px-3 rounded-lg font-mono shadow-sm w-[34vw] max-w-[440px] min-w-[220px] ${UI_INPUT_CLASS}`}
               value={workspaceList.includes(workspaceRoot) ? workspaceRoot : workspaceList[0] ?? ''}
-              onChange={(e) => applyWorkspaceRoot(e.target.value)}
+              onChange={(e) => {
+                requestWorkspaceSwitch(e.target.value, 'dropdown')
+              }}
             >
               {workspaceList.map((p) => (
                 <option key={p} value={p}>
@@ -2711,7 +4337,7 @@ export default function App() {
               }}
             >
               <option value="">Open chat...</option>
-              {chatHistory.map((entry) => (
+              {workspaceScopedHistory.map((entry) => (
                 <option key={entry.id} value={entry.id}>
                   {formatHistoryOptionLabel(entry)}
                 </option>
@@ -2720,7 +4346,7 @@ export default function App() {
             <button
               type="button"
               className={`${UI_ICON_BUTTON_CLASS} shrink-0 disabled:opacity-50 disabled:cursor-not-allowed`}
-              onClick={createAgentPanel}
+              onClick={() => createAgentPanel()}
               title={panels.length >= MAX_PANELS ? `Maximum ${MAX_PANELS} chats open` : 'New chat'}
               aria-label="New chat"
               disabled={panels.length >= MAX_PANELS}
@@ -2791,11 +4417,12 @@ export default function App() {
       <div className="relative flex-1 min-h-0 min-w-0 bg-gradient-to-b from-neutral-100/90 to-neutral-100/60 dark:from-neutral-900 dark:to-neutral-950">
         <div ref={layoutRef} className="h-full flex flex-col min-h-0 min-w-0">
           {(() => {
-            const layoutPaneIds = [
-              ...panels.map((p) => p.id),
-              ...editorPanels.map((p) => p.id),
-              ...(showWorkspaceWindow ? (['workspace-window'] as const) : []),
-            ]
+            const contentPaneIds = [...panels.map((p) => p.id), ...editorPanels.map((p) => p.id)]
+            const layoutPaneIds = showWorkspaceWindow
+              ? workspaceDockSide === 'left'
+                ? ['workspace-window', ...contentPaneIds]
+                : [...contentPaneIds, 'workspace-window']
+              : contentPaneIds
             if (layoutPaneIds.length === 1) {
               const id = layoutPaneIds[0]
               if (id === 'workspace-window') {
@@ -2820,8 +4447,9 @@ export default function App() {
                 // react-resizable-panels uses orientation as the pane flow direction, so we map accordingly.
                 const paneFlowOrientation = layoutMode === 'horizontal' ? 'vertical' : 'horizontal'
                 const contentPaneCount = panels.length + editorPanels.length
+                const layoutGroupKey = `${paneFlowOrientation}:${workspaceDockSide}:${showWorkspaceWindow ? '1' : '0'}:${layoutPaneIds.join('|')}`
                 return (
-                  <Group orientation={paneFlowOrientation} className="flex-1 min-h-0 min-w-0" id="main-layout">
+                  <Group key={layoutGroupKey} orientation={paneFlowOrientation} className="flex-1 min-h-0 min-w-0" id="main-layout">
                     {(layoutPaneIds as string[]).map((panelId, idx) => (
                       <React.Fragment key={panelId}>
                         {idx > 0 && (
@@ -2994,6 +4622,246 @@ export default function App() {
         </div>
       )}
 
+      {showAppSettingsModal && (
+        <div className={MODAL_BACKDROP_CLASS}>
+          <div className={`w-full max-w-2xl ${MODAL_CARD_CLASS} max-h-[90vh] flex flex-col`}>
+            <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0">
+              <div className="font-medium">Application settings</div>
+              <button
+                className={UI_CLOSE_ICON_BUTTON_CLASS}
+                onClick={() => setShowAppSettingsModal(false)}
+                title="Close"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4 overflow-auto flex-1 space-y-5">
+              <section className="space-y-2">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Startup</div>
+                <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={applicationSettings.restoreSessionOnStartup}
+                    onChange={(e) =>
+                      setApplicationSettings((prev) => ({
+                        ...prev,
+                        restoreSessionOnStartup: e.target.checked,
+                      }))
+                    }
+                  />
+                  Restore windows, layout, chats, and editor tabs after restart or crash
+                </label>
+              </section>
+
+              <section className="space-y-3">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Appearance</div>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+                    <input
+                      type="radio"
+                      name="app-theme-mode"
+                      checked={theme === 'dark'}
+                      onChange={() => setTheme('dark')}
+                    />
+                    Black
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+                    <input
+                      type="radio"
+                      name="app-theme-mode"
+                      checked={theme === 'light'}
+                      onChange={() => setTheme('light')}
+                    />
+                    Light
+                  </label>
+                </div>
+                <div>
+                  <div className="text-xs text-neutral-600 dark:text-neutral-400 mb-2">Theme preset</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {THEME_PRESETS.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() =>
+                          setApplicationSettings((prev) => ({
+                            ...prev,
+                            themePresetId: preset.id,
+                          }))
+                        }
+                        className={`px-3 py-2 rounded-md border text-left text-sm ${
+                          applicationSettings.themePresetId === preset.id
+                            ? 'border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
+                            : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+                        }`}
+                      >
+                        <span>{preset.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Responses</div>
+                <div className="space-y-2 text-sm text-neutral-700 dark:text-neutral-300">
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="response-style"
+                      checked={applicationSettings.responseStyle === 'concise'}
+                      onChange={() =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          responseStyle: 'concise',
+                        }))
+                      }
+                    />
+                    <span>
+                      <span className="font-medium">Concise</span>
+                      <span className="block text-xs text-neutral-500 dark:text-neutral-400">Show direct answers only; hide progress traces.</span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="response-style"
+                      checked={applicationSettings.responseStyle === 'standard'}
+                      onChange={() =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          responseStyle: 'standard',
+                        }))
+                      }
+                    />
+                    <span>
+                      <span className="font-medium">Standard</span>
+                      <span className="block text-xs text-neutral-500 dark:text-neutral-400">Hide repetitive progress; keep useful in-turn context.</span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="response-style"
+                      checked={applicationSettings.responseStyle === 'detailed'}
+                      onChange={() =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          responseStyle: 'detailed',
+                        }))
+                      }
+                    />
+                    <span>
+                      <span className="font-medium">Detailed</span>
+                      <span className="block text-xs text-neutral-500 dark:text-neutral-400">Show all progress and intermediary reasoning updates.</span>
+                    </span>
+                  </label>
+                </div>
+              </section>
+
+              <section className="space-y-2">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Diagnostics</div>
+                <div className="text-xs text-neutral-600 dark:text-neutral-400">
+                  Runtime logs and persisted state are stored in your Barnaby user data folder.
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                    onClick={() => {
+                      setDiagnosticsActionStatus(null)
+                      void (async () => {
+                        try {
+                          const result = await api.openRuntimeLog?.()
+                          if (!result?.ok) {
+                            setDiagnosticsActionStatus(result?.error ? `Could not open runtime log: ${result.error}` : 'Could not open runtime log.')
+                            return
+                          }
+                          setDiagnosticsActionStatus('Opened runtime log.')
+                        } catch (err) {
+                          setDiagnosticsActionStatus(`Could not open runtime log: ${formatError(err)}`)
+                        }
+                      })()
+                    }}
+                  >
+                    Open runtime log
+                  </button>
+                  {diagnosticsActionStatus && (
+                    <span className="text-xs text-neutral-600 dark:text-neutral-400">{diagnosticsActionStatus}</span>
+                  )}
+                </div>
+                {diagnosticsError && (
+                  <div className="text-xs text-red-600 dark:text-red-400">{diagnosticsError}</div>
+                )}
+                {diagnosticsInfo && (
+                  <div className="space-y-1 text-xs font-mono text-neutral-700 dark:text-neutral-300">
+                    <div><span className="font-semibold">userData</span>: {diagnosticsInfo.userDataPath}</div>
+                    <div><span className="font-semibold">storage</span>: {diagnosticsInfo.storageDir}</div>
+                    <div><span className="font-semibold">runtime log</span>: {diagnosticsInfo.runtimeLogPath}</div>
+                    <div><span className="font-semibold">app state</span>: {diagnosticsInfo.appStatePath}</div>
+                    <div><span className="font-semibold">chat history</span>: {diagnosticsInfo.chatHistoryPath}</div>
+                  </div>
+                )}
+              </section>
+            </div>
+            <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end">
+              <button
+                className={UI_BUTTON_PRIMARY_CLASS}
+                onClick={() => setShowAppSettingsModal(false)}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingWorkspaceSwitch && (
+        <div className={MODAL_BACKDROP_CLASS}>
+          <div className={`w-full max-w-lg ${MODAL_CARD_CLASS}`}>
+            <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+              <div className="font-medium">Switch workspace?</div>
+              <button
+                className={UI_CLOSE_ICON_BUTTON_CLASS}
+                onClick={() => setPendingWorkspaceSwitch(null)}
+                title="Close"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4 space-y-3 text-sm">
+              <div className="text-neutral-700 dark:text-neutral-300">
+                This will close current windows for this workspace and load the saved layout + chat history for:
+              </div>
+              <div className="font-mono text-xs rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-2 break-all">
+                {pendingWorkspaceSwitch.targetRoot}
+              </div>
+            </div>
+            <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end gap-2">
+              <button
+                type="button"
+                className={UI_BUTTON_SECONDARY_CLASS}
+                onClick={() => setPendingWorkspaceSwitch(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={UI_BUTTON_PRIMARY_CLASS}
+                onClick={() => void confirmWorkspaceSwitch()}
+              >
+                Switch workspace
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showWorkspacePicker && (
         <div className={MODAL_BACKDROP_CLASS}>
           <div className={`w-full max-w-xl ${MODAL_CARD_CLASS}`}>
@@ -3022,7 +4890,7 @@ export default function App() {
                         : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
                     }`}
                     onClick={() => {
-                      applyWorkspaceRoot(p)
+                      requestWorkspaceSwitch(p, 'picker')
                       setShowWorkspacePicker(false)
                     }}
                   >
@@ -3047,7 +4915,7 @@ export default function App() {
                       debug: false,
                     },
                   }))
-                  applyWorkspaceRoot(selected)
+                  requestWorkspaceSwitch(selected, 'picker')
                   try {
                     await api.writeWorkspaceConfig?.(selected)
                   } catch {}
@@ -3229,10 +5097,15 @@ export default function App() {
                 />
                 <button
                   type="button"
-                  className={UI_BUTTON_SECONDARY_CLASS}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
                   onClick={browseForWorkspaceIntoForm}
+                  title="Browse for workspace folder"
+                  aria-label="Browse for workspace folder"
                 >
-                  Browse
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M2.5 4.5H6.2L7.4 5.7H13.5V11.8C13.5 12.4 13.1 12.8 12.5 12.8H3.5C2.9 12.8 2.5 12.4 2.5 11.8V4.5Z" stroke="currentColor" strokeWidth="1.1" />
+                    <path d="M2.5 6.2H13.5" stroke="currentColor" strokeWidth="1.1" />
+                  </svg>
                 </button>
               </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
@@ -3299,9 +5172,10 @@ export default function App() {
                   </select>
                 </div>
               )}
-              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+              <div className="grid grid-cols-[140px_1fr] gap-2">
                 <span className="text-neutral-600 dark:text-neutral-400">Debug controls</span>
-                <label className="inline-flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300">
+                <div />
+                <label className="col-start-2 flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300">
                   <input
                     type="checkbox"
                     checked={Boolean(workspaceForm.debug)}
@@ -3323,7 +5197,7 @@ export default function App() {
                     className="px-3 py-1.5 text-sm rounded border border-red-300 bg-white text-red-600 hover:bg-red-50 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400 dark:hover:bg-red-900/30"
                     onClick={() => {
                       if (confirm(`Delete workspace "${workspaceForm.path}"?`)) {
-                        deleteWorkspace(workspaceForm.path)
+                        void deleteWorkspace(workspaceForm.path)
                       }
                     }}
                   >
@@ -3359,21 +5233,29 @@ export default function App() {
     const panelFontSizePx = 14 * w.fontScale
     const panelLineHeightPx = 24 * w.fontScale
     const panelTextStyle = { fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }
+    const activity = panelActivityById[w.id]
+    const msSinceLastActivity = activity ? activityClock - activity.lastEventAt : Number.POSITIVE_INFINITY
+    const isRunning = isBusy
+    const isQueued = !isRunning && queueCount > 0
+    const isFinalComplete = !isRunning && !isQueued && activity?.lastEventLabel === 'Turn complete'
+    const hasRecentActivity = msSinceLastActivity < 4000
+    const activityDotClass = isRunning
+      ? 'bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.15)]'
+      : isQueued
+        ? 'bg-amber-500'
+        : isFinalComplete
+          ? 'bg-emerald-500'
+      : hasRecentActivity
+        ? 'bg-sky-500/90'
+        : 'bg-neutral-300 dark:bg-neutral-700'
+    const activityLabel = isRunning ? 'running' : isQueued ? 'queued' : isFinalComplete ? 'done' : hasRecentActivity ? 'recent' : 'idle'
     const sendTitle = isBusy
       ? hasInput
         ? `Queue message${queueCount > 0 ? ` (${queueCount} queued)` : ''}`
         : 'Busy'
-      : 'Send'
-    const activity = panelActivityById[w.id]
-    const msSinceLastActivity = activity ? activityClock - activity.lastEventAt : Number.POSITIVE_INFINITY
-    const isRunning = isBusy
-    const hasRecentActivity = msSinceLastActivity < 4000
-    const activityDotClass = isRunning
-      ? 'bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.15)]'
-      : hasRecentActivity
-        ? 'bg-sky-500/90'
-        : 'bg-neutral-300 dark:bg-neutral-700'
-    const activityLabel = isRunning ? 'running' : hasRecentActivity ? 'recent' : 'idle'
+      : isFinalComplete && !hasInput
+        ? 'Done'
+        : 'Send'
     const secondsAgo = Number.isFinite(msSinceLastActivity) ? Math.max(0, Math.floor(msSinceLastActivity / 1000)) : null
     const activityTitle = activity
       ? `Activity: ${activityLabel}\nLast event: ${activity.lastEventLabel}\n${secondsAgo}s ago\nEvents seen: ${activity.totalEvents}`
@@ -3382,9 +5264,22 @@ export default function App() {
     const activityOpen = Boolean(activityOpenByPanel[w.id])
     const debugItems = panelDebugById[w.id] ?? []
     const debugOpen = Boolean(debugOpenByPanel[w.id])
+    const settingsPopover = settingsPopoverByPanel[w.id] ?? null
+    const interactionMode = parseInteractionMode(w.interactionMode)
     const panelWorkspaceSettings =
       workspaceSettingsByPath[w.cwd] ?? workspaceSettingsByPath[workspaceRoot]
     const debugControlsVisible = Boolean(panelWorkspaceSettings?.debug)
+    const presentationMessages = filterMessagesForPresentation(w.messages, applicationSettings.responseStyle)
+    const contextUsage = estimatePanelContextUsage(w)
+    const contextUsagePercent = contextUsage ? Math.max(0, Number(contextUsage.usedPercent.toFixed(1))) : null
+    const contextUsageBarClass =
+      contextUsagePercent === null
+        ? ''
+        : contextUsagePercent >= 95
+          ? 'bg-red-600'
+          : contextUsagePercent >= 85
+            ? 'bg-amber-500'
+            : 'bg-emerald-600'
 
     return (
       <div
@@ -3445,7 +5340,7 @@ export default function App() {
           className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 space-y-2.5 bg-neutral-50 dark:bg-neutral-950 min-h-0"
           style={panelTextStyle}
         >
-          {w.messages.length === 0 && (
+          {presentationMessages.length === 0 && (
             <div className="mx-auto mt-8 max-w-2xl rounded-2xl border border-dashed border-neutral-300 bg-white/90 px-5 py-5 text-sm shadow-sm dark:border-neutral-700 dark:bg-neutral-900/70">
               <div className="text-base font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
                 Start a new agent turn
@@ -3466,7 +5361,7 @@ export default function App() {
               </div>
             </div>
           )}
-          {w.messages.map((m) => {
+          {presentationMessages.map((m) => {
             let codeBlockIndex = 0
             const shouldCollapseThinking = m.role === 'assistant' && isLikelyThinkingUpdate(m.content)
             const thinkingOpen = thinkingOpenByMessageId[m.id] ?? false
@@ -3495,7 +5390,7 @@ export default function App() {
                     className="group rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-100/80 dark:bg-neutral-950/45"
                   >
                     <summary className="list-none cursor-pointer px-3 py-1.5 text-[10.5px] text-neutral-600 dark:text-neutral-400 flex items-center justify-between">
-                      <span>Thinking / progress updates</span>
+                      <span>Progress update</span>
                       <svg
                         width="12"
                         height="12"
@@ -3593,6 +5488,24 @@ export default function App() {
                                   </code>
                                 )
                               },
+                              a(props) {
+                                const { href, children } = props as any
+                                const target = typeof href === 'string' ? href : ''
+                                return (
+                                  <a
+                                    href={target || undefined}
+                                    title={target || undefined}
+                                    className="text-blue-700 underline underline-offset-2 decoration-blue-400 hover:text-blue-800 dark:text-blue-300 dark:hover:text-blue-200"
+                                    onClick={(e) => {
+                                      if (!target) return
+                                      e.preventDefault()
+                                      void onChatLinkClick(target)
+                                    }}
+                                  >
+                                    {children}
+                                  </a>
+                                )
+                              },
                             }}
                           >
                             {m.content}
@@ -3688,6 +5601,24 @@ export default function App() {
                             </code>
                           )
                         },
+                        a(props) {
+                          const { href, children } = props as any
+                          const target = typeof href === 'string' ? href : ''
+                          return (
+                            <a
+                              href={target || undefined}
+                              title={target || undefined}
+                              className="text-blue-700 underline underline-offset-2 decoration-blue-400 hover:text-blue-800 dark:text-blue-300 dark:hover:text-blue-200"
+                              onClick={(e) => {
+                                if (!target) return
+                                e.preventDefault()
+                                void onChatLinkClick(target)
+                              }}
+                            >
+                              {children}
+                            </a>
+                          )
+                        },
                       }}
                     >
                       {m.content}
@@ -3716,7 +5647,7 @@ export default function App() {
           })}
         </div>
 
-        <div className="border-t border-neutral-200/80 dark:border-neutral-800 p-2.5 bg-white dark:bg-neutral-950">
+        <div className="relative z-10 border-t border-neutral-200/80 dark:border-neutral-800 p-2.5 bg-white dark:bg-neutral-950">
           {w.attachments.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-1.5">
               {w.attachments.map((a) => (
@@ -3777,6 +5708,8 @@ export default function App() {
                   ? hasInput
                     ? 'border-neutral-400 bg-neutral-200 text-neutral-700 hover:bg-neutral-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-600'
                     : 'border-neutral-300 bg-neutral-200 text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400'
+                  : !hasInput && isFinalComplete
+                    ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
                   : hasInput
                     ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
                     : 'border-neutral-300 bg-neutral-100 text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-600',
@@ -3789,6 +5722,10 @@ export default function App() {
                 <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
                   <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeOpacity="0.28" strokeWidth="2" />
                   <path d="M10 3.5a6.5 6.5 0 0 1 6.5 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              ) : !hasInput && isFinalComplete ? (
+                <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                  <path d="M5.2 10.2L8.5 13.5L14.8 7.2" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               ) : (
                 <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
@@ -3806,7 +5743,7 @@ export default function App() {
           )}
         </div>
 
-        <div className="border-t border-neutral-200/80 dark:border-neutral-800 px-3 py-2 text-xs min-w-0 overflow-x-hidden bg-white/90 dark:bg-neutral-950">
+        <div className="relative z-20 border-t border-neutral-200/80 dark:border-neutral-800 px-3 py-2 text-xs min-w-0 overflow-visible bg-white/90 dark:bg-neutral-950">
           <div className="flex flex-wrap items-start justify-between gap-2 min-w-0">
             <div className="min-w-0 flex-1 text-neutral-600 dark:text-neutral-400 flex items-center gap-2 flex-wrap">
               <span
@@ -3856,6 +5793,24 @@ export default function App() {
                 </button>
               )}
               <span className="break-words [overflow-wrap:anywhere]">{w.status}</span>
+              {contextUsage && contextUsagePercent !== null && (
+                <span
+                  className="inline-flex items-center gap-2"
+                  title={`${contextUsagePercent.toFixed(1)}% used
+Estimated GPT context usage
+Model window: ${contextUsage.modelContextTokens.toLocaleString()} tokens
+Reserved output: ${contextUsage.outputReserveTokens.toLocaleString()} tokens
+Safe input budget: ${contextUsage.safeInputBudgetTokens.toLocaleString()} tokens
+Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
+                >
+                  <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
+                    <span
+                      className={`block h-full ${contextUsageBarClass}`}
+                      style={{ width: `${Math.max(0, Math.min(100, contextUsagePercent))}%` }}
+                    />
+                  </span>
+                </span>
+              )}
               {(() => {
                 const pct = getRateLimitPercent(w.usage)
                 const label = formatRateLimitLabel(w.usage)
@@ -3870,72 +5825,141 @@ export default function App() {
                 )
               })()}
             </div>
-            <div className="min-w-0 flex flex-wrap items-end justify-end gap-1.5">
-              <div className="rounded-md border border-neutral-200/80 bg-neutral-50/80 px-1.5 py-1 dark:border-neutral-800 dark:bg-neutral-900/70">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] text-neutral-600 dark:text-neutral-400">Sandbox</span>
-                  <select
-                    className="h-7 max-w-full text-[11px] rounded border border-neutral-300 bg-white text-neutral-900 px-1.5 py-0.5 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
-                    value={w.sandbox}
-                    onChange={(e) => {
-                      const next = e.target.value as SandboxMode
-                      setPanels((prev) =>
-                        prev.map((p) =>
-                          p.id === w.id
-                            ? {
-                                ...p,
-                                sandbox: next,
-                                permissionMode: next === 'read-only' ? 'verify-first' : p.permissionMode,
-                                connected: false,
-                                status:
-                                  next === 'read-only'
-                                    ? 'Sandbox set to read-only. Permissions locked to Verify first.'
-                                    : `Sandbox set to ${next} (reconnect on next send).`,
-                              }
-                            : p,
-                        ),
-                      )
-                    }}
-                  >
-                    <option value="read-only">Read only</option>
-                    <option value="workspace-write">Workspace write</option>
-                    <option value="danger-full-access">Danger full access</option>
-                  </select>
-                </div>
-              </div>
-              {w.sandbox !== 'read-only' && (
-                <div className="rounded-md border border-neutral-200/80 bg-neutral-50/80 px-1.5 py-1 dark:border-neutral-800 dark:bg-neutral-900/70">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] text-neutral-600 dark:text-neutral-400">Permissions</span>
-                    <select
-                      className="h-7 max-w-full text-[11px] rounded border border-neutral-300 bg-white text-neutral-900 px-1.5 py-0.5 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
-                      value={w.permissionMode}
-                      onChange={(e) => {
-                        const next = e.target.value as PermissionMode
-                        setPanels((prev) =>
-                          prev.map((p) =>
-                            p.id === w.id
-                              ? {
-                                  ...p,
-                                  permissionMode: next,
-                                  connected: false,
-                                  status:
-                                    next === 'proceed-always'
-                                      ? 'Permissions set: Proceed always (reconnect on next send).'
-                                      : 'Permissions set: Verify first (reconnect on next send).',
-                                }
-                              : p,
-                          ),
-                        )
-                      }}
-                    >
-                      <option value="verify-first">Verify first</option>
-                      <option value="proceed-always">Proceed always</option>
-                    </select>
+            <div className="min-w-0 flex flex-wrap items-center justify-end gap-1.5">
+              <div className="relative" data-settings-popover-root="true">
+                <button
+                  type="button"
+                  className={[
+                    'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors',
+                    settingsPopover === 'mode'
+                      ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
+                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800',
+                  ].join(' ')}
+                  title={`Mode: ${INTERACTION_MODE_META[interactionMode].label}`}
+                  onClick={() =>
+                    setSettingsPopoverByPanel((prev) => ({
+                      ...prev,
+                      [w.id]: settingsPopover === 'mode' ? null : 'mode',
+                    }))
+                  }
+                >
+                  {renderInteractionModeSymbol(interactionMode)}
+                </button>
+                {settingsPopover === 'mode' && (
+                  <div className="absolute right-0 bottom-[calc(100%+6px)] w-48 rounded-lg border border-neutral-200/90 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:ring-white/10 z-20">
+                    {PANEL_INTERACTION_MODES.map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={[
+                          'w-full text-left text-[11px] px-2 py-1.5 rounded',
+                          interactionMode === mode
+                            ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
+                            : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
+                        ].join(' ')}
+                        title={INTERACTION_MODE_META[mode].hint}
+                        onClick={() => {
+                          setInteractionMode(w.id, mode)
+                          setSettingsPopoverByPanel((prev) => ({ ...prev, [w.id]: null }))
+                        }}
+                      >
+                        {INTERACTION_MODE_META[mode].label}
+                      </button>
+                    ))}
                   </div>
-                </div>
-              )}
-              <div className="rounded-md border border-neutral-200/80 bg-neutral-50/80 px-1.5 py-1 dark:border-neutral-800 dark:bg-neutral-900/70">
+                )}
+              </div>
+              <div className="relative" data-settings-popover-root="true">
+                <button
+                  type="button"
+                  className={[
+                    'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors',
+                    settingsPopover === 'sandbox'
+                      ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
+                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800',
+                  ].join(' ')}
+                  title={`Sandbox: ${w.sandbox}`}
+                  onClick={() =>
+                    setSettingsPopoverByPanel((prev) => ({
+                      ...prev,
+                      [w.id]: settingsPopover === 'sandbox' ? null : 'sandbox',
+                    }))
+                  }
+                >
+                  {renderSandboxSymbol(w.sandbox)}
+                </button>
+                {settingsPopover === 'sandbox' && (
+                  <div className="absolute right-0 bottom-[calc(100%+6px)] w-48 rounded-lg border border-neutral-200/90 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:ring-white/10 z-20">
+                    {([
+                      ['read-only', 'Read only'],
+                      ['workspace-write', 'Workspace write'],
+                      ['danger-full-access', 'Danger full access'],
+                    ] as const).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={[
+                          'w-full text-left text-[11px] px-2 py-1.5 rounded',
+                          w.sandbox === value
+                            ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
+                            : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
+                        ].join(' ')}
+                        onClick={() => setPanelSandbox(w.id, value)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="relative" data-settings-popover-root="true">
+                <button
+                  type="button"
+                  className={[
+                    'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors',
+                    settingsPopover === 'permission'
+                      ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
+                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800',
+                  ].join(' ')}
+                  title={`Permissions: ${w.permissionMode}`}
+                  onClick={() =>
+                    setSettingsPopoverByPanel((prev) => ({
+                      ...prev,
+                      [w.id]: settingsPopover === 'permission' ? null : 'permission',
+                    }))
+                  }
+                >
+                  {renderPermissionSymbol(w.permissionMode)}
+                </button>
+                {settingsPopover === 'permission' && (
+                  <div className="absolute right-0 bottom-[calc(100%+6px)] w-52 rounded-lg border border-neutral-200/90 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:ring-white/10 z-20">
+                    {([
+                      ['verify-first', 'Verify first'],
+                      ['proceed-always', 'Proceed always'],
+                    ] as const).map(([value, label]) => {
+                      const disabled = w.sandbox === 'read-only' && value === 'proceed-always'
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          disabled={disabled}
+                          className={[
+                            'w-full text-left text-[11px] px-2 py-1.5 rounded',
+                            w.permissionMode === value
+                              ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
+                              : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
+                            disabled ? 'opacity-50 cursor-not-allowed' : '',
+                          ].join(' ')}
+                          onClick={() => setPanelPermission(w.id, value)}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="rounded-md border border-neutral-200/70 bg-neutral-50/75 px-1.5 py-1 dark:border-neutral-800 dark:bg-neutral-900/60">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[11px] text-neutral-600 dark:text-neutral-400">Model</span>
                   <select

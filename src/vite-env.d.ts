@@ -31,6 +31,28 @@ type ProviderAuthStatus = {
   checkedAt: number
 }
 
+type WorkspaceLockOwner = {
+  pid: number
+  hostname: string
+  acquiredAt: number
+  heartbeatAt: number
+}
+
+type WorkspaceLockAcquireResult =
+  | {
+      ok: true
+      workspaceRoot: string
+      lockFilePath: string
+    }
+  | {
+      ok: false
+      reason: 'invalid-workspace' | 'in-use' | 'error'
+      message: string
+      workspaceRoot: string
+      lockFilePath: string
+      owner?: WorkspaceLockOwner | null
+    }
+
 interface Window {
   agentOrchestrator: {
     connect(
@@ -46,10 +68,46 @@ interface Window {
       },
     ): Promise<{ threadId: string }>
     sendMessage(agentWindowId: string, text: string, imagePaths?: string[]): Promise<void>
+    loadChatHistory(): Promise<unknown[]>
+    saveChatHistory(entries: unknown[]): Promise<{
+      ok: boolean
+      count: number
+      path: string
+    }>
+    loadAppState(): Promise<unknown | null>
+    saveAppState(state: unknown): Promise<{
+      ok: boolean
+      path: string
+      savedAt: number
+    }>
+    setWindowTheme(theme: 'light' | 'dark' | 'system'): Promise<{
+      ok: boolean
+      themeSource: 'light' | 'dark' | 'system'
+      shouldUseDarkColors: boolean
+    }>
+    notifyRendererReady(): Promise<{ ok: boolean }>
+    getDiagnosticsInfo(): Promise<{
+      userDataPath: string
+      storageDir: string
+      chatHistoryPath: string
+      appStatePath: string
+      runtimeLogPath: string
+    }>
+    openRuntimeLog(): Promise<{
+      ok: boolean
+      path: string
+      error?: string
+    }>
+    openExternalUrl(url: string): Promise<{
+      ok: boolean
+      error?: string
+    }>
     interrupt(agentWindowId: string): Promise<void>
     disconnect(agentWindowId: string): Promise<void>
     openFolderDialog(): Promise<string | null>
     writeWorkspaceConfig(folderPath: string): Promise<boolean>
+    claimWorkspace(workspaceRoot: string): Promise<WorkspaceLockAcquireResult>
+    releaseWorkspace(workspaceRoot: string): Promise<boolean>
     savePastedImage(dataUrl: string, mimeType?: string): Promise<{
       path: string
       mimeType: string

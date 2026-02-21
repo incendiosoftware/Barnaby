@@ -1,7 +1,7 @@
 {
   "name": "barnaby",
   "productName": "Barnaby",
-  "version": "0.0.41",
+  "version": "0.0.59",
   "main": "dist-electron/main/index.js",
   "description": "Barnaby: local agent loops without API keys.",
   "author": "stuart",
@@ -22,7 +22,7 @@
     "build": "npm run build:portable",
     "build:portable": "npm run build:dist && electron-builder --win portable",
     "build:release": "npm run build:dist && electron-builder",
-    "package:win": "npm run build:dist && electron-packager . Barnaby --platform=win32 --arch=x64 --out=release/0.0.1/packaged --overwrite --asar --prune=true --icon=public/favicon.ico",
+    "package:win": "npm run build:dist && electron-packager . Barnaby --platform=win32 --arch=x64 --out=release/0.0.1/packaged --overwrite --asar --prune=true --icon=build/icon.png",
     "preview": "vite preview",
     "pretest": "vite build --mode=test",
     "test": "vitest run"

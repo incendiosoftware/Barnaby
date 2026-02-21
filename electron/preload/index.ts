@@ -38,6 +38,28 @@ type ProviderAuthStatus = {
   checkedAt: number
 }
 
+type WorkspaceLockOwner = {
+  pid: number
+  hostname: string
+  acquiredAt: number
+  heartbeatAt: number
+}
+
+type WorkspaceLockAcquireResult =
+  | {
+      ok: true
+      workspaceRoot: string
+      lockFilePath: string
+    }
+  | {
+      ok: false
+      reason: 'invalid-workspace' | 'in-use' | 'error'
+      message: string
+      workspaceRoot: string
+      lockFilePath: string
+      owner?: WorkspaceLockOwner | null
+    }
+
 // --------- Expose a narrow API to the Renderer process ---------
 const api = {
   connect(agentWindowId: string, options: CodexConnectOptions) {
@@ -48,6 +70,58 @@ const api = {
       text,
       imagePaths: imagePaths ?? [],
     }) as Promise<void>
+  },
+  loadChatHistory() {
+    return ipcRenderer.invoke('agentorchestrator:loadChatHistory') as Promise<unknown[]>
+  },
+  saveChatHistory(entries: unknown[]) {
+    return ipcRenderer.invoke('agentorchestrator:saveChatHistory', entries) as Promise<{
+      ok: boolean
+      count: number
+      path: string
+    }>
+  },
+  loadAppState() {
+    return ipcRenderer.invoke('agentorchestrator:loadAppState') as Promise<unknown | null>
+  },
+  saveAppState(state: unknown) {
+    return ipcRenderer.invoke('agentorchestrator:saveAppState', state) as Promise<{
+      ok: boolean
+      path: string
+      savedAt: number
+    }>
+  },
+  setWindowTheme(theme: 'light' | 'dark' | 'system') {
+    return ipcRenderer.invoke('agentorchestrator:setWindowTheme', theme) as Promise<{
+      ok: boolean
+      themeSource: 'light' | 'dark' | 'system'
+      shouldUseDarkColors: boolean
+    }>
+  },
+  notifyRendererReady() {
+    return ipcRenderer.invoke('agentorchestrator:rendererReady') as Promise<{ ok: boolean }>
+  },
+  getDiagnosticsInfo() {
+    return ipcRenderer.invoke('agentorchestrator:getDiagnosticsInfo') as Promise<{
+      userDataPath: string
+      storageDir: string
+      chatHistoryPath: string
+      appStatePath: string
+      runtimeLogPath: string
+    }>
+  },
+  openRuntimeLog() {
+    return ipcRenderer.invoke('agentorchestrator:openRuntimeLog') as Promise<{
+      ok: boolean
+      path: string
+      error?: string
+    }>
+  },
+  openExternalUrl(url: string) {
+    return ipcRenderer.invoke('agentorchestrator:openExternalUrl', url) as Promise<{
+      ok: boolean
+      error?: string
+    }>
   },
   interrupt(agentWindowId: string) {
     return ipcRenderer.invoke('agentorchestrator:interrupt', agentWindowId) as Promise<void>
@@ -60,6 +134,12 @@ const api = {
   },
   writeWorkspaceConfig(folderPath: string) {
     return ipcRenderer.invoke('agentorchestrator:writeWorkspaceConfig', folderPath) as Promise<boolean>
+  },
+  claimWorkspace(workspaceRoot: string) {
+    return ipcRenderer.invoke('agentorchestrator:claimWorkspace', workspaceRoot) as Promise<WorkspaceLockAcquireResult>
+  },
+  releaseWorkspace(workspaceRoot: string) {
+    return ipcRenderer.invoke('agentorchestrator:releaseWorkspace', workspaceRoot) as Promise<boolean>
   },
   savePastedImage(dataUrl: string, mimeType?: string) {
     return ipcRenderer.invoke('agentorchestrator:savePastedImage', dataUrl, mimeType) as Promise<{

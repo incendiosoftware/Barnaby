@@ -9,10 +9,10 @@ Barnaby is a desktop AI agent orchestrator that connects to your existing CLI su
 Latest Binary Release
 [Download Barnaby v0.0.80](https://github.com/incendiosoftware/Barnaby/releases/tag/v0.0.80)
   
-Website: https://barnaby.build
-Written By: Stuart Mackereth
-Company: Incendio Trading Limited
-Email: incendiosoftware@gmail.com
+Website: https://barnaby.build  
+Written By: Stuart Mackereth  
+Company: Incendio Trading Limited  
+Email: incendiosoftware@gmail.com  
 
 ## Screenshots
 

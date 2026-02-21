@@ -14,7 +14,6 @@ permissions:
 
 jobs:
   release:
-    if: ${{ github.event.inputs.releasable == 'true' }}
     runs-on: windows-latest
     steps:
       - name: Checkout code

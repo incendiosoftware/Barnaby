@@ -7,7 +7,7 @@ Barnaby is a desktop AI agent orchestrator that connects to your existing CLI su
 - Workspace-oriented UI with per-workspace model defaults and state
 
 Latest Binary Release
-[Download Barnaby v0.0.80](https://github.com/incendiosoftware/Barnaby/releases/tag/v0.0.80)
+[Download Barnaby v0.0.85](https://github.com/incendiosoftware/Barnaby/releases/tag/v0.0.85)
   
 Website: https://barnaby.build  
 Written By: Stuart Mackereth  

@@ -1,10 +1,10 @@
 # Barnaby
 
-Barnaby is a desktop AI agent runtime that lets you use your existing AI subscriptions (ChatGPT, Claude, Gemini) as autonomous coding agents.
+Barnaby is a desktop AI agent orchestrator that connects to your existing CLI subscriptions (Codex, Claude, Gemini) and delivers better orchestration and windowed agents than Cursor.
 
-No API keys.
-No usage billing.
-Just your subscriptions — unlocked.
+- Uses your Codex, Claude, and Gemini CLI logins — no API keys in Barnaby
+- Multiple agent panels with split layouts (horizontal, vertical, grid)
+- Workspace-oriented UI with per-workspace model defaults and state
 
 Website: https://barnaby.build
 Written By: Stuart Mackereth
@@ -25,7 +25,6 @@ Email: incendiosoftware@gmail.com
 
 Barnaby provides:
 
-- Subscription based parallel agents, not expensive API
 - Multiple agent panels with split layouts (horizontal, vertical, grid)
 - Workspace selection and per-workspace defaults
 - Model setup and provider routing (Codex, Claude, and Gemini)
@@ -34,20 +33,15 @@ Barnaby provides:
 - Queue-aware sending and auto-scroll in chat windows
 - Menu actions for workspace management (new/open/recent/close/exit)
 
-## Why Barnaby (Subscription vs API)
+## Why Barnaby
 
-Barnaby is built around local CLI sessions instead of direct API key wiring.
+Barnaby uses local CLI sessions (Codex, Claude, Gemini). You sign in to each provider’s CLI; Barnaby orchestrates them.
 
-- Subscription/CLI login model (Barnaby default):
-  - Uses your existing provider login/session (for example ChatGPT/Codex CLI or Gemini CLI)
-  - No API key handling inside the app
-  - No separate per-project API key setup before first use
-- Direct API model (not Barnaby's primary path):
-  - Requires managing API keys and key security
-  - Usually introduces separate usage-based API billing
-  - Better when you need custom low-level API controls not exposed in CLI flows
+- **Orchestration**: Run multiple agents side-by-side, switch workspaces, keep separate conversations per panel
+- **Windowed agents**: Split layouts (horizontal, vertical, grid) so you can compare models or keep contexts separate
+- **No API keys in Barnaby**: You use your provider subscriptions via their CLI; Barnaby does not handle keys or billing
 
-For most desktop workflow use, the subscription/CLI path gives faster setup and lower operational overhead.
+Compared to Cursor’s single chat: Barnaby gives you parallel windowed agents and workspace-aware orchestration.
 
 ## Prerequisites
 

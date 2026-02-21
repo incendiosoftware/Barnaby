@@ -1527,7 +1527,11 @@ function describeOperationTrace(method: string, params: any): { label: string; d
   ) {
     return { label: 'Edited file', detail: pathLike ?? undefined }
   }
-  if (methodLower.includes('shell') || methodLower.includes('commandexecution') || cmdLike) {
+  const isCommandLikeMethod = methodLower.includes('shell') || methodLower.includes('commandexecution')
+  if (isCommandLikeMethod && !cmdLike) {
+    return null
+  }
+  if (isCommandLikeMethod || cmdLike) {
     if (cmdLower.startsWith('readfile')) {
       return { label: 'Read file', detail: simplifyCommand(cmdLike ?? '') || undefined }
     }
@@ -1580,7 +1584,8 @@ function describeActivityEntry(evt: any): { label: string; detail?: string; kind
         pickString(params, ['command', 'cmd']) ??
         pickString(params?.command, ['command', 'cmd', 'raw']) ??
         pickString(params?.action, ['command', 'cmd'])
-      return { label: 'Running command', detail: cmd ? simplifyCommand(cmd) : undefined, kind: 'command' }
+      if (!cmd) return null
+      return { label: 'Running command', detail: simplifyCommand(cmd), kind: 'command' }
     }
     if (/reasoning/i.test(method)) {
       const detail =
@@ -6861,7 +6866,6 @@ export default function App() {
                 if (isOperationTrace) return null
                 if (isReasoningActivity && !showReasoningUpdates) return null
                 if (!isReasoningActivity && !showActivityUpdates) return null
-              const activityColor = isReasoningActivity ? reasoningUpdateColor : activityUpdateColor
               const isOpen = timelineOpenByUnitId[unit.id] ?? unit.defaultOpen
               const activitySummary = unit.title || unit.body.trim().split(/\r?\n/)[0]?.slice(0, 80) || 'Activity'
               return (
@@ -6875,8 +6879,8 @@ export default function App() {
                     className="group"
                   >
                     <summary
-                      className="list-none cursor-pointer py-0.5 text-[10.5px] flex items-center justify-between gap-2"
-                      style={{ color: activityColor }}
+                      className="list-none cursor-pointer py-0.5 text-[10.5px] flex items-center justify-between gap-2 [&_*]:text-current"
+                      style={{ color: timelineMessageColor }}
                     >
                       <span>{activitySummary}</span>
                       <svg
@@ -6890,7 +6894,7 @@ export default function App() {
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                     </summary>
-                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5" style={{ color: activityColor }}>
+                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5 [&_*]:!text-current" style={{ color: timelineMessageColor }}>
                       {unit.body}
                     </div>
                   </details>
@@ -6980,9 +6984,9 @@ export default function App() {
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                     </summary>
-                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5" style={{ color: timelineMessageColor }}>
+                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5 [&_*]:!text-current" style={{ color: timelineMessageColor }}>
                       {m.role === 'assistant' && m.format === 'markdown' ? (
-                        <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-1 prose-headings:my-1 prose-code:text-blue-800 dark:prose-code:text-blue-300">
+                        <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-1 prose-headings:my-1 prose-code:text-[currentColor]">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             components={{

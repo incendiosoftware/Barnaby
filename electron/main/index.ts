@@ -219,9 +219,60 @@ function closeSplashWindow() {
   splashWin = null
 }
 
+function splashFallbackHtmlDataUrl(splashImagePath: string) {
+  const splashImageUrl = pathToFileURL(splashImagePath).toString()
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Barnaby Splash</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: #0b0b0b;
+      overflow: hidden;
+    }
+    .root {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    img {
+      max-width: 90%;
+      max-height: 90%;
+      object-fit: contain;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="root">
+    <img src="${splashImageUrl}" alt="Barnaby splash" />
+  </div>
+</body>
+</html>`
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+}
+
 function createSplashWindow() {
-  const splashImagePath = path.join(process.env.VITE_PUBLIC, 'splash.png')
-  if (!fs.existsSync(splashImagePath)) return null
+  const publicRoot = process.env.VITE_PUBLIC
+  if (!publicRoot) {
+    appendRuntimeLog('splash-skipped', { reason: 'vite-public-missing' }, 'warn')
+    return null
+  }
+  const splashImagePath = path.join(publicRoot, 'splash.png')
+  const splashHtmlPath = path.join(publicRoot, 'splash.html')
+  if (!fs.existsSync(splashImagePath)) {
+    appendRuntimeLog('splash-skipped', { reason: 'splash-image-missing', splashImagePath }, 'warn')
+    return null
+  }
+  const hasSplashHtml = fs.existsSync(splashHtmlPath)
 
   const splash = new BrowserWindow({
     width: 560,
@@ -239,25 +290,17 @@ function createSplashWindow() {
     autoHideMenuBar: true,
   })
   splash.setMenuBarVisibility(false)
-  const splashImageUrl = pathToFileURL(splashImagePath).toString()
-  const splashHtml = [
-    '<!doctype html>',
-    '<html>',
-    '<head>',
-    '<meta charset="utf-8" />',
-    '<meta name="viewport" content="width=device-width, initial-scale=1" />',
-    '<style>',
-    'html, body { margin: 0; width: 100%; height: 100%; background: #0b0b0b; overflow: hidden; }',
-    '.root { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }',
-    'img { max-width: 90%; max-height: 90%; object-fit: contain; user-select: none; -webkit-user-drag: none; }',
-    '</style>',
-    '</head>',
-    '<body>',
-    `<div class="root"><img src="${splashImageUrl}" alt="Barnaby splash" /></div>`,
-    '</body>',
-    '</html>',
-  ].join('')
-  void splash.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(splashHtml)}`).catch(() => {})
+  if (hasSplashHtml) {
+    void splash.loadFile(splashHtmlPath).catch((err) => {
+      appendRuntimeLog('splash-loadfile-failed', { splashHtmlPath, error: errorMessage(err) }, 'warn')
+      void splash.loadURL(splashFallbackHtmlDataUrl(splashImagePath)).catch(() => {})
+    })
+  } else {
+    appendRuntimeLog('splash-html-missing-fallback', { splashHtmlPath }, 'warn')
+    void splash.loadURL(splashFallbackHtmlDataUrl(splashImagePath)).catch((err) => {
+      appendRuntimeLog('splash-fallback-loadurl-failed', { splashImagePath, error: errorMessage(err) }, 'warn')
+    })
+  }
   splash.on('closed', () => {
     if (splashWin === splash) splashWin = null
   })

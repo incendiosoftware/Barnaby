@@ -1,83 +1,73 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 
-export type GeminiClientEvent =
+export type ClaudeClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
   | { type: 'assistantDelta'; delta: string }
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
 
-export type GeminiConnectOptions = {
+export type ClaudeConnectOptions = {
+  cwd: string
   model: string
+  permissionMode?: 'verify-first' | 'proceed-always'
 }
 
-export class GeminiClient extends EventEmitter {
-  private model: string = 'gemini-2.0-flash'
+export class ClaudeClient extends EventEmitter {
+  private model: string = 'sonnet'
+  private cwd: string = process.cwd()
+  private permissionMode: 'verify-first' | 'proceed-always' = 'verify-first'
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeProc: ChildProcessWithoutNullStreams | null = null
 
   private normalizeModelId(model: string) {
-    const legacyMap: Record<string, string> = {
-      'gemini-1.5-pro': 'pro',
-      'gemini-1.5-flash': 'flash',
-      'gemini-2.0-flash': 'flash',
-      'gemini-2.5-flash': 'flash',
-      'gemini-2.5-pro': 'pro',
-      'gemini-3-pro': 'pro',
-      'gemini-3-pro-preview': 'pro',
-      'gemini-3-flash-preview': 'flash',
-      'gemini-pro': 'flash',
-      'gemini-1.0-pro': 'flash',
+    const normalized = model.trim().toLowerCase()
+    const aliasMap: Record<string, string> = {
+      'claude-sonnet-4-5-20250929': 'sonnet',
+      'claude-opus-4-1-20250805': 'opus',
+      'claude-haiku-3-5-20241022': 'haiku',
     }
-    return legacyMap[model] ?? model
+    if (!normalized) return 'sonnet'
+    return aliasMap[normalized] ?? normalized
   }
 
   private isModelNotFoundError(message: string) {
     const lower = message.toLowerCase()
     return (
-      lower.includes('modelnotfound') ||
-      lower.includes('requested entity was not found') ||
-      (lower.includes('not found') && lower.includes('model'))
+      lower.includes('model') &&
+      (lower.includes('not found') || lower.includes('unknown') || lower.includes('invalid'))
     )
   }
 
-  /** Map Gemini CLI exit codes to user-friendly messages (per Gemini CLI docs) */
-  private formatGeminiExitError(code: number | null, signal: string | null, stderr: string): string {
+  private formatClaudeExitError(code: number | null, signal: string | null, stderr: string): string {
     const stderrTrimmed = stderr.trim()
     if (stderrTrimmed) return stderrTrimmed
-    if (signal) return `Gemini CLI was terminated (${signal})`
-    const knownCodes: Record<number, string> = {
-      41: 'Authentication failed. Run `gemini` in a terminal and log in with Google.',
-      42: 'Invalid or missing input. Check your prompt or model selection.',
-      44: 'Sandbox error. Try without sandbox or check your Docker/Podman setup.',
-      52: 'Invalid config. Check your Gemini CLI settings.json.',
-      53: 'Session turn limit reached. Start a new session.',
-    }
-    const msg = knownCodes[code ?? 0]
-    if (msg) return msg
-    return `Gemini CLI exited with code ${code ?? 'unknown'}`
+    if (signal) return `Claude CLI was terminated (${signal})`
+    return `Claude CLI exited with code ${code ?? 'unknown'}`
   }
 
-  emitEvent(evt: GeminiClientEvent) {
+  emitEvent(evt: ClaudeClientEvent) {
     this.emit('event', evt)
   }
 
-  async connect(options: GeminiConnectOptions) {
-    const requestedModel = options.model || 'gemini-2.0-flash'
+  async connect(options: ClaudeConnectOptions) {
+    const requestedModel = options.model || 'sonnet'
     const normalized = this.normalizeModelId(requestedModel)
     this.model = normalized
+    this.cwd = options.cwd || process.cwd()
+    this.permissionMode = options.permissionMode ?? 'verify-first'
     if (normalized !== requestedModel) {
       this.emitEvent({
         type: 'status',
         status: 'starting',
-        message: `Model ${requestedModel} is deprecated/unavailable. Using ${normalized}.`,
+        message: `Model ${requestedModel} normalized to ${normalized}.`,
       })
     }
-    this.emitEvent({ type: 'status', status: 'starting', message: 'Connecting to Gemini CLI...' })
-    await this.assertGeminiCliAvailable()
+    this.emitEvent({ type: 'status', status: 'starting', message: 'Connecting to Claude CLI...' })
+    await this.assertClaudeCliAvailable()
     this.history = []
     this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })
-    return { threadId: 'gemini' }
+    return { threadId: 'claude' }
   }
 
   async sendUserMessage(text: string) {
@@ -87,20 +77,36 @@ export class GeminiClient extends EventEmitter {
     this.history.push({ role: 'user', text: trimmed })
 
     const COMPLETION_SYSTEM =
-      'You are a coding assistant running inside Agent Orchestrator. Complete tasks fully. Do not stop after describing a plan - execute the plan and provide concrete outputs.'
-    const prompt = this.buildPrompt(COMPLETION_SYSTEM)
+      'You are a coding assistant running inside Barnaby. Complete tasks fully and return concrete outputs.'
+    const prompt = this.buildPrompt()
+    const permissionMode = this.permissionMode === 'proceed-always' ? 'acceptEdits' : 'default'
 
     const runWithModel = async (modelId: string) => {
       let full = ''
       await new Promise<string>((resolve, reject) => {
-        const args = ['-m', modelId, '-p', prompt]
+        const args = [
+          '--print',
+          '--output-format',
+          'text',
+          '--model',
+          modelId,
+          '--permission-mode',
+          permissionMode,
+          '--append-system-prompt',
+          COMPLETION_SYSTEM,
+          prompt,
+        ]
         const proc =
           process.platform === 'win32'
-            ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
+            ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'claude', ...args], {
+                cwd: this.cwd,
                 stdio: ['pipe', 'pipe', 'pipe'],
                 windowsHide: true,
               })
-            : spawn('gemini', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+            : spawn('claude', args, {
+                cwd: this.cwd,
+                stdio: ['pipe', 'pipe', 'pipe'],
+              })
 
         this.activeProc = proc
         proc.stdout.setEncoding('utf8')
@@ -121,7 +127,7 @@ export class GeminiClient extends EventEmitter {
         proc.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
           this.activeProc = null
           if (code === 0) resolve(full)
-          else reject(new Error(this.formatGeminiExitError(code, signal, stderr)))
+          else reject(new Error(this.formatClaudeExitError(code, signal, stderr)))
         })
       })
       return full
@@ -130,23 +136,22 @@ export class GeminiClient extends EventEmitter {
     try {
       let full = await runWithModel(this.model)
 
-      // Auto-recover once if selected model no longer exists.
       if (!full.trim()) {
-        // no-op: keep behavior unchanged
+        // Keep behavior simple and deterministic: empty output is still treated as a completed response.
       }
 
       this.history.push({ role: 'assistant', text: full.trim() || full })
       this.emitEvent({ type: 'assistantCompleted' })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
-      if (this.isModelNotFoundError(msg) && this.model !== 'gemini-2.0-flash') {
+      if (this.isModelNotFoundError(msg) && this.model !== 'sonnet') {
         try {
           this.emitEvent({
             type: 'status',
             status: 'starting',
-            message: `Model "${this.model}" not found. Retrying with gemini-2.0-flash...`,
+            message: `Model "${this.model}" not found. Retrying with sonnet...`,
           })
-          this.model = 'gemini-2.0-flash'
+          this.model = 'sonnet'
           const fallbackFull = await runWithModel(this.model)
           this.history.push({ role: 'assistant', text: fallbackFull.trim() || fallbackFull })
           this.emitEvent({ type: 'status', status: 'ready', message: `Connected (using ${this.model})` })
@@ -180,23 +185,24 @@ export class GeminiClient extends EventEmitter {
     this.history = []
   }
 
-  private buildPrompt(systemInstruction: string): string {
+  private buildPrompt(): string {
     const recent = this.history.slice(-12)
     const transcript = recent
       .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}:\n${m.text}`)
       .join('\n\n')
-    return [systemInstruction, transcript, 'Assistant:'].filter(Boolean).join('\n\n')
+    return [transcript, 'Assistant:'].filter(Boolean).join('\n\n')
   }
 
-  private async assertGeminiCliAvailable() {
+  private async assertClaudeCliAvailable() {
     await new Promise<void>((resolve, reject) => {
       const proc =
         process.platform === 'win32'
-          ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', '--version'], {
+          ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'claude', '--version'], {
+              cwd: this.cwd,
               stdio: ['ignore', 'pipe', 'pipe'],
               windowsHide: true,
             })
-          : spawn('gemini', ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] })
+          : spawn('claude', ['--version'], { cwd: this.cwd, stdio: ['ignore', 'pipe', 'pipe'] })
 
       let stderr = ''
       proc.stderr.setEncoding('utf8')
@@ -207,16 +213,14 @@ export class GeminiClient extends EventEmitter {
       proc.on('error', (err) => reject(err))
       proc.on('exit', (code) => {
         if (code === 0) resolve()
-        else reject(new Error(stderr.trim() || 'Gemini CLI not available. Install and login with `gemini`.'))
+        else reject(new Error(stderr.trim() || 'Claude CLI not available. Install and login with `claude`.'))
       })
     }).catch((err: unknown) => {
       const message =
         err instanceof Error
           ? err.message
-          : 'Gemini CLI not available. Install and login with `gemini` first.'
-      throw new Error(
-        `${message}\nUse terminal: \`gemini\` and choose "Login with Google" (subscription).`,
-      )
+          : 'Claude CLI not available. Install and login with `claude` first.'
+      throw new Error(`${message}\nUse terminal: \`claude\` and complete login, then retry.`)
     })
   }
 }

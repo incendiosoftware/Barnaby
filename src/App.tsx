@@ -2,6 +2,8 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { buildTimelineForPanel } from './chat/timelineParser'
+import type { TimelineUnit } from './chat/timelineTypes'
 
 type Theme = 'light' | 'dark'
 type ChatRole = 'user' | 'assistant' | 'system'
@@ -44,7 +46,6 @@ type WorkspaceSettings = {
   defaultModel: string
   permissionMode: PermissionMode
   sandbox: SandboxMode
-  debug: boolean
 }
 
 type WorkspaceTreeNode = {
@@ -125,6 +126,10 @@ type ApplicationSettings = {
   restoreSessionOnStartup: boolean
   themePresetId: string
   responseStyle: 'concise' | 'standard' | 'detailed'
+  showDebugNotesInTimeline: boolean
+  showActivityUpdates: boolean
+  showReasoningUpdates: boolean
+  showOperationTrace: boolean
 }
 
 type ThemePreset = {
@@ -230,7 +235,7 @@ type PanelDebugEntry = {
   detail: string
 }
 
-type ActivityKind = 'approval' | 'command' | 'reasoning' | 'event'
+type ActivityKind = 'approval' | 'command' | 'reasoning' | 'event' | 'operation'
 type ActivityFeedItem = {
   id: string
   label: string
@@ -245,7 +250,8 @@ const DEFAULT_MODEL = 'gpt-5.3-codex'
 const MODEL_BANNER_PREFIX = 'Model: '
 const STARTUP_READY_MESSAGE = 'I am ready'
 
-type ModelProvider = 'codex' | 'gemini'
+type ModelProvider = 'codex' | 'claude' | 'gemini'
+type ConnectivityProvider = 'codex' | 'claude' | 'gemini'
 
 type ModelInterface = {
   id: string
@@ -259,8 +265,28 @@ type ModelConfig = {
   interfaces: ModelInterface[]
 }
 
+type ProviderConfig = {
+  id: string
+  displayName: string
+  enabled: boolean
+  type: 'cli'
+  cliCommand: string
+  authCheckCommand?: string
+  loginCommand?: string
+  upgradeCommand?: string
+  cliPath?: string
+  isBuiltIn?: boolean
+}
+
+type CustomProviderConfig = Omit<ProviderConfig, 'isBuiltIn'>
+
+type ProviderRegistry = {
+  overrides: Record<string, { displayName?: string; enabled?: boolean; cliPath?: string }>
+  customProviders: CustomProviderConfig[]
+}
+
 type ProviderAuthStatus = {
-  provider: ModelProvider
+  provider: string
   installed: boolean
   authenticated: boolean
   detail: string
@@ -293,23 +319,64 @@ const DEFAULT_MODEL_INTERFACES: ModelInterface[] = [
   { id: 'gpt-5.3-codex', displayName: 'GPT 5.3 (Codex)', provider: 'codex', enabled: true },
   { id: 'gpt-5.2-codex', displayName: 'GPT 5.2 (Codex)', provider: 'codex', enabled: true },
   { id: 'gpt-5.1-codex', displayName: 'GPT 5.1 (Codex)', provider: 'codex', enabled: true },
-  { id: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash', provider: 'gemini', enabled: true },
-  { id: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro', provider: 'gemini', enabled: true },
+  { id: 'sonnet', displayName: 'Claude Sonnet', provider: 'claude', enabled: true },
+  { id: 'opus', displayName: 'Claude Opus', provider: 'claude', enabled: true },
+  { id: 'haiku', displayName: 'Claude Haiku', provider: 'claude', enabled: true },
+  { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', provider: 'gemini', enabled: true },
+  { id: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', provider: 'gemini', enabled: true },
+  { id: 'gemini-3-pro-preview', displayName: 'Gemini 3 Pro (Preview)', provider: 'gemini', enabled: true },
 ]
 
 const MAX_PANELS = 5
 const MAX_AUTO_CONTINUE = 3
 const MODAL_BACKDROP_CLASS = 'fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px] flex items-center justify-center p-4'
 const MODAL_CARD_CLASS = 'rounded-2xl border border-neutral-200/80 dark:border-neutral-800 bg-white/95 dark:bg-neutral-950 shadow-2xl'
-const UI_BUTTON_SECONDARY_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+const UI_BUTTON_SECONDARY_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-100'
 const UI_BUTTON_PRIMARY_CLASS = 'px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-500'
-const UI_ICON_BUTTON_CLASS = 'h-9 w-9 inline-flex items-center justify-center rounded-lg border border-neutral-300 bg-white hover:bg-neutral-50 shadow-sm dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
-const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-800'
-const UI_TOOLBAR_ICON_BUTTON_CLASS = 'h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
-const UI_INPUT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100'
-const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100'
+const UI_ICON_BUTTON_CLASS = 'h-9 w-9 inline-flex items-center justify-center rounded-lg border border-neutral-300 bg-white hover:bg-neutral-50 shadow-sm text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'
+const UI_TOOLBAR_ICON_BUTTON_CLASS = 'h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+const UI_INPUT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 placeholder:text-neutral-500 dark:placeholder:text-neutral-400'
+const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100'
 const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
 const STATUS_SYMBOL_ICON_CLASS = 'h-[13px] w-[13px] text-neutral-600 dark:text-neutral-300'
+const CONNECTIVITY_PROVIDERS: ConnectivityProvider[] = ['codex', 'claude', 'gemini']
+
+const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderConfig> = {
+  codex: {
+    id: 'codex',
+    displayName: 'Codex',
+    enabled: true,
+    type: 'cli',
+    cliCommand: 'codex',
+    authCheckCommand: 'login status',
+    loginCommand: 'codex login',
+    upgradeCommand: 'npm update -g @openai/codex',
+    isBuiltIn: true,
+  },
+  claude: {
+    id: 'claude',
+    displayName: 'Claude',
+    enabled: true,
+    type: 'cli',
+    cliCommand: 'claude',
+    authCheckCommand: '--version',
+    loginCommand: 'claude',
+    upgradeCommand: 'npm update -g @anthropic-ai/claude',
+    isBuiltIn: true,
+  },
+  gemini: {
+    id: 'gemini',
+    displayName: 'Gemini',
+    enabled: true,
+    type: 'cli',
+    cliCommand: 'gemini',
+    authCheckCommand: '--version',
+    loginCommand: 'gemini',
+    upgradeCommand: 'npm update -g @google/gemini-cli',
+    isBuiltIn: true,
+  },
+}
 
 function renderSandboxSymbol(mode: SandboxMode) {
   if (mode === 'read-only') {
@@ -562,6 +629,7 @@ const WORKSPACE_LIST_STORAGE_KEY = 'agentorchestrator.workspaceList'
 const WORKSPACE_SETTINGS_STORAGE_KEY = 'agentorchestrator.workspaceSettings'
 const WORKSPACE_DOCK_SIDE_STORAGE_KEY = 'agentorchestrator.workspaceDockSide'
 const MODEL_CONFIG_STORAGE_KEY = 'agentorchestrator.modelConfig'
+const PROVIDER_REGISTRY_STORAGE_KEY = 'agentorchestrator.providerRegistry'
 const EXPLORER_PREFS_STORAGE_KEY = 'agentorchestrator.explorerPrefsByWorkspace'
 const CHAT_HISTORY_STORAGE_KEY = 'agentorchestrator.chatHistory'
 const APP_SETTINGS_STORAGE_KEY = 'agentorchestrator.appSettings'
@@ -736,6 +804,41 @@ function getInitialModelConfig(): ModelConfig {
   }
 }
 
+function getInitialProviderRegistry(): ProviderRegistry {
+  try {
+    const stored = globalThis.localStorage?.getItem(PROVIDER_REGISTRY_STORAGE_KEY)
+    if (!stored) return { overrides: {}, customProviders: [] }
+    const parsed = JSON.parse(stored) as ProviderRegistry
+    if (!parsed || typeof parsed !== 'object') return { overrides: {}, customProviders: [] }
+    return {
+      overrides: parsed.overrides && typeof parsed.overrides === 'object' ? parsed.overrides : {},
+      customProviders: Array.isArray(parsed.customProviders) ? parsed.customProviders : [],
+    }
+  } catch {
+    return { overrides: {}, customProviders: [] }
+  }
+}
+
+function resolveProviderConfigs(registry: ProviderRegistry): ProviderConfig[] {
+  const result: ProviderConfig[] = []
+  for (const id of CONNECTIVITY_PROVIDERS) {
+    const builtIn = DEFAULT_BUILTIN_PROVIDER_CONFIGS[id]
+    const override = registry.overrides[id]
+    result.push({
+      ...builtIn,
+      ...(override && {
+        displayName: override.displayName ?? builtIn.displayName,
+        enabled: override.enabled ?? builtIn.enabled,
+        cliPath: override.cliPath,
+      }),
+    })
+  }
+  for (const custom of registry.customProviders) {
+    result.push({ ...custom, isBuiltIn: false })
+  }
+  return result
+}
+
 function getInitialWorkspaceList(): string[] {
   const root = getInitialWorkspaceRoot()
   try {
@@ -844,6 +947,10 @@ function getInitialApplicationSettings(): ApplicationSettings {
         restoreSessionOnStartup: true,
         themePresetId: DEFAULT_THEME_PRESET_ID,
         responseStyle: 'standard',
+        showDebugNotesInTimeline: false,
+        showActivityUpdates: false,
+        showReasoningUpdates: false,
+        showOperationTrace: true,
       }
     }
     const parsed = JSON.parse(raw) as Partial<ApplicationSettings>
@@ -858,12 +965,20 @@ function getInitialApplicationSettings(): ApplicationSettings {
         parsed?.responseStyle === 'concise' || parsed?.responseStyle === 'standard' || parsed?.responseStyle === 'detailed'
           ? parsed.responseStyle
           : 'standard',
+      showDebugNotesInTimeline: Boolean(parsed?.showDebugNotesInTimeline),
+      showActivityUpdates: Boolean(parsed?.showActivityUpdates),
+      showReasoningUpdates: Boolean(parsed?.showReasoningUpdates),
+      showOperationTrace: parsed?.showOperationTrace !== false,
     }
   } catch {
     return {
       restoreSessionOnStartup: true,
       themePresetId: DEFAULT_THEME_PRESET_ID,
       responseStyle: 'standard',
+      showDebugNotesInTimeline: false,
+      showActivityUpdates: false,
+      showReasoningUpdates: false,
+      showOperationTrace: true,
     }
   }
 }
@@ -1107,6 +1222,12 @@ function toShortJson(value: unknown, maxLen = 280): string {
   }
 }
 
+function truncateText(value: string, maxLen = 200): string {
+  const text = String(value ?? '').trim()
+  if (!text) return ''
+  return text.length > maxLen ? `${text.slice(0, maxLen)}...` : text
+}
+
 function pickString(obj: any, keys: string[]): string | null {
   for (const key of keys) {
     const v = obj?.[key]
@@ -1166,8 +1287,77 @@ function simplifyCommand(raw: string): string {
   return reduced.length > 140 ? `${reduced.slice(0, 140)}...` : reduced
 }
 
+function describeOperationTrace(method: string, params: any): { label: string; detail?: string } | null {
+  const methodLower = method.toLowerCase()
+  const pathLike =
+    pickString(params, ['path', 'file', 'targetPath']) ??
+    pickString(params?.target, ['path', 'file']) ??
+    pickString(params?.edit, ['path', 'file']) ??
+    pickString(params?.item, ['path', 'file']) ??
+    pickString(params?.item?.target, ['path', 'file'])
+  const queryLike =
+    pickString(params, ['query', 'pattern', 'text']) ??
+    pickString(params?.search, ['query', 'pattern', 'text']) ??
+    pickString(params?.input, ['query', 'pattern', 'text'])
+  const cmdLike =
+    pickString(params, ['command', 'cmd']) ??
+    pickString(params?.command, ['command', 'cmd', 'raw']) ??
+    pickString(params?.item, ['command', 'cmd']) ??
+    pickString(params?.item?.command, ['command', 'cmd', 'raw']) ??
+    pickString(params?.item?.input, ['command', 'cmd'])
+  const cmdLower = (cmdLike ?? '').toLowerCase()
+
+  if (
+    methodLower.includes('readfile') ||
+    methodLower.includes('read_workspace') ||
+    methodLower.includes('readworkspace') ||
+    methodLower.includes('openfile') ||
+    (cmdLower.startsWith('readfile') && cmdLike)
+  ) {
+    const detail = pathLike ?? simplifyCommand(cmdLike ?? '')
+    return { label: 'Read file', detail: detail || undefined }
+  }
+  if (
+    methodLower.includes('glob') ||
+    methodLower.includes('search') ||
+    methodLower.includes('grep') ||
+    methodLower.includes('rg') ||
+    methodLower.includes('scan') ||
+    (cmdLower.startsWith('rg ') && cmdLike) ||
+    (cmdLower.startsWith('glob') && cmdLike)
+  ) {
+    return { label: 'Searched workspace', detail: truncateText(queryLike ?? pathLike ?? cmdLike ?? '', 180) || undefined }
+  }
+  if (
+    methodLower.includes('applypatch') ||
+    methodLower.includes('editfile') ||
+    methodLower.includes('writefile') ||
+    methodLower.includes('write_workspace') ||
+    methodLower.includes('filechange')
+  ) {
+    return { label: 'Edited file', detail: pathLike ?? undefined }
+  }
+  if (methodLower.includes('shell') || methodLower.includes('commandexecution') || cmdLike) {
+    if (cmdLower.startsWith('readfile')) {
+      return { label: 'Read file', detail: simplifyCommand(cmdLike ?? '') || undefined }
+    }
+    if (cmdLower.startsWith('glob') || cmdLower.startsWith('rg ') || cmdLower.startsWith('grep ')) {
+      return { label: 'Searched workspace', detail: simplifyCommand(cmdLike ?? '') || undefined }
+    }
+    if (cmdLower.startsWith('applypatch') || cmdLower.startsWith('editnotebook')) {
+      return { label: 'Updated code', detail: simplifyCommand(cmdLike ?? '') || undefined }
+    }
+    return { label: 'Ran command', detail: cmdLike ? simplifyCommand(cmdLike) : undefined }
+  }
+
+  return null
+}
+
 function describeActivityEntry(evt: any): { label: string; detail?: string; kind: ActivityKind } | null {
   if (!evt) return null
+  if (evt.type === 'assistantDelta') return null
+  if (evt.type === 'usageUpdated') return null
+  if (evt.type === 'planUpdated') return null
   if (evt.type === 'status') {
     return {
       label: `Status: ${String(evt.status ?? 'unknown')}`,
@@ -1179,6 +1369,7 @@ function describeActivityEntry(evt: any): { label: string; detail?: string; kind
   if (evt.type === 'rawNotification' && typeof evt.method === 'string') {
     const method = evt.method
     const params = evt.params
+    const methodLower = method.toLowerCase()
     if (method.endsWith('/requestApproval')) {
       return {
         label: 'Approval requested',
@@ -1186,22 +1377,91 @@ function describeActivityEntry(evt: any): { label: string; detail?: string; kind
         kind: 'approval',
       }
     }
-    if (/commandExecution/i.test(method)) {
+    const trace = describeOperationTrace(method, params)
+    if (trace) {
+      return {
+        label: trace.label,
+        detail: trace.detail,
+        kind: 'operation',
+      }
+    }
+    if (/commandExecution/i.test(method) || methodLower.includes('command')) {
       const cmd =
         pickString(params, ['command', 'cmd']) ??
         pickString(params?.command, ['command', 'cmd', 'raw']) ??
         pickString(params?.action, ['command', 'cmd'])
       return { label: 'Running command', detail: cmd ? simplifyCommand(cmd) : undefined, kind: 'command' }
     }
-    if (/reasoning/i.test(method)) return { label: 'Reasoning update', kind: 'reasoning' }
+    if (/reasoning/i.test(method)) {
+      const detail =
+        pickString(params, ['summary', 'text', 'reasoning', 'message']) ??
+        pickString(params?.reasoning, ['summary', 'text']) ??
+        pickString(params?.step, ['summary', 'text'])
+      // Ignore opaque reasoning pings that provide no human-meaningful content.
+      if (!detail) return null
+      return { label: 'Reasoning update', detail: truncateText(detail, 220), kind: 'reasoning' }
+    }
     if (method === 'item/completed') {
       const itemType = params?.item?.type
-      if (itemType && itemType !== 'agentMessage') return { label: `Completed ${itemType}`, kind: 'event' }
+      if (!itemType || itemType === 'agentMessage') return null
+      if (itemType === 'commandExecution') {
+        const cmd =
+          pickString(params?.item, ['command', 'cmd']) ??
+          pickString(params?.item?.command, ['command', 'cmd', 'raw']) ??
+          pickString(params?.item?.input, ['command', 'cmd'])
+        const exitCode =
+          typeof params?.item?.exitCode === 'number'
+            ? params.item.exitCode
+            : typeof params?.item?.statusCode === 'number'
+              ? params.item.statusCode
+              : null
+        const parts = ['Command finished']
+        if (cmd) parts.push(simplifyCommand(cmd))
+        if (exitCode !== null) parts.push(`exit ${exitCode}`)
+        return { label: parts[0], detail: parts.slice(1).join(' | ') || undefined, kind: 'command' }
+      }
+      if (itemType === 'fileChange') {
+        const filePath =
+          pickString(params?.item, ['path', 'file']) ??
+          pickString(params?.item?.target, ['path', 'file']) ??
+          pickString(params?.item?.edit, ['path', 'file'])
+        return { label: 'Edited file', detail: filePath ?? undefined, kind: 'event' }
+      }
+      if (itemType === 'reasoning') {
+        const detail =
+          pickString(params?.item, ['summary', 'text', 'reasoning']) ??
+          pickString(params?.item?.reasoning, ['summary', 'text'])
+        if (!detail) return null
+        return { label: 'Reasoning step', detail: truncateText(detail, 220), kind: 'reasoning' }
+      }
+      if (itemType === 'userMessage') return null
+      return { label: `Completed ${itemType}`, kind: 'event' }
+    }
+    if (methodLower.includes('file') || methodLower.includes('edit')) {
+      const filePath =
+        pickString(params, ['path', 'file']) ??
+        pickString(params?.target, ['path', 'file']) ??
+        pickString(params?.edit, ['path', 'file'])
+      if (filePath) return { label: 'Edited file', detail: filePath, kind: 'event' }
+    }
+    if (methodLower.includes('search') || methodLower.includes('scan')) {
+      const query =
+        pickString(params, ['query', 'pattern', 'text']) ??
+        pickString(params?.search, ['query', 'pattern', 'text'])
+      return { label: 'Scanning workspace', detail: query ? truncateText(query, 140) : undefined, kind: 'event' }
+    }
+    if (methodLower.includes('task') && methodLower.includes('complete')) {
+      return { label: 'Task step complete', kind: 'event' }
+    }
+    if (methodLower.includes('turn') && methodLower.includes('complete')) {
+      return { label: 'Turn complete', kind: 'event' }
+    }
+    if (methodLower.includes('agent_message')) {
       return null
     }
-    return { label: `Event: ${method}`, detail: toShortJson(params, 140), kind: 'event' }
+    return null
   }
-  if (typeof evt.type === 'string') return { label: evt.type, kind: 'event' }
+  if (typeof evt.type === 'string') return null
   return null
 }
 
@@ -1291,7 +1551,6 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
           value?.sandbox === 'read-only' || value?.sandbox === 'danger-full-access'
             ? value.sandbox
             : 'workspace-write',
-        debug: Boolean(value?.debug),
       }
     }
     for (const p of list) {
@@ -1301,7 +1560,6 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
           defaultModel: DEFAULT_MODEL,
           permissionMode: 'verify-first',
           sandbox: 'workspace-write',
-          debug: false,
         }
       }
     }
@@ -1314,7 +1572,6 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
         defaultModel: DEFAULT_MODEL,
         permissionMode: 'verify-first',
         sandbox: 'workspace-write',
-        debug: false,
       }
     }
     return result
@@ -1348,11 +1605,10 @@ export default function App() {
     defaultModel: DEFAULT_MODEL,
     permissionMode: 'verify-first',
     sandbox: 'workspace-write',
-    debug: false,
   })
   const [showThemeModal, setShowThemeModal] = useState(false)
-  const [showModelSetupModal, setShowModelSetupModal] = useState(false)
   const [showAppSettingsModal, setShowAppSettingsModal] = useState(false)
+  const [appSettingsView, setAppSettingsView] = useState<'models' | 'preferences' | 'connectivity' | 'responses' | 'diagnostics'>('connectivity')
   const [applicationSettings, setApplicationSettings] = useState<ApplicationSettings>(() => getInitialApplicationSettings())
   const [diagnosticsInfo, setDiagnosticsInfo] = useState<{
     userDataPath: string
@@ -1363,8 +1619,14 @@ export default function App() {
   } | null>(null)
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
   const [diagnosticsActionStatus, setDiagnosticsActionStatus] = useState<string | null>(null)
+  const [providerAuthByName, setProviderAuthByName] = useState<Partial<Record<string, ProviderAuthStatus>>>({})
+  const [providerAuthLoadingByName, setProviderAuthLoadingByName] = useState<Record<string, boolean>>({})
+  const [providerAuthActionByName, setProviderAuthActionByName] = useState<Record<string, string | null>>({})
   const [modelConfig, setModelConfig] = useState<ModelConfig>(() => getInitialModelConfig())
+  const [providerRegistry, setProviderRegistry] = useState<ProviderRegistry>(() => getInitialProviderRegistry())
   const [editingModel, setEditingModel] = useState<ModelInterface | null>(null)
+  const [showProviderSetupModal, setShowProviderSetupModal] = useState(false)
+  const [editingProvider, setEditingProvider] = useState<CustomProviderConfig | null>(null)
   const [modelForm, setModelForm] = useState<ModelInterface>({
     id: '',
     displayName: '',
@@ -1392,12 +1654,11 @@ export default function App() {
   const [focusedEditorId, setFocusedEditorId] = useState<string | null>(null)
   const [panelActivityById, setPanelActivityById] = useState<Record<string, PanelActivityState>>({})
   const [activityClock, setActivityClock] = useState(() => Date.now())
-  const [activityOpenByPanel, setActivityOpenByPanel] = useState<Record<string, boolean>>({})
   const [panelDebugById, setPanelDebugById] = useState<Record<string, PanelDebugEntry[]>>({})
-  const [debugOpenByPanel, setDebugOpenByPanel] = useState<Record<string, boolean>>({})
   const [settingsPopoverByPanel, setSettingsPopoverByPanel] = useState<Record<string, 'mode' | 'sandbox' | 'permission' | null>>({})
   const [codeBlockOpenById, setCodeBlockOpenById] = useState<Record<string, boolean>>({})
-  const [thinkingOpenByMessageId, setThinkingOpenByMessageId] = useState<Record<string, boolean>>({})
+  const [timelineOpenByUnitId, setTimelineOpenByUnitId] = useState<Record<string, boolean>>({})
+  const [timelinePinnedCodeByUnitId, setTimelinePinnedCodeByUnitId] = useState<Record<string, boolean>>({})
   const [chatHistory, setChatHistory] = useState<ChatHistoryEntry[]>(() => getInitialChatHistory())
   const [selectedHistoryId, setSelectedHistoryId] = useState('')
 
@@ -1428,6 +1689,14 @@ export default function App() {
   const panelsRef = useRef<AgentPanelState[]>([])
   const editorPanelsRef = useRef<EditorPanelState[]>([])
   const focusedEditorIdRef = useRef<string | null>(null)
+  const activePanelIdRef = useRef<string>('default')
+  const showWorkspaceWindowRef = useRef(true)
+  const workspaceTreeRef = useRef<WorkspaceTreeNode[]>([])
+  const showHiddenFilesRef = useRef(false)
+  const showNodeModulesRef = useRef(false)
+  const selectedWorkspaceFileRef = useRef<string | null>(null)
+  const lastFindInPageQueryRef = useRef('')
+  const lastFindInFilesQueryRef = useRef('')
   const reconnectingRef = useRef(new Set<string>())
   const workspaceRootRef = useRef(workspaceRoot)
   const workspaceListRef = useRef(workspaceList)
@@ -1450,6 +1719,22 @@ export default function App() {
     makeDefaultPanel('default', getInitialWorkspaceRoot()),
   ])
   const [activePanelId, setActivePanelId] = useState<string>('default')
+  const panelTimelineById = useMemo<Record<string, TimelineUnit[]>>(
+    () =>
+      Object.fromEntries(
+        panels.map((panel) => [
+          panel.id,
+          buildTimelineForPanel({
+            panelId: panel.id,
+            messages: filterMessagesForPresentation(panel.messages, applicationSettings.responseStyle),
+            activityItems: panelActivityById[panel.id]?.recent ?? [],
+            streaming: panel.streaming,
+            retrospectiveWindow: Number.MAX_SAFE_INTEGER,
+          }),
+        ]),
+      ),
+    [panels, panelActivityById, applicationSettings.responseStyle],
+  )
   const activeThemePreset = useMemo(
     () => THEME_PRESETS.find((preset) => preset.id === applicationSettings.themePresetId) ?? THEME_PRESETS[0],
     [applicationSettings.themePresetId],
@@ -1497,6 +1782,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(MODEL_CONFIG_STORAGE_KEY, JSON.stringify(modelConfig))
   }, [modelConfig])
+
+  useEffect(() => {
+    localStorage.setItem(PROVIDER_REGISTRY_STORAGE_KEY, JSON.stringify(providerRegistry))
+  }, [providerRegistry])
 
   useEffect(() => {
     localStorage.setItem(EXPLORER_PREFS_STORAGE_KEY, JSON.stringify(explorerPrefsByWorkspace))
@@ -1579,12 +1868,36 @@ export default function App() {
   }, [panels])
 
   useEffect(() => {
+    activePanelIdRef.current = activePanelId
+  }, [activePanelId])
+
+  useEffect(() => {
     editorPanelsRef.current = editorPanels
   }, [editorPanels])
 
   useEffect(() => {
     focusedEditorIdRef.current = focusedEditorId
   }, [focusedEditorId])
+
+  useEffect(() => {
+    showWorkspaceWindowRef.current = showWorkspaceWindow
+  }, [showWorkspaceWindow])
+
+  useEffect(() => {
+    workspaceTreeRef.current = workspaceTree
+  }, [workspaceTree])
+
+  useEffect(() => {
+    showHiddenFilesRef.current = showHiddenFiles
+  }, [showHiddenFiles])
+
+  useEffect(() => {
+    showNodeModulesRef.current = showNodeModules
+  }, [showNodeModules])
+
+  useEffect(() => {
+    selectedWorkspaceFileRef.current = selectedWorkspaceFile
+  }, [selectedWorkspaceFile])
 
   useEffect(() => {
     api.setEditorMenuState?.(Boolean(focusedEditorId))
@@ -1658,9 +1971,78 @@ export default function App() {
     }
   }, [api, applicationSettings.restoreSessionOnStartup])
 
+  const modelsCatalogFetchedRef = useRef(false)
   useEffect(() => {
-    if (!showAppSettingsModal) return
+    if (!api.getAvailableModels || modelsCatalogFetchedRef.current) return
+    modelsCatalogFetchedRef.current = true
+    void (async () => {
+      try {
+        const { codex, claude, gemini } = await api.getAvailableModels()
+        const catalogCodexIds = new Set(codex.map((m) => m.id))
+        const catalogClaudeIds = new Set(claude.map((m) => m.id))
+        const catalogGeminiIds = new Set(gemini.map((m) => m.id))
+        if (codex.length === 0 && claude.length === 0 && gemini.length === 0) return
+        setModelConfig((prev) => {
+          const kept = prev.interfaces.filter(
+            (m) => {
+              if (m.provider === 'codex') return catalogCodexIds.size === 0 || catalogCodexIds.has(m.id)
+              if (m.provider === 'claude') return catalogClaudeIds.size === 0 || catalogClaudeIds.has(m.id)
+              if (m.provider === 'gemini') return catalogGeminiIds.size === 0 || catalogGeminiIds.has(m.id)
+              return true
+            },
+          )
+          const existingIds = new Set(kept.map((m) => m.id))
+          const toAdd: ModelInterface[] = [
+            ...codex
+              .filter((m) => !existingIds.has(m.id))
+              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'codex' as ModelProvider, enabled: true })),
+            ...claude
+              .filter((m) => !existingIds.has(m.id))
+              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'claude' as ModelProvider, enabled: true })),
+            ...gemini
+              .filter((m) => !existingIds.has(m.id))
+              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'gemini' as ModelProvider, enabled: true })),
+          ]
+          for (const m of toAdd) existingIds.add(m.id)
+          return { interfaces: [...kept, ...toAdd] }
+        })
+      } catch {
+        // ignore - use built-in models only
+      }
+    })()
+  }, [api])
+
+  const resolvedProviderConfigs = useMemo(
+    () => resolveProviderConfigs(providerRegistry),
+    [providerRegistry],
+  )
+
+  useEffect(() => {
+    if (!showAppSettingsModal || (appSettingsView !== 'connectivity' && appSettingsView !== 'diagnostics')) return
     setDiagnosticsError(null)
+    void Promise.all(
+      resolvedProviderConfigs.map(async (config) => {
+        setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: true }))
+        try {
+          const status = (await api.getProviderAuthStatus({
+            id: config.id,
+            cliCommand: config.cliCommand,
+            cliPath: config.cliPath,
+            authCheckCommand: config.authCheckCommand,
+            loginCommand: config.loginCommand,
+          })) as ProviderAuthStatus
+          setProviderAuthByName((prev) => ({ ...prev, [config.id]: status }))
+          setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
+        } catch (err) {
+          setProviderAuthActionByName((prev) => ({
+            ...prev,
+            [config.id]: `Could not check ${config.displayName}: ${formatError(err)}`,
+          }))
+        } finally {
+          setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: false }))
+        }
+      }),
+    )
     void (async () => {
       try {
         const info = await api.getDiagnosticsInfo?.()
@@ -1670,7 +2052,29 @@ export default function App() {
         setDiagnosticsError(formatError(err))
       }
     })()
-  }, [api, showAppSettingsModal])
+  }, [api, appSettingsView, showAppSettingsModal, resolvedProviderConfigs])
+
+  useEffect(() => {
+    setCodeBlockOpenById((prev) => {
+      const keys = Object.keys(prev)
+      if (keys.length === 0) return prev
+      let changed = false
+      const next = { ...prev }
+      for (const units of Object.values(panelTimelineById)) {
+        for (const unit of units) {
+          if (unit.kind !== 'code' || unit.status !== 'completed' || timelinePinnedCodeByUnitId[unit.id]) continue
+          const prefix = `${unit.id}:`
+          for (const key of keys) {
+            if (key.startsWith(prefix) && next[key]) {
+              next[key] = false
+              changed = true
+            }
+          }
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [panelTimelineById, timelinePinnedCodeByUnitId])
 
   useEffect(() => {
     if (!appStateHydratedRef.current) return
@@ -2221,42 +2625,6 @@ export default function App() {
     setChatHistory((prev) => [entry, ...prev].slice(0, MAX_CHAT_HISTORY_ENTRIES))
   }
 
-  function openChatFromHistory(historyId: string) {
-    const entry = chatHistory.find((x) => x.id === historyId)
-    if (!entry) return
-    if (panelsRef.current.length >= MAX_PANELS) {
-      alert(`Maximum ${MAX_PANELS} panels open. Close one panel first.`)
-      return
-    }
-    const panelId = newId()
-    const restoredMessages = cloneChatMessages(entry.messages)
-    setPanels((prev) => {
-      if (prev.length >= MAX_PANELS) return prev
-      return [
-        ...prev,
-        {
-          id: panelId,
-          title: entry.title,
-          cwd: entry.workspaceRoot || workspaceRoot,
-          model: entry.model || DEFAULT_MODEL,
-          permissionMode: entry.permissionMode,
-          sandbox: entry.sandbox,
-          status: `Loaded from history (${new Date(entry.savedAt).toLocaleString()})`,
-          connected: false,
-          streaming: false,
-          messages: restoredMessages,
-          attachments: [],
-          input: '',
-          pendingInputs: [],
-          fontScale: entry.fontScale,
-          usage: undefined,
-        },
-      ]
-    })
-    setActivePanelId(panelId)
-    setFocusedEditorId(null)
-  }
-
   function registerTextarea(panelId: string, el: HTMLTextAreaElement | null) {
     if (!el) {
       textareaRefs.current.delete(panelId)
@@ -2314,6 +2682,37 @@ export default function App() {
     el.style.overflowY = el.scrollHeight > INPUT_MAX_HEIGHT_PX ? 'auto' : 'hidden'
   }
 
+  function hasSelectedTextInChatHistory(container: HTMLElement) {
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed) return false
+    if (!selection.toString()) return false
+    for (let idx = 0; idx < selection.rangeCount; idx += 1) {
+      const range = selection.getRangeAt(idx)
+      if (range.collapsed) continue
+      if (
+        container.contains(range.startContainer) ||
+        container.contains(range.endContainer) ||
+        container.contains(range.commonAncestorContainer)
+      ) {
+        return true
+      }
+    }
+    return false
+  }
+
+  function onChatHistoryContextMenu(e: React.MouseEvent<HTMLDivElement>) {
+    if (!hasSelectedTextInChatHistory(e.currentTarget)) return
+    e.preventDefault()
+    void api.showContextMenu?.('chat-selection')
+  }
+
+  function onInputPanelContextMenu(e: React.MouseEvent<HTMLTextAreaElement>) {
+    const input = e.currentTarget
+    if (input.selectionStart === input.selectionEnd) return
+    e.preventDefault()
+    void api.showContextMenu?.('input-selection')
+  }
+
   function zoomPanelFont(panelId: string, deltaY: number) {
     setPanels((prev) =>
       prev.map((p) =>
@@ -2354,7 +2753,6 @@ export default function App() {
         defaultModel: DEFAULT_MODEL,
         permissionMode: 'verify-first',
         sandbox: 'workspace-write',
-        debug: false,
       } as WorkspaceSettings)
 
     if (mode === 'new') {
@@ -2363,7 +2761,6 @@ export default function App() {
         defaultModel: current.defaultModel ?? DEFAULT_MODEL,
         permissionMode: current.permissionMode ?? 'verify-first',
         sandbox: current.sandbox ?? 'workspace-write',
-        debug: Boolean(current.debug),
       } satisfies WorkspaceSettings
     }
 
@@ -2372,7 +2769,6 @@ export default function App() {
       defaultModel: current.defaultModel ?? DEFAULT_MODEL,
       permissionMode: current.permissionMode ?? 'verify-first',
       sandbox: current.sandbox ?? 'workspace-write',
-      debug: Boolean(current.debug),
     } satisfies WorkspaceSettings
   }
 
@@ -2384,7 +2780,6 @@ export default function App() {
       defaultModel: form.defaultModel.trim() || DEFAULT_MODEL,
       permissionMode,
       sandbox,
-      debug: Boolean(form.debug),
     }
   }
 
@@ -2395,8 +2790,7 @@ export default function App() {
       left.path === right.path &&
       left.defaultModel === right.defaultModel &&
       left.permissionMode === right.permissionMode &&
-      left.sandbox === right.sandbox &&
-      left.debug === right.debug
+      left.sandbox === right.sandbox
     )
   }
 
@@ -2521,6 +2915,20 @@ export default function App() {
       const next = [nextEntry, ...existing].slice(0, 80)
       return { ...prev, [agentWindowId]: next }
     })
+    const shouldMirrorToChat = new Set(['send', 'auth', 'connect', 'turn/start', 'queue', 'error', 'event:status']).has(stage)
+    if (!shouldMirrorToChat) return
+    if (!applicationSettings.showDebugNotesInTimeline) return
+    const debugLine = `Debug (${stage}): ${detail || '(no detail)'}`
+    setPanels((prev) =>
+      prev.map((p) =>
+        p.id !== agentWindowId
+          ? p
+          : {
+              ...p,
+              messages: [...p.messages, { id: newId(), role: 'system', content: debugLine, format: 'text' }],
+            },
+      ),
+    )
   }
 
   function markPanelActivity(agentWindowId: string, evt: any) {
@@ -2652,6 +3060,10 @@ export default function App() {
         createAgentPanel()
         return
       }
+      if (action === 'newFile') {
+        void createNewFileFromMenu()
+        return
+      }
       if (action === 'newWorkspace') {
         openWorkspaceSettings('new')
         return
@@ -2660,9 +3072,17 @@ export default function App() {
         setShowWorkspacePicker(true)
         return
       }
+      if (action === 'openFile') {
+        void openFileFromMenu()
+        return
+      }
       if (action === 'openWorkspace' && typeof actionPath === 'string') {
         requestWorkspaceSwitch(actionPath, 'menu')
         setShowWorkspacePicker(false)
+        return
+      }
+      if (action === 'closeFocused') {
+        closeFocusedFromMenu()
         return
       }
       if (action === 'closeWorkspace') {
@@ -2670,16 +3090,37 @@ export default function App() {
         void deleteWorkspace(workspaceRoot)
         return
       }
+      if (action === 'findInPage') {
+        findInPageFromMenu()
+        return
+      }
+      if (action === 'findInFiles') {
+        void findInFilesFromMenu()
+        return
+      }
       if (action === 'openThemeModal') {
+        setAppSettingsView('preferences')
         setShowAppSettingsModal(true)
         return
       }
       if (action === 'openAppSettings') {
+        setAppSettingsView('connectivity')
         setShowAppSettingsModal(true)
         return
       }
       if (action === 'openModelSetup') {
-        setShowModelSetupModal(true)
+        setAppSettingsView('models')
+        setShowAppSettingsModal(true)
+        return
+      }
+      if (action === 'openPreferences') {
+        setAppSettingsView('preferences')
+        setShowAppSettingsModal(true)
+        return
+      }
+      if (action === 'openSettings') {
+        setAppSettingsView('connectivity')
+        setShowAppSettingsModal(true)
         return
       }
       if (action === 'saveEditorFile') {
@@ -2848,14 +3289,99 @@ export default function App() {
   }
 
   async function ensureProviderReady(provider: ModelProvider, reason: string) {
-    const status = (await api.getProviderAuthStatus(provider)) as ProviderAuthStatus
+    const config = resolvedProviderConfigs.find((c) => c.id === provider) ?? DEFAULT_BUILTIN_PROVIDER_CONFIGS[provider as ConnectivityProvider]
+    const status = (await api.getProviderAuthStatus({
+      id: config.id,
+      cliCommand: config.cliCommand,
+      cliPath: config.cliPath,
+      authCheckCommand: config.authCheckCommand,
+      loginCommand: config.loginCommand,
+    })) as ProviderAuthStatus
     if (!status.installed) {
-      throw new Error(`${provider} CLI is not installed. ${status.detail}`.trim())
+      throw new Error(`${config.displayName} CLI is not installed. ${status.detail}`.trim())
     }
     if (status.authenticated) return
     throw new Error(
-      `${provider} login required for ${reason}. ${status.detail}\nLogin outside the app, then send again.`,
+      `${config.displayName} login required for ${reason}. ${status.detail}\nLogin outside the app, then send again.`,
     )
+  }
+
+  async function refreshProviderAuthStatus(config: ProviderConfig) {
+    setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: true }))
+    try {
+      const status = (await api.getProviderAuthStatus({
+        id: config.id,
+        cliCommand: config.cliCommand,
+        cliPath: config.cliPath,
+        authCheckCommand: config.authCheckCommand,
+        loginCommand: config.loginCommand,
+      })) as ProviderAuthStatus
+      setProviderAuthByName((prev) => ({ ...prev, [config.id]: status }))
+      setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
+    } catch (err) {
+      setProviderAuthActionByName((prev) => ({
+        ...prev,
+        [config.id]: `Could not check ${config.displayName}: ${formatError(err)}`,
+      }))
+    } finally {
+      setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: false }))
+    }
+  }
+
+  async function refreshAllProviderAuthStatuses() {
+    await Promise.all(resolvedProviderConfigs.map((config) => refreshProviderAuthStatus(config)))
+  }
+
+  async function startProviderLoginFlow(config: ProviderConfig) {
+    setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
+    try {
+      const result = await api.startProviderLogin({
+        id: config.id,
+        cliCommand: config.cliCommand,
+        cliPath: config.cliPath,
+        authCheckCommand: config.authCheckCommand,
+        loginCommand: config.loginCommand,
+      })
+      setProviderAuthActionByName((prev) => ({
+        ...prev,
+        [config.id]:
+          result?.started
+            ? `${result.detail} Complete login in the terminal, then click Re-check.`
+            : `Could not start login for ${config.displayName}.`,
+      }))
+    } catch (err) {
+      setProviderAuthActionByName((prev) => ({
+        ...prev,
+        [config.id]: `Could not start login for ${config.displayName}: ${formatError(err)}`,
+      }))
+    }
+  }
+
+  async function startProviderUpgradeFlow(config: ProviderConfig) {
+    if (!config.upgradeCommand) return
+    setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
+    try {
+      const result = await api.upgradeProviderCli({
+        id: config.id,
+        cliCommand: config.cliCommand,
+        cliPath: config.cliPath,
+        authCheckCommand: config.authCheckCommand,
+        loginCommand: config.loginCommand,
+        upgradeCommand: config.upgradeCommand,
+      })
+      setProviderAuthActionByName((prev) => ({
+        ...prev,
+        [config.id]:
+          result?.started
+            ? result.detail
+            : result?.detail ?? `Could not upgrade ${config.displayName} CLI.`,
+      }))
+    } catch (err) {
+      setProviderAuthActionByName((prev) => ({
+        ...prev,
+        [config.id]: `Could not upgrade ${config.displayName}: ${formatError(err)}`,
+      }))
+    }
   }
 
   async function refreshWorkspaceTree(prefs?: ExplorerPrefs) {
@@ -3125,6 +3651,123 @@ export default function App() {
     if (focusedEditorId === editorId) setFocusedEditorId(null)
   }
 
+  async function createNewFileFromMenu() {
+    if (!workspaceRoot) return
+    try {
+      const relativePath = await api.pickWorkspaceSavePath(workspaceRoot, 'untitled.txt')
+      if (!relativePath) return
+      await api.writeWorkspaceFile(workspaceRoot, relativePath, '')
+      await openEditorForRelativePath(relativePath)
+      setSelectedWorkspaceFile(relativePath)
+      void refreshWorkspaceTree()
+    } catch (err) {
+      alert(`Could not create file: ${formatError(err)}`)
+    }
+  }
+
+  async function openFileFromMenu() {
+    if (!workspaceRoot) return
+    try {
+      const relativePath = await api.pickWorkspaceOpenPath(workspaceRoot)
+      if (!relativePath) return
+      await openEditorForRelativePath(relativePath)
+      setSelectedWorkspaceFile(relativePath)
+    } catch (err) {
+      alert(`Could not open file: ${formatError(err)}`)
+    }
+  }
+
+  function closeFocusedFromMenu() {
+    const focusedEditorId = focusedEditorIdRef.current
+    if (focusedEditorId) {
+      closeEditorPanel(focusedEditorId)
+      return
+    }
+
+    const activeElement = document.activeElement as HTMLElement | null
+    const workspaceWindowFocused = Boolean(activeElement?.closest('[data-workspace-window-root="true"]'))
+    if (workspaceWindowFocused && showWorkspaceWindowRef.current) {
+      setShowWorkspaceWindow(false)
+      return
+    }
+
+    const activePanelId = activePanelIdRef.current
+    if (activePanelId && panelsRef.current.some((p) => p.id === activePanelId)) {
+      void closePanel(activePanelId)
+      return
+    }
+
+    if (showWorkspaceWindowRef.current) {
+      setShowWorkspaceWindow(false)
+    }
+  }
+
+  function findInPageFromMenu() {
+    const input = prompt('Find', lastFindInPageQueryRef.current)
+    if (input === null) return
+    const query = input.trim()
+    if (!query) return
+    lastFindInPageQueryRef.current = query
+    const findInWindow = (window as Window & { find?: (...args: unknown[]) => boolean }).find
+    const found = findInWindow?.(query, false, false, true, false, false, false) ?? false
+    if (!found) {
+      alert(`No matches found for "${query}".`)
+    }
+  }
+
+  function collectWorkspaceFilePaths(nodes: WorkspaceTreeNode[]): string[] {
+    const paths: string[] = []
+    const walk = (items: WorkspaceTreeNode[]) => {
+      for (const item of items) {
+        if (item.type === 'file') {
+          paths.push(item.relativePath)
+          continue
+        }
+        if (item.children?.length) {
+          walk(item.children)
+        }
+      }
+    }
+    walk(nodes)
+    return paths
+  }
+
+  async function findInFilesFromMenu() {
+    const input = prompt('Find in Files (file name contains)', lastFindInFilesQueryRef.current || selectedWorkspaceFileRef.current || '')
+    if (input === null) return
+    const query = input.trim()
+    if (!query) return
+    lastFindInFilesQueryRef.current = query
+
+    let nodes = workspaceTreeRef.current
+    if (nodes.length === 0 && workspaceRoot) {
+      try {
+        const result = await api.listWorkspaceTree(workspaceRoot, {
+          includeHidden: showHiddenFilesRef.current,
+          includeNodeModules: showNodeModulesRef.current,
+        })
+        nodes = result?.nodes ?? []
+      } catch (err) {
+        alert(`Could not scan workspace files: ${formatError(err)}`)
+        return
+      }
+    }
+
+    const normalized = query.toLowerCase()
+    const matches = collectWorkspaceFilePaths(nodes).filter((relativePath) =>
+      relativePath.toLowerCase().includes(normalized),
+    )
+    if (matches.length === 0) {
+      alert(`No files found for "${query}".`)
+      return
+    }
+
+    const first = matches[0]
+    await openEditorForRelativePath(first)
+    setSelectedWorkspaceFile(first)
+    setDockTab('explorer')
+  }
+
   function toggleDirectory(relativePath: string) {
     setExpandedDirectories((prev) => ({ ...prev, [relativePath]: !prev[relativePath] }))
   }
@@ -3219,6 +3862,7 @@ export default function App() {
   function renderWorkspaceTile() {
     return (
       <div
+        data-workspace-window-root="true"
         className="h-full min-h-0 min-w-0 flex flex-col border border-neutral-200/80 dark:border-neutral-800 rounded-lg overflow-hidden bg-neutral-50 dark:bg-neutral-900 font-mono"
         onMouseDownCapture={() => setFocusedEditorId(null)}
       >
@@ -3234,7 +3878,7 @@ export default function App() {
               className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
                 dockTab === 'orchestrator'
                   ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
               }`}
               onClick={() => setDockTab('orchestrator')}
             >
@@ -3255,7 +3899,7 @@ export default function App() {
               className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
                 dockTab === 'explorer'
                   ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
               }`}
               onClick={() => setDockTab('explorer')}
             >
@@ -3270,7 +3914,7 @@ export default function App() {
               className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
                 dockTab === 'git'
                   ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
               }`}
               onClick={() => setDockTab('git')}
             >
@@ -3290,7 +3934,7 @@ export default function App() {
               className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
                 dockTab === 'settings'
                   ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
               }`}
               onClick={openWorkspaceSettingsTab}
             >
@@ -3304,7 +3948,7 @@ export default function App() {
             type="button"
             title={`Dock workspace window to ${workspaceDockSide === 'right' ? 'left' : 'right'}`}
             aria-label={`Dock workspace window to ${workspaceDockSide === 'right' ? 'left' : 'right'}`}
-            className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+            className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
             onClick={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -3963,7 +4607,7 @@ export default function App() {
             <div className="inline-flex items-center gap-1.5">
               <button
                 type="button"
-                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
                 onClick={() => refreshWorkspaceTree()}
                 title="Refresh workspace folder"
                 aria-label="Refresh workspace folder"
@@ -3975,7 +4619,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
                 onClick={expandAllDirectories}
                 title="Expand all"
                 aria-label="Expand all"
@@ -3987,7 +4631,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
                 onClick={collapseAllDirectories}
                 title="Collapse all"
                 aria-label="Collapse all"
@@ -4070,13 +4714,13 @@ export default function App() {
             <button
               key={`${entry.relativePath}-${entry.indexStatus}-${entry.workingTreeStatus}`}
               type="button"
-              className="w-full text-left px-2.5 py-1 rounded-md text-xs font-mono border border-transparent bg-transparent hover:bg-transparent active:bg-transparent hover:border-neutral-300 dark:hover:border-neutral-700"
+              className="w-full text-left px-2.5 py-1 rounded-md text-xs font-mono border border-transparent bg-transparent hover:bg-neutral-100/80 dark:hover:bg-neutral-800/60 active:bg-neutral-200/60 dark:active:bg-neutral-700/60 hover:border-neutral-300 dark:hover:border-neutral-600 text-neutral-800 dark:text-neutral-200"
               onClick={() => openFilePreview(entry.relativePath)}
               title={entry.relativePath}
             >
               <div className="flex items-start gap-2">
-                <span className={`px-1.5 py-0.5 rounded text-[10px] ${gitEntryClass(entry)}`}>{gitStatusText(entry)}</span>
-                <span className={`truncate flex-1 ${isDeletedGitEntry(entry) ? 'line-through' : ''}`}>{entry.relativePath}</span>
+                <span className={`px-1.5 py-0.5 rounded text-[10px] shrink-0 ${gitEntryClass(entry)}`}>{gitStatusText(entry)}</span>
+                <span className={`truncate flex-1 ${isDeletedGitEntry(entry) ? 'line-through opacity-70' : ''}`}>{entry.relativePath}</span>
               </div>
               {entry.renamedFrom && (
                 <div className="pl-8 text-[10px] text-neutral-500 dark:text-neutral-400 truncate">
@@ -4185,20 +4829,21 @@ export default function App() {
               </div>
             )}
             <div className="space-y-1.5">
-              <span className="text-neutral-600 dark:text-neutral-400">Debug controls</span>
-              <label className="flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300">
-                <input
-                  type="checkbox"
-                  checked={Boolean(workspaceForm.debug)}
-                  onChange={(e) =>
-                    setWorkspaceForm((prev) => ({
-                      ...prev,
-                      debug: e.target.checked,
-                    }))
-                  }
-                />
-                <span>Show panel activity/debug controls</span>
-              </label>
+              <span className="text-neutral-600 dark:text-neutral-400">Timeline controls</span>
+              <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                Debug and trace visibility is now global.
+              </div>
+              <button
+                type="button"
+                className="h-7 px-2 inline-flex items-center rounded-md border border-neutral-300 bg-white text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                onClick={() => {
+                  setShowWorkspaceModal(false)
+                  setAppSettingsView('connectivity')
+                  setShowAppSettingsModal(true)
+                }}
+              >
+                Open Application Settings
+              </button>
               <div className="pt-1 flex items-center gap-1.5">
                 <button
                   type="button"
@@ -4288,7 +4933,7 @@ export default function App() {
       <div className="shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 px-4 py-3 bg-white dark:bg-neutral-950">
         <div className="flex flex-wrap items-center justify-between gap-2.5 text-xs min-w-0">
           <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-neutral-600 dark:text-neutral-400">Workspace</span>
+            <span className="text-neutral-600 dark:text-neutral-300">Workspace</span>
             <select
               className={`h-9 px-3 rounded-lg font-mono shadow-sm w-[34vw] max-w-[440px] min-w-[220px] ${UI_INPUT_CLASS}`}
               value={workspaceList.includes(workspaceRoot) ? workspaceRoot : workspaceList[0] ?? ''}
@@ -4324,7 +4969,7 @@ export default function App() {
               </svg>
             </button>
             <div className="mx-2 h-6 w-px bg-neutral-300/80 dark:bg-neutral-700/80" />
-            <span className="text-neutral-600 dark:text-neutral-400">History</span>
+            <span className="text-neutral-600 dark:text-neutral-300">History</span>
             <select
               className={`h-9 px-3 rounded-lg shadow-sm w-[30vw] max-w-[360px] min-w-[180px] ${UI_INPUT_CLASS}`}
               value={selectedHistoryId}
@@ -4359,7 +5004,7 @@ export default function App() {
           <div className="flex items-center gap-1">
             <button
               className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
-                layoutMode === 'horizontal' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+                layoutMode === 'horizontal' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
               }`}
               onClick={() => setLayoutMode('horizontal')}
               title="Split horizontal (H)"
@@ -4371,7 +5016,7 @@ export default function App() {
             </button>
             <button
               className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
-                layoutMode === 'vertical' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+                layoutMode === 'vertical' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
               }`}
               onClick={() => setLayoutMode('vertical')}
               title="Split vertical (V)"
@@ -4383,7 +5028,7 @@ export default function App() {
             </button>
             <button
               className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
-                layoutMode === 'grid' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
+                layoutMode === 'grid' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
               }`}
               onClick={() => setLayoutMode('grid')}
               title="Tile / Grid"
@@ -4518,7 +5163,7 @@ export default function App() {
               <div className="shrink-0 flex items-center gap-2">
                 <button
                   type="button"
-                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800 disabled:opacity-50"
+                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 disabled:opacity-50"
                   disabled={filePreview.loading || Boolean(filePreview.error) || filePreview.binary}
                   onClick={() => {
                     void openEditorForRelativePath(filePreview.relativePath)
@@ -4529,7 +5174,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800 disabled:opacity-50"
+                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 disabled:opacity-50"
                   disabled={filePreview.loading}
                   onClick={() => openFilePreview(filePreview.relativePath)}
                 >
@@ -4626,7 +5271,7 @@ export default function App() {
         <div className={MODAL_BACKDROP_CLASS}>
           <div className={`w-full max-w-2xl ${MODAL_CARD_CLASS} max-h-[90vh] flex flex-col`}>
             <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0">
-              <div className="font-medium">Application settings</div>
+              <div className="font-medium">Settings</div>
               <button
                 className={UI_CLOSE_ICON_BUTTON_CLASS}
                 onClick={() => setShowAppSettingsModal(false)}
@@ -4638,7 +5283,193 @@ export default function App() {
                 </svg>
               </button>
             </div>
+            <div className="px-4 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-2 shrink-0 flex-wrap">
+              {(['models', 'preferences', 'connectivity', 'responses', 'diagnostics'] as const).map((view) => (
+                <button
+                  key={view}
+                  type="button"
+                  className={`px-3 py-1.5 rounded-md text-xs border ${
+                    appSettingsView === view
+                      ? 'border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
+                      : 'border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                  }`}
+                  onClick={() => setAppSettingsView(view)}
+                >
+                  {view === 'models' && 'Models'}
+                  {view === 'preferences' && 'Preferences'}
+                  {view === 'connectivity' && 'CLI Connectivity'}
+                  {view === 'responses' && 'Responses'}
+                  {view === 'diagnostics' && 'Diagnostics'}
+                </button>
+              ))}
+            </div>
             <div className="p-4 overflow-auto flex-1 space-y-5">
+              {appSettingsView === 'models' && (
+                <>
+              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                Add and configure model interfaces. Panel routing supports Codex, Claude, and Gemini.
+              </p>
+              {api.getAvailableModels && (
+                <div className="flex items-center gap-2 mb-4">
+                  <button
+                    type="button"
+                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                    onClick={async () => {
+                      try {
+                        const { codex, claude, gemini } = await api.getAvailableModels()
+                        const catalogCodexIds = new Set(codex.map((m) => m.id))
+                        const catalogClaudeIds = new Set(claude.map((m) => m.id))
+                        const catalogGeminiIds = new Set(gemini.map((m) => m.id))
+                        if (codex.length === 0 && claude.length === 0 && gemini.length === 0) return
+                        setModelConfig((prev) => {
+                          const kept = prev.interfaces.filter(
+                            (m) => {
+                              if (m.provider === 'codex') return catalogCodexIds.size === 0 || catalogCodexIds.has(m.id)
+                              if (m.provider === 'claude') return catalogClaudeIds.size === 0 || catalogClaudeIds.has(m.id)
+                              if (m.provider === 'gemini') return catalogGeminiIds.size === 0 || catalogGeminiIds.has(m.id)
+                              return true
+                            },
+                          )
+                          const existingIds = new Set(kept.map((m) => m.id))
+                          const toAdd: ModelInterface[] = [
+                            ...codex
+                              .filter((m) => !existingIds.has(m.id))
+                              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'codex' as ModelProvider, enabled: true })),
+                            ...claude
+                              .filter((m) => !existingIds.has(m.id))
+                              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'claude' as ModelProvider, enabled: true })),
+                            ...gemini
+                              .filter((m) => !existingIds.has(m.id))
+                              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'gemini' as ModelProvider, enabled: true })),
+                          ]
+                          return { interfaces: [...kept, ...toAdd] }
+                        })
+                      } catch { /* ignore */ }
+                    }}
+                  >
+                    Refresh models from catalog
+                  </button>
+                  <span className="text-xs text-neutral-500 dark:text-neutral-400">Fetches from barnaby.build</span>
+                </div>
+              )}
+              {editingModel ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-[120px_1fr] items-center gap-2 text-sm">
+                    <span className="text-neutral-600 dark:text-neutral-400">ID</span>
+                    <input
+                      className={`${UI_INPUT_CLASS} font-mono text-sm`}
+                      value={modelForm.id}
+                      onChange={(e) => setModelForm((p) => ({ ...p, id: e.target.value }))}
+                      placeholder="e.g. gemini-2.0-flash"
+                    />
+                    <span className="text-neutral-600 dark:text-neutral-400">Display name</span>
+                    <input
+                      className={UI_INPUT_CLASS}
+                      value={modelForm.displayName}
+                      onChange={(e) => setModelForm((p) => ({ ...p, displayName: e.target.value }))}
+                      placeholder="e.g. Gemini 2.0 Flash"
+                    />
+                    <span className="text-neutral-600 dark:text-neutral-400">Provider</span>
+                    <select
+                      className={UI_SELECT_CLASS}
+                      value={modelForm.provider}
+                      onChange={(e) => setModelForm((p) => ({ ...p, provider: e.target.value as ModelProvider }))}
+                    >
+                      <option value="codex">Codex (ChatGPT)</option>
+                      <option value="claude">Claude (CLI subscription)</option>
+                      <option value="gemini">Gemini (CLI subscription)</option>
+                    </select>
+                    <span className="text-neutral-600 dark:text-neutral-400">Enabled</span>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={modelForm.enabled}
+                        onChange={(e) => setModelForm((p) => ({ ...p, enabled: e.target.checked }))}
+                      />
+                      Show in model selector
+                    </label>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      className={UI_BUTTON_PRIMARY_CLASS}
+                      onClick={() => {
+                        const idx = modelConfig.interfaces.findIndex((m) => m.id === editingModel.id)
+                        const next = [...modelConfig.interfaces]
+                        if (idx >= 0) next[idx] = modelForm
+                        else next.push(modelForm)
+                        setModelConfig({ interfaces: next })
+                        setEditingModel(null)
+                      }}
+                    >
+                      Save
+                    </button>
+                    <button
+                      className="px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                      onClick={() => setEditingModel(null)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    {modelConfig.interfaces.map((m) => (
+                      <div
+                        key={m.id}
+                        className="flex items-center justify-between px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                      >
+                        <div>
+                          <span className="font-medium">{m.displayName || m.id}</span>
+                          <span className="text-xs text-neutral-500 dark:text-neutral-400 ml-2">
+                            {m.provider} {!m.enabled && '(disabled)'}
+                          </span>
+                        </div>
+                        <div className="flex gap-1">
+                          <button
+                            className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                            onClick={() => {
+                              setModelForm({ ...m })
+                              setEditingModel(m)
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="px-2 py-1 text-xs rounded border border-red-200 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+                            onClick={() => {
+                              setModelConfig({
+                                interfaces: modelConfig.interfaces.filter((x) => x.id !== m.id),
+                              })
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    className="mt-4 px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                    onClick={() => {
+                      setModelForm({
+                        id: '',
+                        displayName: '',
+                        provider: 'gemini',
+                        enabled: true,
+                      })
+                      setEditingModel({ id: '_new', displayName: '', provider: 'gemini', enabled: true })
+                    }}
+                  >
+                    + Add model
+                  </button>
+                </>
+              )}
+                </>
+              )}
+
+              {appSettingsView === 'preferences' && (
+                <>
               <section className="space-y-2">
                 <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Startup</div>
                 <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
@@ -4658,54 +5489,289 @@ export default function App() {
 
               <section className="space-y-3">
                 <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Appearance</div>
-                <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
-                    <input
-                      type="radio"
-                      name="app-theme-mode"
-                      checked={theme === 'dark'}
-                      onChange={() => setTheme('dark')}
-                    />
-                    Black
-                  </label>
-                  <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
-                    <input
-                      type="radio"
-                      name="app-theme-mode"
-                      checked={theme === 'light'}
-                      onChange={() => setTheme('light')}
-                    />
-                    Light
-                  </label>
-                </div>
-                <div>
-                  <div className="text-xs text-neutral-600 dark:text-neutral-400 mb-2">Theme preset</div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {THEME_PRESETS.map((preset) => (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        onClick={() =>
-                          setApplicationSettings((prev) => ({
-                            ...prev,
-                            themePresetId: preset.id,
-                          }))
-                        }
-                        className={`px-3 py-2 rounded-md border text-left text-sm ${
-                          applicationSettings.themePresetId === preset.id
-                            ? 'border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
-                            : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800'
-                        }`}
-                      >
-                        <span>{preset.name}</span>
-                      </button>
-                    ))}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-2">
+                    <div className="text-xs text-neutral-600 dark:text-neutral-400">Theme mode</div>
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+                        <input
+                          type="radio"
+                          name="app-theme-mode"
+                          checked={theme === 'dark'}
+                          onChange={() => setTheme('dark')}
+                        />
+                        Black
+                      </label>
+                      <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+                        <input
+                          type="radio"
+                          name="app-theme-mode"
+                          checked={theme === 'light'}
+                          onChange={() => setTheme('light')}
+                        />
+                        Light
+                      </label>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3">
+                    <div className="text-xs text-neutral-600 dark:text-neutral-400 mb-2">Theme preset</div>
+                    <div className="grid grid-cols-1 gap-2">
+                      {THEME_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() =>
+                            setApplicationSettings((prev) => ({
+                              ...prev,
+                              themePresetId: preset.id,
+                            }))
+                          }
+                          className={`px-3 py-2 rounded-md border text-left text-sm ${
+                            applicationSettings.themePresetId === preset.id
+                              ? 'border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
+                              : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <span>{preset.name}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </section>
+                </>
+              )}
 
+              {appSettingsView === 'connectivity' && (
+                <>
               <section className="space-y-3">
-                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Responses</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">CLI Connectivity</div>
+                  <button
+                    type="button"
+                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                    onClick={() => void refreshAllProviderAuthStatuses()}
+                  >
+                    Re-check all
+                  </button>
+                </div>
+                <div className="text-xs text-neutral-600 dark:text-neutral-400">
+                  Barnaby uses your locally installed CLI sessions. These checks run automatically when this dialog opens and do not enable providers;
+                  they only read local install/login state.
+                </div>
+                <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-2 bg-white/60 dark:bg-neutral-950/40">
+                  <div className="text-xs font-medium text-neutral-700 dark:text-neutral-300 uppercase tracking-wide">
+                    Provider coverage
+                  </div>
+                  <div className="text-xs text-neutral-600 dark:text-neutral-400">
+                    CODEX: full support (connectivity checks + model routing in panels).
+                  </div>
+                  <div className="text-xs text-neutral-600 dark:text-neutral-400">
+                    CLAUDE: full support (connectivity checks + model routing in panels).
+                  </div>
+                  <div className="text-xs text-neutral-600 dark:text-neutral-400">
+                    GEMINI: full support (connectivity checks + model routing in panels).
+                  </div>
+                  <div className="text-xs text-neutral-600 dark:text-neutral-400">
+                    Other CLIs: possible if they support non-interactive prompt execution, but adapters are not implemented in this build.
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {resolvedProviderConfigs.map((config) => {
+                    const status = providerAuthByName[config.id]
+                    const loading = providerAuthLoadingByName[config.id]
+                    const action = providerAuthActionByName[config.id]
+                    const statusLabel = !status
+                      ? 'Unknown'
+                      : !status.installed
+                        ? 'Not installed'
+                        : status.authenticated
+                          ? 'Connected'
+                          : 'Login required'
+                    const statusClass = !status
+                      ? 'border-neutral-300 text-neutral-700 dark:border-neutral-700 dark:text-neutral-300'
+                      : !status.installed
+                        ? 'border-red-300 text-red-700 dark:border-red-800 dark:text-red-300'
+                        : status.authenticated
+                          ? 'border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300'
+                          : 'border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300'
+                    const isBuiltIn = config.isBuiltIn ?? CONNECTIVITY_PROVIDERS.includes(config.id as ConnectivityProvider)
+                    const override = providerRegistry.overrides[config.id]
+                    return (
+                      <div
+                        key={config.id}
+                        className={`rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-2 bg-white/60 dark:bg-neutral-950/40 ${!config.enabled ? 'opacity-60' : ''}`}
+                      >
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <label className="flex items-center gap-1.5">
+                              <input
+                                type="checkbox"
+                                checked={config.enabled}
+                                onChange={(e) => {
+                                  const id = config.id
+                                  if (isBuiltIn) {
+                                    setProviderRegistry((prev: ProviderRegistry) => ({
+                                      ...prev,
+                                      overrides: {
+                                        ...prev.overrides,
+                                        [id]: { ...prev.overrides[id], enabled: e.target.checked },
+                                      },
+                                    }))
+                                  } else {
+                                    setProviderRegistry((prev: ProviderRegistry) => ({
+                                      ...prev,
+                                      customProviders: prev.customProviders.map((p: CustomProviderConfig) =>
+                                        p.id === id ? { ...p, enabled: e.target.checked } : p,
+                                      ),
+                                    }))
+                                  }
+                                }}
+                                className="rounded border-neutral-300"
+                              />
+                              <span className="font-medium text-sm text-neutral-800 dark:text-neutral-200">
+                                {config.displayName}
+                                {!isBuiltIn && (
+                                  <span className="text-[10px] text-neutral-500 dark:text-neutral-400 ml-1">(custom)</span>
+                                )}
+                              </span>
+                            </label>
+                            <div className={`px-2 py-0.5 rounded-full text-[11px] border ${statusClass}`}>{statusLabel}</div>
+                          </div>
+                          {!isBuiltIn && (
+                            <div className="flex gap-1">
+                              <button
+                                type="button"
+                                className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                                onClick={() => {
+                                  setEditingProvider(config)
+                                  setShowProviderSetupModal(true)
+                                }}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="px-2 py-1 text-xs rounded border border-red-200 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+                                onClick={() => {
+                                  setProviderRegistry((prev: ProviderRegistry) => ({
+                                    ...prev,
+                                    customProviders: prev.customProviders.filter((p: CustomProviderConfig) => p.id !== config.id),
+                                  }))
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {isBuiltIn && (
+                          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 items-center text-xs">
+                            <span className="text-neutral-500 dark:text-neutral-400">Display name</span>
+                            <input
+                              type="text"
+                              className={`${UI_INPUT_CLASS} text-sm`}
+                              value={override?.displayName ?? ''}
+                              onChange={(e) =>
+                                setProviderRegistry((prev: ProviderRegistry) => ({
+                                  ...prev,
+                                  overrides: {
+                                    ...prev.overrides,
+                                    [config.id]: { ...prev.overrides[config.id], displayName: e.target.value || undefined },
+                                  },
+                                }))
+                              }
+                              placeholder={
+                                CONNECTIVITY_PROVIDERS.includes(config.id as ConnectivityProvider)
+                                  ? DEFAULT_BUILTIN_PROVIDER_CONFIGS[config.id as ConnectivityProvider].displayName
+                                  : config.displayName
+                              }
+                            />
+                            <span className="text-neutral-500 dark:text-neutral-400">CLI path</span>
+                            <input
+                              type="text"
+                              className={`${UI_INPUT_CLASS} text-sm font-mono`}
+                              value={override?.cliPath ?? ''}
+                              onChange={(e) =>
+                                setProviderRegistry((prev: ProviderRegistry) => ({
+                                  ...prev,
+                                  overrides: {
+                                    ...prev.overrides,
+                                    [config.id]: { ...prev.overrides[config.id], cliPath: e.target.value || undefined },
+                                  },
+                                }))
+                              }
+                              placeholder="Use system PATH"
+                            />
+                          </div>
+                        )}
+                        <div className="text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap break-words">
+                          {loading ? `Checking ${config.displayName}...` : status?.detail || 'No status yet.'}
+                        </div>
+                        <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                          Checked: {status?.checkedAt ? formatCheckedAt(status.checkedAt) : 'Never'}
+                        </div>
+                        {config.enabled && (
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                              disabled={loading}
+                              onClick={() => void refreshProviderAuthStatus(config)}
+                            >
+                              {loading ? 'Checking...' : 'Re-check'}
+                            </button>
+                            <button
+                              type="button"
+                              className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                              disabled={loading}
+                              onClick={() => void startProviderLoginFlow(config)}
+                            >
+                              {status?.authenticated ? 'Re-authenticate' : 'Open login'}
+                            </button>
+                            {config.upgradeCommand && (
+                              <button
+                                type="button"
+                                className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                                disabled={loading}
+                                onClick={() => void startProviderUpgradeFlow(config)}
+                                title={config.upgradeCommand}
+                              >
+                                Upgrade CLI
+                              </button>
+                            )}
+                            {action && <span className="text-xs text-neutral-600 dark:text-neutral-400">{action}</span>}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+                <button
+                  type="button"
+                  className="mt-2 px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                  onClick={() => {
+                    setEditingProvider({
+                      id: '',
+                      displayName: '',
+                      enabled: true,
+                      type: 'cli',
+                      cliCommand: '',
+                      authCheckCommand: '--version',
+                    })
+                    setShowProviderSetupModal(true)
+                  }}
+                >
+                  + Add provider
+                </button>
+              </section>
+                </>
+              )}
+
+              {appSettingsView === 'responses' && (
+                <>
+              <section className="space-y-3">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Response style</div>
                 <div className="space-y-2 text-sm text-neutral-700 dark:text-neutral-300">
                   <label className="flex items-start gap-2">
                     <input
@@ -4760,6 +5826,68 @@ export default function App() {
                   </label>
                 </div>
               </section>
+                </>
+              )}
+
+              {appSettingsView === 'diagnostics' && (
+                <>
+              <section className="space-y-3">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Chat timeline</div>
+                <div className="space-y-2 text-sm text-neutral-700 dark:text-neutral-300">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(applicationSettings.showDebugNotesInTimeline)}
+                      onChange={(e) =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          showDebugNotesInTimeline: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span>Inject debug notes into chat timeline</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(applicationSettings.showActivityUpdates)}
+                      onChange={(e) =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          showActivityUpdates: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span>Show activity updates in chat timeline</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(applicationSettings.showReasoningUpdates)}
+                      onChange={(e) =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          showReasoningUpdates: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span>Show reasoning updates in chat timeline</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(applicationSettings.showOperationTrace)}
+                      onChange={(e) =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          showOperationTrace: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span>Show operation trace in chat timeline</span>
+                  </label>
+                </div>
+              </section>
 
               <section className="space-y-2">
                 <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Diagnostics</div>
@@ -4769,7 +5897,7 @@ export default function App() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
                     onClick={() => {
                       setDiagnosticsActionStatus(null)
                       void (async () => {
@@ -4805,6 +5933,8 @@ export default function App() {
                   </div>
                 )}
               </section>
+                </>
+              )}
             </div>
             <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end">
               <button
@@ -4813,6 +5943,128 @@ export default function App() {
               >
                 Done
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showProviderSetupModal && editingProvider && (
+        <div className={MODAL_BACKDROP_CLASS}>
+          <div className={`w-full max-w-lg ${MODAL_CARD_CLASS}`}>
+            <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+              <div className="font-medium">{editingProvider.id ? 'Edit provider' : 'Add provider'}</div>
+              <button
+                className={UI_CLOSE_ICON_BUTTON_CLASS}
+                onClick={() => {
+                  setShowProviderSetupModal(false)
+                  setEditingProvider(null)
+                }}
+                title="Close"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4 space-y-4 text-sm">
+              <p className="text-neutral-600 dark:text-neutral-400">
+                Add a custom CLI provider. The CLI must be installed on your system. Auth check runs the command with the given args; success means connected.
+              </p>
+              <div className="grid grid-cols-[120px_1fr] items-center gap-2">
+                <span className="text-neutral-600 dark:text-neutral-400">ID</span>
+                <input
+                  className={`${UI_INPUT_CLASS} font-mono`}
+                  value={editingProvider.id}
+                  onChange={(e) => setEditingProvider((p) => (p ? { ...p, id: e.target.value } : p))}
+                  placeholder="e.g. ollama"
+                  disabled={!!providerRegistry.customProviders.find((p) => p.id === editingProvider.id)}
+                />
+                <span className="text-neutral-600 dark:text-neutral-400">Display name</span>
+                <input
+                  className={UI_INPUT_CLASS}
+                  value={editingProvider.displayName}
+                  onChange={(e) => setEditingProvider((p) => (p ? { ...p, displayName: e.target.value } : p))}
+                  placeholder="e.g. Ollama"
+                />
+                <span className="text-neutral-600 dark:text-neutral-400">CLI command</span>
+                <input
+                  className={`${UI_INPUT_CLASS} font-mono`}
+                  value={editingProvider.cliCommand}
+                  onChange={(e) => setEditingProvider((p) => (p ? { ...p, cliCommand: e.target.value } : p))}
+                  placeholder="e.g. ollama"
+                />
+                <span className="text-neutral-600 dark:text-neutral-400">CLI path</span>
+                <input
+                  className={`${UI_INPUT_CLASS} font-mono`}
+                  value={editingProvider.cliPath ?? ''}
+                  onChange={(e) => setEditingProvider((p) => (p ? { ...p, cliPath: e.target.value || undefined } : p))}
+                  placeholder="Optional; uses PATH if empty"
+                />
+                <span className="text-neutral-600 dark:text-neutral-400">Auth check args</span>
+                <input
+                  className={`${UI_INPUT_CLASS} font-mono`}
+                  value={editingProvider.authCheckCommand ?? ''}
+                  onChange={(e) => setEditingProvider((p) => (p ? { ...p, authCheckCommand: e.target.value || undefined } : p))}
+                  placeholder="e.g. list or --version"
+                />
+                <span className="text-neutral-600 dark:text-neutral-400">Login command</span>
+                <input
+                  className={`${UI_INPUT_CLASS} font-mono`}
+                  value={editingProvider.loginCommand ?? ''}
+                  onChange={(e) => setEditingProvider((p) => (p ? { ...p, loginCommand: e.target.value || undefined } : p))}
+                  placeholder="e.g. ollama serve"
+                />
+                <span className="text-neutral-600 dark:text-neutral-400">Enabled</span>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={editingProvider.enabled}
+                    onChange={(e) => setEditingProvider((p) => (p ? { ...p, enabled: e.target.checked } : p))}
+                  />
+                  Show in connectivity
+                </label>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className={UI_BUTTON_PRIMARY_CLASS}
+                  onClick={() => {
+                    if (!editingProvider.id.trim() || !editingProvider.cliCommand.trim()) return
+                    const existingIdx = providerRegistry.customProviders.findIndex((p: CustomProviderConfig) => p.id === editingProvider.id)
+                    const next: CustomProviderConfig = {
+                      ...editingProvider,
+                      id: editingProvider.id.trim(),
+                      displayName: editingProvider.displayName.trim() || editingProvider.id,
+                      cliCommand: editingProvider.cliCommand.trim(),
+                      loginCommand: editingProvider.loginCommand?.trim() || editingProvider.cliCommand.trim(),
+                    }
+                    if (existingIdx >= 0) {
+                      setProviderRegistry((prev: ProviderRegistry) => ({
+                        ...prev,
+                        customProviders: prev.customProviders.map((p: CustomProviderConfig, i: number) => (i === existingIdx ? next : p)),
+                      }))
+                    } else if (!providerRegistry.customProviders.some((p: CustomProviderConfig) => p.id === next.id)) {
+                      setProviderRegistry((prev: ProviderRegistry) => ({
+                        ...prev,
+                        customProviders: [...prev.customProviders, next],
+                      }))
+                    }
+                    setShowProviderSetupModal(false)
+                    setEditingProvider(null)
+                  }}
+                >
+                  Save
+                </button>
+                <button
+                  className={UI_BUTTON_SECONDARY_CLASS}
+                  onClick={() => {
+                    setShowProviderSetupModal(false)
+                    setEditingProvider(null)
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -4912,7 +6164,6 @@ export default function App() {
                       defaultModel: DEFAULT_MODEL,
                       permissionMode: 'verify-first',
                       sandbox: 'workspace-write',
-                      debug: false,
                     },
                   }))
                   requestWorkspaceSwitch(selected, 'picker')
@@ -4924,146 +6175,6 @@ export default function App() {
               >
                 + Select folder...
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showModelSetupModal && (
-        <div className={MODAL_BACKDROP_CLASS}>
-          <div className={`w-full max-w-2xl ${MODAL_CARD_CLASS} max-h-[90vh] flex flex-col`}>
-            <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0">
-              <div className="font-medium">Model setup</div>
-              <button
-                className={UI_CLOSE_ICON_BUTTON_CLASS}
-                onClick={() => {
-                  setShowModelSetupModal(false)
-                  setEditingModel(null)
-                }}
-                title="Close"
-              >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                  <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                </svg>
-              </button>
-            </div>
-            <div className="p-4 overflow-auto flex-1">
-              <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
-                Add and configure model interfaces. Codex uses your ChatGPT login. Gemini uses your local Gemini CLI login (subscription), no API key required.
-              </p>
-              {editingModel ? (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-[120px_1fr] items-center gap-2 text-sm">
-                    <span className="text-neutral-600 dark:text-neutral-400">ID</span>
-                    <input
-                      className={`${UI_INPUT_CLASS} font-mono text-sm`}
-                      value={modelForm.id}
-                      onChange={(e) => setModelForm((p) => ({ ...p, id: e.target.value }))}
-                      placeholder="e.g. gemini-2.0-flash"
-                    />
-                    <span className="text-neutral-600 dark:text-neutral-400">Display name</span>
-                    <input
-                      className={UI_INPUT_CLASS}
-                      value={modelForm.displayName}
-                      onChange={(e) => setModelForm((p) => ({ ...p, displayName: e.target.value }))}
-                      placeholder="e.g. Gemini 2.0 Flash"
-                    />
-                    <span className="text-neutral-600 dark:text-neutral-400">Provider</span>
-                    <select
-                      className={UI_SELECT_CLASS}
-                      value={modelForm.provider}
-                      onChange={(e) => setModelForm((p) => ({ ...p, provider: e.target.value as ModelProvider }))}
-                    >
-                      <option value="codex">Codex (ChatGPT)</option>
-                      <option value="gemini">Gemini (CLI subscription)</option>
-                    </select>
-                    <span className="text-neutral-600 dark:text-neutral-400">Enabled</span>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={modelForm.enabled}
-                        onChange={(e) => setModelForm((p) => ({ ...p, enabled: e.target.checked }))}
-                      />
-                      Show in model selector
-                    </label>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      className={UI_BUTTON_PRIMARY_CLASS}
-                      onClick={() => {
-                        const idx = modelConfig.interfaces.findIndex((m) => m.id === editingModel.id)
-                        const next = [...modelConfig.interfaces]
-                        if (idx >= 0) next[idx] = modelForm
-                        else next.push(modelForm)
-                        setModelConfig({ interfaces: next })
-                        setEditingModel(null)
-                      }}
-                    >
-                      Save
-                    </button>
-                    <button
-                      className="px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
-                      onClick={() => setEditingModel(null)}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="space-y-2">
-                    {modelConfig.interfaces.map((m) => (
-                      <div
-                        key={m.id}
-                        className="flex items-center justify-between px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-900"
-                      >
-                        <div>
-                          <span className="font-medium">{m.displayName || m.id}</span>
-                          <span className="text-xs text-neutral-500 dark:text-neutral-400 ml-2">
-                            {m.provider} {!m.enabled && '(disabled)'}
-                          </span>
-                        </div>
-                        <div className="flex gap-1">
-                          <button
-                            className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
-                            onClick={() => {
-                              setModelForm({ ...m })
-                              setEditingModel(m)
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            className="px-2 py-1 text-xs rounded border border-red-200 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
-                            onClick={() => {
-                              setModelConfig({
-                                interfaces: modelConfig.interfaces.filter((x) => x.id !== m.id),
-                              })
-                            }}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <button
-                    className="mt-4 px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
-                    onClick={() => {
-                      setModelForm({
-                        id: '',
-                        displayName: '',
-                        provider: 'gemini',
-                        enabled: true,
-                      })
-                      setEditingModel({ id: '_new', displayName: '', provider: 'gemini', enabled: true })
-                    }}
-                  >
-                    + Add model
-                  </button>
-                </>
-              )}
             </div>
           </div>
         </div>
@@ -5173,21 +6284,10 @@ export default function App() {
                 </div>
               )}
               <div className="grid grid-cols-[140px_1fr] gap-2">
-                <span className="text-neutral-600 dark:text-neutral-400">Debug controls</span>
-                <div />
-                <label className="col-start-2 flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(workspaceForm.debug)}
-                    onChange={(e) =>
-                      setWorkspaceForm((prev) => ({
-                        ...prev,
-                        debug: e.target.checked,
-                      }))
-                    }
-                  />
-                  <span>Show panel activity/debug controls</span>
-                </label>
+                <span className="text-neutral-600 dark:text-neutral-400">Timeline controls</span>
+                <div className="col-start-2 text-xs text-neutral-500 dark:text-neutral-400">
+                  Debug and trace visibility is now configured in Application Settings.
+                </div>
               </div>
             </div>
             <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-between">
@@ -5207,7 +6307,7 @@ export default function App() {
               </div>
               <div className="flex gap-2">
                 <button
-                  className="px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                  className="px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
                   onClick={() => setShowWorkspaceModal(false)}
                 >
                   Cancel
@@ -5234,6 +6334,7 @@ export default function App() {
     const panelLineHeightPx = 24 * w.fontScale
     const panelTextStyle = { fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }
     const activity = panelActivityById[w.id]
+    const timelineUnits = panelTimelineById[w.id] ?? []
     const msSinceLastActivity = activity ? activityClock - activity.lastEventAt : Number.POSITIVE_INFINITY
     const isRunning = isBusy
     const isQueued = !isRunning && queueCount > 0
@@ -5258,18 +6359,13 @@ export default function App() {
         : 'Send'
     const secondsAgo = Number.isFinite(msSinceLastActivity) ? Math.max(0, Math.floor(msSinceLastActivity / 1000)) : null
     const activityTitle = activity
-      ? `Activity: ${activityLabel}\nLast event: ${activity.lastEventLabel}\n${secondsAgo}s ago\nEvents seen: ${activity.totalEvents}`
-      : 'Activity: idle\nNo events seen yet for this panel.'
-    const activityItems = activity?.recent ?? []
-    const activityOpen = Boolean(activityOpenByPanel[w.id])
-    const debugItems = panelDebugById[w.id] ?? []
-    const debugOpen = Boolean(debugOpenByPanel[w.id])
+      ? `Activity: ${activityLabel}\nLast event: ${activity.lastEventLabel}\n${secondsAgo}s ago\nEvents seen: ${activity.totalEvents}\nTimeline units: ${timelineUnits.length}`
+      : `Activity: idle\nNo events seen yet for this panel.\nTimeline units: ${timelineUnits.length}`
+    const showActivityUpdates = Boolean(applicationSettings.showActivityUpdates)
+    const showReasoningUpdates = Boolean(applicationSettings.showReasoningUpdates)
+    const showOperationTrace = applicationSettings.showOperationTrace !== false
     const settingsPopover = settingsPopoverByPanel[w.id] ?? null
     const interactionMode = parseInteractionMode(w.interactionMode)
-    const panelWorkspaceSettings =
-      workspaceSettingsByPath[w.cwd] ?? workspaceSettingsByPath[workspaceRoot]
-    const debugControlsVisible = Boolean(panelWorkspaceSettings?.debug)
-    const presentationMessages = filterMessagesForPresentation(w.messages, applicationSettings.responseStyle)
     const contextUsage = estimatePanelContextUsage(w)
     const contextUsagePercent = contextUsage ? Math.max(0, Number(contextUsage.usedPercent.toFixed(1))) : null
     const contextUsageBarClass =
@@ -5337,10 +6433,11 @@ export default function App() {
         <div
           ref={(el) => registerMessageViewport(w.id, el)}
           onScroll={() => onMessageViewportScroll(w.id)}
+          onContextMenu={onChatHistoryContextMenu}
           className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 space-y-2.5 bg-neutral-50 dark:bg-neutral-950 min-h-0"
           style={panelTextStyle}
         >
-          {presentationMessages.length === 0 && (
+          {timelineUnits.length === 0 && (
             <div className="mx-auto mt-8 max-w-2xl rounded-2xl border border-dashed border-neutral-300 bg-white/90 px-5 py-5 text-sm shadow-sm dark:border-neutral-700 dark:bg-neutral-900/70">
               <div className="text-base font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
                 Start a new agent turn
@@ -5361,10 +6458,67 @@ export default function App() {
               </div>
             </div>
           )}
-          {presentationMessages.map((m) => {
+          {timelineUnits.map((unit) => {
+            if (unit.kind === 'activity') {
+              const isReasoningActivity = unit.activityKind === 'reasoning'
+              const isOperationTrace = unit.activityKind === 'operation'
+              if (isOperationTrace && !showOperationTrace) return null
+              if (isReasoningActivity && !showReasoningUpdates) return null
+              if (!isReasoningActivity && !isOperationTrace && !showActivityUpdates) return null
+              const isOpen = timelineOpenByUnitId[unit.id] ?? unit.defaultOpen
+              const activityCardClass = isOperationTrace
+                ? 'group rounded-xl border border-violet-200 bg-violet-50/70 dark:border-violet-900/60 dark:bg-violet-950/25'
+                : 'group rounded-xl border border-amber-200 bg-amber-50/75 dark:border-amber-900/60 dark:bg-amber-950/20'
+              const activitySummaryClass = isOperationTrace
+                ? 'list-none cursor-pointer px-3 py-1.5 text-[11px] text-violet-900 dark:text-violet-200 flex items-center justify-between'
+                : 'list-none cursor-pointer px-3 py-1.5 text-[11px] text-amber-800 dark:text-amber-200 flex items-center justify-between'
+              const activityBodyClass = isOperationTrace
+                ? 'border-t border-violet-200 dark:border-violet-900/60 px-3 py-2 text-[12px] leading-5 text-violet-900 dark:text-violet-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere]'
+                : 'border-t border-amber-200 dark:border-amber-900/60 px-3 py-2 text-[12px] leading-5 text-amber-900 dark:text-amber-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere]'
+              return (
+                <div key={unit.id} className="w-full">
+                  <details
+                    open={isOpen}
+                    onToggle={(e) => {
+                      const next = e.currentTarget.open
+                      setTimelineOpenByUnitId((prev) => (prev[unit.id] === next ? prev : { ...prev, [unit.id]: next }))
+                    }}
+                    className={activityCardClass}
+                  >
+                    <summary className={activitySummaryClass}>
+                      <span>{unit.title || (isOperationTrace ? 'Operation trace' : 'Activity')}</span>
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        className="transition-transform group-open:rotate-180"
+                        aria-hidden
+                      >
+                        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </summary>
+                    <div className={activityBodyClass}>
+                      {unit.body}
+                    </div>
+                  </details>
+                </div>
+              )
+            }
+            const m = {
+              id: unit.id,
+              role: (unit.kind === 'user' ? 'user' : unit.kind === 'system' ? 'system' : 'assistant') as ChatRole,
+              content: unit.body,
+              format: (unit.markdown ? 'markdown' : 'text') as MessageFormat,
+              attachments: unit.attachments,
+            }
+            const isDebugSystemNote = m.role === 'system' && /^Debug \(/.test(m.content)
+            const codeUnitPinned = Boolean(timelinePinnedCodeByUnitId[unit.id])
+            const isCodeLifecycleUnit = unit.kind === 'code'
+            const hasFencedCodeBlocks = m.content.includes('```')
             let codeBlockIndex = 0
-            const shouldCollapseThinking = m.role === 'assistant' && isLikelyThinkingUpdate(m.content)
-            const thinkingOpen = thinkingOpenByMessageId[m.id] ?? false
+            const shouldCollapseThinking = unit.kind === 'thinking'
+            const thinkingOpen = timelineOpenByUnitId[unit.id] ?? unit.defaultOpen
             return (
             <div key={m.id} className="w-full">
               <div
@@ -5376,15 +6530,35 @@ export default function App() {
                   m.role === 'system'
                     ? 'bg-neutral-50 border-neutral-200 text-neutral-700 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-300'
                     : '',
+                  isDebugSystemNote
+                    ? 'bg-fuchsia-50/85 border-fuchsia-200 text-fuchsia-900 dark:bg-fuchsia-950/35 dark:border-fuchsia-900 dark:text-fuchsia-200'
+                    : '',
                 ].join(' ')}
               >
+                {isCodeLifecycleUnit && hasFencedCodeBlocks && (
+                  <div className="mb-2 flex justify-end">
+                    <button
+                      type="button"
+                      className="text-[11px] px-2 py-1 rounded border border-neutral-300 bg-white/80 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                      onClick={() =>
+                        setTimelinePinnedCodeByUnitId((prev) => ({
+                          ...prev,
+                          [unit.id]: !codeUnitPinned,
+                        }))
+                      }
+                      title={codeUnitPinned ? 'Unpin code blocks' : 'Keep code blocks open after completion'}
+                    >
+                      {codeUnitPinned ? 'Pinned open' : 'Pin open'}
+                    </button>
+                  </div>
+                )}
                 {shouldCollapseThinking ? (
                   <details
                     open={thinkingOpen}
                     onToggle={(e) => {
                       const next = e.currentTarget.open
-                      setThinkingOpenByMessageId((prev) =>
-                        prev[m.id] === next ? prev : { ...prev, [m.id]: next },
+                      setTimelineOpenByUnitId((prev) =>
+                        prev[unit.id] === next ? prev : { ...prev, [unit.id]: next },
                       )
                     }}
                     className="group rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-100/80 dark:bg-neutral-950/45"
@@ -5418,7 +6592,9 @@ export default function App() {
                                 const lang = codeClass.startsWith('language-') ? codeClass.slice('language-'.length) : 'code'
                                 const isDiff = lang === 'diff'
                                 const diffLines = normalized.split('\n')
-                                const openByDefault = lineCount <= COLLAPSIBLE_CODE_MIN_LINES
+                                const openByDefault = isCodeLifecycleUnit
+                                  ? unit.status === 'in_progress' || codeUnitPinned
+                                  : lineCount <= COLLAPSIBLE_CODE_MIN_LINES
                                 const codeBlockId = `${m.id}:${codeBlockIndex++}`
                                 const isOpen = codeBlockOpenById[codeBlockId] ?? openByDefault
                                 return (
@@ -5512,7 +6688,15 @@ export default function App() {
                           </ReactMarkdown>
                         </div>
                       ) : (
-                        <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] text-neutral-700 dark:text-neutral-300">{m.content}</div>
+                        <div
+                          className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] ${
+                            isDebugSystemNote
+                              ? 'italic text-fuchsia-800 dark:text-fuchsia-200'
+                              : 'text-neutral-700 dark:text-neutral-300'
+                          }`}
+                        >
+                          {m.content}
+                        </div>
                       )}
                     </div>
                   </details>
@@ -5531,7 +6715,9 @@ export default function App() {
                           const lang = codeClass.startsWith('language-') ? codeClass.slice('language-'.length) : 'code'
                           const isDiff = lang === 'diff'
                           const diffLines = normalized.split('\n')
-                          const openByDefault = lineCount <= COLLAPSIBLE_CODE_MIN_LINES
+                          const openByDefault = isCodeLifecycleUnit
+                            ? unit.status === 'in_progress' || codeUnitPinned
+                            : lineCount <= COLLAPSIBLE_CODE_MIN_LINES
                           const codeBlockId = `${m.id}:${codeBlockIndex++}`
                           const isOpen = codeBlockOpenById[codeBlockId] ?? openByDefault
                           return (
@@ -5625,7 +6811,13 @@ export default function App() {
                     </ReactMarkdown>
                   </div>
                 ) : m.content ? (
-                  <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{m.content}</div>
+                  <div
+                    className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${
+                      isDebugSystemNote ? 'italic text-fuchsia-800 dark:text-fuchsia-200' : ''
+                    }`}
+                  >
+                    {m.content}
+                  </div>
                 ) : null}
                 {m.attachments && m.attachments.length > 0 && (
                   <div className={`${m.content ? 'mt-2' : ''} flex flex-wrap gap-2`}>
@@ -5674,7 +6866,7 @@ export default function App() {
           <div className="flex items-end gap-2 min-w-0">
             <textarea
               ref={(el) => registerTextarea(w.id, el)}
-              className="flex-1 min-w-0 resize-none rounded-xl bg-white border border-neutral-300 px-3 py-2 text-neutral-900 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
+              className="flex-1 min-w-0 resize-none rounded-xl bg-white border border-neutral-300 px-3 py-2 text-neutral-900 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 placeholder:text-neutral-500 dark:bg-neutral-800 dark:border-neutral-600 dark:text-neutral-100 dark:placeholder:text-neutral-400 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
               style={{ fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }}
               placeholder="Message the agent..."
               rows={1}
@@ -5700,6 +6892,7 @@ export default function App() {
                   sendMessage(w.id)
                 }
               }}
+              onContextMenu={onInputPanelContextMenu}
             />
             <button
               className={[
@@ -5745,9 +6938,9 @@ export default function App() {
 
         <div className="relative z-20 border-t border-neutral-200/80 dark:border-neutral-800 px-3 py-2 text-xs min-w-0 overflow-visible bg-white/90 dark:bg-neutral-950">
           <div className="flex flex-wrap items-start justify-between gap-2 min-w-0">
-            <div className="min-w-0 flex-1 text-neutral-600 dark:text-neutral-400 flex items-center gap-2 flex-wrap">
+            <div className="min-w-0 flex-1 text-neutral-600 dark:text-neutral-300 flex items-center gap-2 flex-wrap">
               <span
-                className="inline-flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-400"
+                className="inline-flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-300"
                 title={activityTitle}
                 aria-label={`Panel activity ${activityLabel}`}
               >
@@ -5757,41 +6950,6 @@ export default function App() {
                 />
                 {activityLabel}
               </span>
-              {debugControlsVisible && activityItems.length > 0 && (
-                <button
-                  type="button"
-                  className="text-[11px] rounded border border-neutral-300 px-1.5 py-0.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-                  onClick={() => setActivityOpenByPanel((prev) => ({ ...prev, [w.id]: !prev[w.id] }))}
-                  title="Toggle activity details"
-                >
-                  {activityOpen ? 'Hide activity' : 'Show activity'}
-                </button>
-              )}
-              {debugControlsVisible && (
-                <button
-                  type="button"
-                  className="text-[11px] rounded border border-neutral-300 px-1.5 py-0.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-                  onClick={() => setDebugOpenByPanel((prev) => ({ ...prev, [w.id]: !prev[w.id] }))}
-                  title="Toggle debug trace"
-                >
-                  {debugOpen ? 'Hide debug' : 'Show debug'}
-                </button>
-              )}
-              {debugControlsVisible && (
-                <button
-                  type="button"
-                  className="text-[11px] rounded border border-neutral-300 px-1.5 py-0.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-                  onClick={() =>
-                    setPanelDebugById((prev) => ({
-                      ...prev,
-                      [w.id]: [],
-                    }))
-                  }
-                  title="Clear panel debug trace"
-                >
-                  Clear debug
-                </button>
-              )}
               <span className="break-words [overflow-wrap:anywhere]">{w.status}</span>
               {contextUsage && contextUsagePercent !== null && (
                 <span
@@ -5852,7 +7010,7 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                         key={mode}
                         type="button"
                         className={[
-                          'w-full text-left text-[11px] px-2 py-1.5 rounded',
+                          'w-full appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded',
                           interactionMode === mode
                             ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
                             : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
@@ -5899,7 +7057,7 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                         key={value}
                         type="button"
                         className={[
-                          'w-full text-left text-[11px] px-2 py-1.5 rounded',
+                          'w-full appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded',
                           w.sandbox === value
                             ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
                             : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
@@ -5944,7 +7102,7 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                           type="button"
                           disabled={disabled}
                           className={[
-                            'w-full text-left text-[11px] px-2 py-1.5 rounded',
+                            'w-full appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded',
                             w.permissionMode === value
                               ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
                               : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
@@ -5980,41 +7138,9 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
               </div>
             </div>
           </div>
-          {debugControlsVisible && activityOpen && activityItems.length > 0 && (
-            <div className="mt-2 w-full rounded border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-950/70 px-2 py-1.5 space-y-1 max-h-32 overflow-auto">
-              {activityItems.map((item) => (
-                <div key={item.id} className="text-[11px] leading-4">
-                  <span className="font-medium text-neutral-700 dark:text-neutral-200">
-                    {item.label}
-                    {item.count > 1 ? ` x${item.count}` : ''}
-                  </span>
-                  {item.detail ? (
-                    <span className="text-neutral-500 dark:text-neutral-400"> - {item.detail}</span>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          )}
-          {debugControlsVisible && debugOpen && (
-            <div className="mt-2 w-full rounded border border-neutral-200 dark:border-neutral-800 bg-black/[0.04] dark:bg-black/20 px-2 py-1.5 space-y-1 max-h-44 overflow-auto font-mono">
-              {debugItems.length === 0 && (
-                <div className="text-[11px] text-neutral-500 dark:text-neutral-400">No debug entries yet.</div>
-              )}
-              {debugItems.map((item) => (
-                <div key={item.id} className="text-[11px] leading-4">
-                  <span className="text-neutral-500 dark:text-neutral-400">
-                    {new Date(item.at).toLocaleTimeString()}
-                  </span>
-                  <span className="mx-1 text-blue-700 dark:text-blue-300">[{item.stage}]</span>
-                  <span className="text-neutral-700 dark:text-neutral-200 break-words [overflow-wrap:anywhere]">
-                    {item.detail}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       </div>
     )
   }
 }
+

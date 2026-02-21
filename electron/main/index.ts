@@ -3,10 +3,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { CodexAppServerClient, type CodexConnectOptions, type FireHarnessCodexEvent } from './codexAppServerClient'
 import { GeminiClient, type GeminiClientEvent } from './geminiClient'
+import { ClaudeClient, type ClaudeClientEvent } from './claudeClient'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
 const WORKSPACE_LOCK_DIRNAME = '.barnaby'
@@ -98,13 +99,22 @@ type WorkspaceLockAcquireResult =
     }
 
 type ConnectOptions = CodexConnectOptions & {
-  provider?: 'codex' | 'gemini'
+  provider?: 'codex' | 'claude' | 'gemini'
   modelConfig?: Record<string, string>
 }
+type ContextMenuKind = 'input-selection' | 'chat-selection'
 
-type ProviderName = 'codex' | 'gemini'
+type ProviderName = 'codex' | 'claude' | 'gemini'
+type ProviderConfigForAuth = {
+  id: string
+  cliCommand: string
+  cliPath?: string
+  authCheckCommand?: string
+  loginCommand?: string
+  upgradeCommand?: string
+}
 type ProviderAuthStatus = {
-  provider: ProviderName
+  provider: string
   installed: boolean
   authenticated: boolean
   detail: string
@@ -138,8 +148,8 @@ type PersistedChatHistoryEntry = {
   messages: PersistedChatMessage[]
 }
 
-type AgentClient = CodexAppServerClient | GeminiClient
-type AgentEvent = FireHarnessCodexEvent | GeminiClientEvent
+type AgentClient = CodexAppServerClient | ClaudeClient | GeminiClient
+type AgentEvent = FireHarnessCodexEvent | ClaudeClientEvent | GeminiClientEvent
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -510,6 +520,26 @@ function getDiagnosticsInfo() {
   }
 }
 
+async function openAgentHistoryFolder() {
+  const chatHistoryPath = getChatHistoryFilePath()
+  const folderPath = path.dirname(chatHistoryPath)
+  try {
+    fs.mkdirSync(folderPath, { recursive: true })
+  } catch (err) {
+    return {
+      ok: false,
+      path: folderPath,
+      error: errorMessage(err),
+    }
+  }
+  const result = await shell.openPath(folderPath)
+  return {
+    ok: !result,
+    path: folderPath,
+    error: result || undefined,
+  }
+}
+
 function openRuntimeLogFile() {
   const runtimeLogPath = getRuntimeLogFilePath()
   try {
@@ -815,6 +845,22 @@ async function pickWorkspaceSavePath(workspaceRoot: string, relativePath: string
   const nextRelativePath = toWorkspaceRelativePath(root, result.filePath)
   if (!nextRelativePath) throw new Error('Save As path must be a file inside the workspace root.')
   return nextRelativePath
+}
+
+async function pickWorkspaceOpenPath(workspaceRoot: string) {
+  const root = path.resolve(workspaceRoot)
+  if (!fs.existsSync(root)) throw new Error('Workspace path does not exist.')
+  if (!fs.statSync(root).isDirectory()) throw new Error('Workspace path is not a directory.')
+
+  const parent = BrowserWindow.getFocusedWindow() ?? win ?? BrowserWindow.getAllWindows()[0] ?? undefined
+  const result = await dialog.showOpenDialog(parent, {
+    title: 'Open file',
+    defaultPath: root,
+    properties: ['openFile'],
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  const selectedPath = result.filePaths[0]
+  return toWorkspaceRelativePath(root, selectedPath)
 }
 
 function parseGitStatus(rawStatus: string): GitStatusResult {
@@ -1158,112 +1204,330 @@ function releaseAllWorkspaceLocks() {
   }
 }
 
-async function getProviderAuthStatus(provider: ProviderName): Promise<ProviderAuthStatus> {
-  async function isCliInstalled(command: 'codex' | 'gemini'): Promise<boolean> {
-    try {
-      if (process.platform === 'win32') {
-        await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `${command} --version`], {
-          windowsHide: true,
-          maxBuffer: 1024 * 1024,
-        })
-      } else {
-        await execFileAsync(command, ['--version'], {
-          windowsHide: true,
-          maxBuffer: 1024 * 1024,
-        })
-      }
-      return true
-    } catch {
-      return false
-    }
+function runCliCommand(executable: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  if (process.platform === 'win32') {
+    const fullCmd = [executable, ...args].map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')
+    return execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', fullCmd], {
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+    })
   }
+  return execFileAsync(executable, args, {
+    windowsHide: true,
+    maxBuffer: 1024 * 1024,
+  })
+}
 
-  if (provider === 'codex') {
-    try {
-      const result =
-        process.platform === 'win32'
-          ? await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'codex login status'], {
-              windowsHide: true,
-              maxBuffer: 1024 * 1024,
-            })
-          : await execFileAsync('codex', ['login', 'status'], {
-              windowsHide: true,
-              maxBuffer: 1024 * 1024,
-            })
-      const out = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim()
-      const normalized = out.toLowerCase()
-      const authenticated = normalized.includes('logged in') && !normalized.includes('not logged in')
-      return {
-        provider,
-        installed: true,
-        authenticated,
-        detail: out || (authenticated ? 'Logged in.' : 'Not logged in.'),
-        checkedAt: Date.now(),
-      }
-    } catch (err) {
-      const msg = errorMessage(err)
-      const installed = await isCliInstalled('codex')
-      return {
-        provider,
-        installed,
-        authenticated: false,
-        detail: msg || (installed ? 'Not logged in.' : 'Codex CLI not found.'),
-        checkedAt: Date.now(),
-      }
-    }
+async function isCliInstalled(executable: string): Promise<boolean> {
+  try {
+    await runCliCommand(executable, ['--version'])
+    return true
+  } catch {
+    return false
   }
+}
+
+async function getProviderAuthStatus(config: ProviderConfigForAuth): Promise<ProviderAuthStatus> {
+  const executable = config.cliPath ?? config.cliCommand
+  const authArgs = (config.authCheckCommand ?? '--version').trim().split(/\s+/).filter(Boolean)
+  const isCodexStyle = config.id === 'codex'
 
   try {
-    const version =
-      process.platform === 'win32'
-        ? await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini --version'], {
-            windowsHide: true,
-            maxBuffer: 1024 * 1024,
-          })
-        : await execFileAsync('gemini', ['--version'], {
-            windowsHide: true,
-            maxBuffer: 1024 * 1024,
-          })
-    const versionText = (version.stdout ?? version.stderr ?? '').trim()
+    const result = await runCliCommand(executable, authArgs)
+    const out = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim()
+    const normalized = out.toLowerCase()
+    let authenticated: boolean
+    if (isCodexStyle) {
+      authenticated = normalized.includes('logged in') && !normalized.includes('not logged in')
+    } else {
+      authenticated = true
+    }
     return {
-      provider,
+      provider: config.id,
       installed: true,
-      authenticated: true,
-      detail: versionText
-        ? `Gemini CLI ${versionText} detected. Uses local CLI login/session.`
-        : 'Gemini CLI detected. Uses local CLI login/session.',
+      authenticated,
+      detail: out || (authenticated ? 'Logged in.' : 'Not logged in.'),
       checkedAt: Date.now(),
     }
   } catch (err) {
+    const msg = errorMessage(err)
+    const installed = await isCliInstalled(executable)
     return {
-      provider,
-      installed: false,
+      provider: config.id,
+      installed,
       authenticated: false,
-      detail: errorMessage(err) || 'Gemini CLI not found.',
+      detail: msg || (installed ? 'Login required.' : `${config.id} CLI not found.`),
       checkedAt: Date.now(),
     }
   }
 }
 
-async function launchProviderLogin(provider: ProviderName): Promise<{ started: boolean; detail: string }> {
+async function launchProviderLogin(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }> {
+  const command = config.loginCommand ?? config.cliCommand
+
   if (process.platform === 'win32') {
-    const cmd = provider === 'codex' ? 'codex login' : 'gemini'
-    await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'start', '', 'cmd', '/k', cmd], {
+    await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'start', '', 'cmd', '/k', command], {
       windowsHide: true,
     })
     return {
       started: true,
-      detail:
-        provider === 'codex'
-          ? 'Opened terminal for Codex login.'
-          : 'Opened terminal for Gemini login.',
+      detail: `Opened terminal for ${config.id} login.`,
     }
   }
 
-  // Best effort for non-Windows shells.
-  const command = provider === 'codex' ? 'codex login' : 'gemini'
   await execFileAsync('sh', ['-lc', command], { windowsHide: true })
-  return { started: true, detail: `Launched ${provider} login.` }
+  return { started: true, detail: `Launched ${config.id} login.` }
+}
+
+async function launchProviderUpgrade(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }> {
+  const command = config.upgradeCommand
+  if (!command) {
+    return { started: false, detail: `No upgrade command configured for ${config.id}.` }
+  }
+
+  if (process.platform === 'win32') {
+    await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'start', '', 'cmd', '/k', command], {
+      windowsHide: true,
+    })
+    return {
+      started: true,
+      detail: `Opened terminal to upgrade ${config.id} CLI. Run the command shown, then close the window.`,
+    }
+  }
+
+  if (process.platform === 'darwin') {
+    const escaped = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    await execFileAsync('osascript', [
+      '-e',
+      `tell application "Terminal" to do script "${escaped}"`,
+    ])
+    return {
+      started: true,
+      detail: `Opened Terminal to upgrade ${config.id} CLI. Close the window when done.`,
+    }
+  }
+
+  await execFileAsync('sh', ['-lc', command], { windowsHide: true })
+  return { started: true, detail: `Ran ${config.id} CLI upgrade. Re-check connectivity.` }
+}
+
+const GEMINI_MODELS_PROMPT =
+  'Output a JSON array of model IDs you support. Use names like gemini-2.5-flash, gemini-2.5-pro, gemini-3-pro-preview. Output only the JSON array, no markdown or other text.'
+
+const MODELS_CATALOG_URL = 'https://barnaby.build/models-catalog.json'
+const GEMINI_MODELS_LEGACY_URL = 'https://barnaby.build/gemini-models.json'
+
+type ModelsByProvider = {
+  codex: { id: string; displayName: string }[]
+  claude: { id: string; displayName: string }[]
+  gemini: { id: string; displayName: string }[]
+}
+
+async function fetchModelsCatalog(): Promise<ModelsByProvider | null> {
+  try {
+    const res = await fetch(MODELS_CATALOG_URL, { signal: AbortSignal.timeout(5000) })
+    if (!res.ok) return null
+    const data = (await res.json()) as {
+      providers?: {
+        codex?: { models?: { id: string; displayName: string }[] }
+        claude?: { models?: { id: string; displayName: string }[] }
+        gemini?: { models?: { id: string; displayName: string }[] }
+      }
+    }
+    const providers = data?.providers
+    if (!providers || typeof providers !== 'object') return null
+    const valid = (arr: unknown) =>
+      Array.isArray(arr) ? arr.filter((m): m is { id: string; displayName: string } => m?.id && typeof (m as { id?: string }).id === 'string') : []
+    return {
+      codex: valid(providers.codex?.models),
+      claude: valid(providers.claude?.models),
+      gemini: valid(providers.gemini?.models),
+    }
+  } catch {
+    return null
+  }
+}
+
+async function fetchGeminiModelsLegacy(): Promise<{ id: string; displayName: string }[] | null> {
+  try {
+    const res = await fetch(GEMINI_MODELS_LEGACY_URL, { signal: AbortSignal.timeout(5000) })
+    if (!res.ok) return null
+    const data = (await res.json()) as { models?: { id: string; displayName: string }[] }
+    const models = data?.models
+    if (!Array.isArray(models)) return null
+    return models.filter((m) => m?.id && typeof m.id === 'string')
+  } catch {
+    return null
+  }
+}
+
+const CODEX_MODELS_PROMPT =
+  'Output only a JSON array of model IDs from the Codex CLI /model menu. Example: ["gpt-5.3-codex","gpt-5.2-codex"]. No other text.'
+
+async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: string }[]> {
+  const timeoutMs = 120_000
+  return new Promise((resolve, reject) => {
+    const args = ['exec', '--sandbox', 'read-only', '--json', CODEX_MODELS_PROMPT]
+    const proc =
+      process.platform === 'win32'
+        ? spawn('codex', args, {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            windowsHide: true,
+          })
+        : spawn('codex', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+
+    let stdout = ''
+    proc.stdout?.setEncoding('utf8')
+    proc.stdout?.on('data', (chunk: string) => {
+      stdout += chunk
+    })
+    proc.stderr?.on('data', () => {})
+
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM')
+      reject(new Error('Codex CLI models query timed out'))
+    }, timeoutMs)
+
+    proc.on('error', (err) => {
+      clearTimeout(timer)
+      reject(err)
+    })
+    proc.on('exit', (code, signal) => {
+      clearTimeout(timer)
+      try {
+        const displayNames: Record<string, string> = {
+          'gpt-5.3-codex': 'GPT 5.3 (Codex)',
+          'gpt-5.3-codex-spark': 'GPT 5.3 Codex Spark',
+          'gpt-5.2-codex': 'GPT 5.2 (Codex)',
+          'gpt-5.1-codex-max': 'GPT 5.1 Codex Max',
+          'gpt-5.2': 'GPT 5.2',
+          'gpt-5.1-codex-mini': 'GPT 5.1 Codex Mini',
+        }
+        for (const line of stdout.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith('{"type":"item.completed"')) continue
+          const parsed = JSON.parse(trimmed) as {
+            item?: { type?: string; text?: string }
+          }
+          if (parsed.item?.type !== 'agent_message' || !parsed.item?.text) continue
+          let jsonStr = parsed.item.text.trim()
+          const codeBlock = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/)
+          if (codeBlock) jsonStr = codeBlock[1].trim()
+          const ids = JSON.parse(jsonStr) as string[]
+          if (!Array.isArray(ids)) continue
+          const result = ids
+            .filter((id): id is string => typeof id === 'string' && id.length > 0)
+            .map((id) => ({
+              id,
+              displayName: displayNames[id] ?? id.replace(/^gpt-/, 'GPT ').replace(/-/g, ' '),
+            }))
+          resolve(result)
+          return
+        }
+        resolve([])
+      } catch {
+        resolve([])
+      }
+    })
+  })
+}
+
+async function getAvailableModels(): Promise<ModelsByProvider> {
+  const catalog = await fetchModelsCatalog()
+  let codex = catalog?.codex ?? []
+  let claude = catalog?.claude ?? []
+  let gemini = catalog?.gemini ?? []
+
+  if (codex.length === 0) {
+    codex = await queryCodexModelsViaExec().catch(() => [])
+  }
+  if (gemini.length === 0) {
+    const geminiLegacy = await fetchGeminiModelsLegacy()
+    if (geminiLegacy && geminiLegacy.length > 0) gemini = geminiLegacy
+  }
+  if (gemini.length === 0) {
+    const geminiFromCli = await getGeminiAvailableModels().catch(() => [])
+    if (geminiFromCli.length > 0) gemini = geminiFromCli
+  }
+
+  return { codex, claude, gemini }
+}
+
+async function getGeminiAvailableModels(): Promise<{ id: string; displayName: string }[]> {
+  const available = await getAvailableModels()
+  if (available.gemini.length > 0) return available.gemini
+
+  const timeoutMs = 45_000
+  return new Promise((resolve, reject) => {
+    const args = ['-o', 'json', '-p', GEMINI_MODELS_PROMPT]
+    const proc =
+      process.platform === 'win32'
+        ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            windowsHide: true,
+          })
+        : spawn('gemini', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+
+    let stdout = ''
+    proc.stdout?.setEncoding('utf8')
+    proc.stdout?.on('data', (chunk: string) => {
+      stdout += chunk
+    })
+    proc.stderr?.on('data', () => {}) // ignore stderr for this call
+
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM')
+      reject(new Error('Gemini CLI models query timed out'))
+    }, timeoutMs)
+
+    proc.on('error', (err) => {
+      clearTimeout(timer)
+      reject(err)
+    })
+    proc.on('exit', (code, signal) => {
+      clearTimeout(timer)
+      if (code !== 0 && !signal) {
+        reject(new Error(`Gemini CLI exited with code ${code}`))
+        return
+      }
+      try {
+        const parsed = JSON.parse(stdout) as { response?: string }
+        const response = parsed?.response?.trim()
+        if (!response) {
+          resolve([])
+          return
+        }
+        // Response might be wrapped in markdown code block
+        let jsonStr = response
+        const codeBlock = response.match(/```(?:json)?\s*([\s\S]*?)```/)
+        if (codeBlock) jsonStr = codeBlock[1].trim()
+        const ids = JSON.parse(jsonStr) as string[]
+        if (!Array.isArray(ids)) {
+          resolve([])
+          return
+        }
+        const displayNames: Record<string, string> = {
+          'gemini-2.5-flash': 'Gemini 2.5 Flash',
+          'gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
+          'gemini-2.5-pro': 'Gemini 2.5 Pro',
+          'gemini-3-pro-preview': 'Gemini 3 Pro (Preview)',
+          'gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
+          'gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
+          flash: 'Gemini Flash',
+          pro: 'Gemini Pro',
+        }
+        const result = ids
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)
+          .map((id) => ({
+            id: id.replace(/^models\//, ''),
+            displayName: displayNames[id] ?? id.replace(/^gemini-/, 'Gemini ').replace(/-/g, ' '),
+          }))
+        resolve(result)
+      } catch {
+        resolve([])
+      }
+    })
+  })
 }
 
 async function getGitStatus(workspaceRoot: string): Promise<GitStatusResult> {
@@ -1321,6 +1585,18 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
     const client = new GeminiClient()
     client.on('event', (evt: GeminiClientEvent) => forwardEvent(agentWindowId, evt))
     const result = await client.connect({ model: options.model }) as { threadId: string }
+    agentClients.set(agentWindowId, client)
+    return { client, result }
+  }
+
+  if (provider === 'claude') {
+    const client = new ClaudeClient()
+    client.on('event', (evt: ClaudeClientEvent) => forwardEvent(agentWindowId, evt))
+    const result = await client.connect({
+      cwd: options.cwd,
+      model: options.model,
+      permissionMode: options.permissionMode,
+    }) as { threadId: string }
     agentClients.set(agentWindowId, client)
     return { client, result }
   }
@@ -1655,6 +1931,10 @@ ipcMain.handle('agentorchestrator:pickWorkspaceSavePath', async (_evt, workspace
   return pickWorkspaceSavePath(workspaceRoot, relativePath)
 })
 
+ipcMain.handle('agentorchestrator:pickWorkspaceOpenPath', async (_evt, workspaceRoot: string) => {
+  return pickWorkspaceOpenPath(workspaceRoot)
+})
+
 ipcMain.handle('agentorchestrator:getGitStatus', async (_evt, workspaceRoot: string) => {
   return getGitStatus(workspaceRoot)
 })
@@ -1671,12 +1951,58 @@ ipcMain.on('agentorchestrator:setEditorMenuState', (_evt, enabled: boolean) => {
   setAppMenu()
 })
 
-ipcMain.handle('agentorchestrator:getProviderAuthStatus', async (_evt, provider: ProviderName) => {
-  return getProviderAuthStatus(provider)
+ipcMain.handle('agentorchestrator:getProviderAuthStatus', async (_evt, config: ProviderConfigForAuth) => {
+  return getProviderAuthStatus(config)
 })
 
-ipcMain.handle('agentorchestrator:startProviderLogin', async (_evt, provider: ProviderName) => {
-  return launchProviderLogin(provider)
+ipcMain.handle('agentorchestrator:startProviderLogin', async (_evt, config: ProviderConfigForAuth) => {
+  return launchProviderLogin(config)
+})
+
+ipcMain.handle('agentorchestrator:upgradeProviderCli', async (_evt, config: ProviderConfigForAuth) => {
+  return launchProviderUpgrade(config)
+})
+
+ipcMain.handle('agentorchestrator:getGeminiAvailableModels', async () => {
+  return getGeminiAvailableModels()
+})
+
+ipcMain.handle('agentorchestrator:getAvailableModels', async () => {
+  return getAvailableModels()
+})
+
+ipcMain.handle('agentorchestrator:showContextMenu', async (evt, kind: unknown) => {
+  const menuKind: ContextMenuKind | null =
+    kind === 'input-selection' || kind === 'chat-selection' ? kind : null
+  if (!menuKind) return { ok: false }
+
+  const template: Electron.MenuItemConstructorOptions[] =
+    menuKind === 'input-selection'
+      ? [
+          { label: 'Undo', role: 'undo' },
+          { label: 'Redo', role: 'redo' },
+          { type: 'separator' },
+          { label: 'Cut', role: 'cut' },
+          { label: 'Copy', role: 'copy' },
+          { label: 'Paste', role: 'paste' },
+          { type: 'separator' },
+          { label: 'Select All', role: 'selectAll' },
+        ]
+      : [
+          { label: 'Copy', role: 'copy' },
+          { type: 'separator' },
+          { label: 'Select All', role: 'selectAll' },
+        ]
+
+  const menu = Menu.buildFromTemplate(template)
+  const contextWindow =
+    BrowserWindow.fromWebContents(evt.sender) ??
+    BrowserWindow.getFocusedWindow() ??
+    BrowserWindow.getAllWindows()[0] ??
+    undefined
+  if (!contextWindow || contextWindow.isDestroyed()) return { ok: false }
+  menu.popup({ window: contextWindow })
+  return { ok: true }
 })
 
 function sendMenuAction(action: string, payload?: Record<string, unknown>) {
@@ -1698,28 +2024,51 @@ function setAppMenu() {
     {
       label: 'File',
       submenu: [
+        { label: 'New Agent', accelerator: 'CmdOrCtrl+Shift+N', click: () => sendMenuAction('newAgentWindow') },
         { label: 'New Workspace', click: () => sendMenuAction('newWorkspace') },
-        { label: 'Open Workspace...', click: () => sendMenuAction('openWorkspacePicker') },
-        { label: 'Recent workspaces', submenu: recentSubmenu },
+        { label: 'New File', accelerator: 'CmdOrCtrl+N', click: () => sendMenuAction('newFile') },
         { type: 'separator' },
-        { label: 'New Panel', accelerator: 'Ctrl+N', click: () => sendMenuAction('newAgentWindow') },
-        ...(editorMenuEnabled
-          ? [
-              { type: 'separator' as const },
-              { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => sendMenuAction('saveEditorFile') },
-              { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: () => sendMenuAction('saveEditorFileAs') },
-            ]
-          : []),
+        {
+          label: 'Open Agent',
+          click: () => {
+            void openAgentHistoryFolder().then((result) => {
+              if (!result.ok && result.error) {
+                dialog.showErrorBox('Open Agent', `Could not open agent history folder:\n${result.error}`)
+              }
+            })
+          },
+        },
+        { label: 'Open Workspace', click: () => sendMenuAction('openWorkspacePicker') },
+        { label: 'Open File', click: () => sendMenuAction('openFile') },
+        { label: 'Open Recent', submenu: recentSubmenu },
+        { label: 'Save', accelerator: 'CmdOrCtrl+S', enabled: editorMenuEnabled, click: () => sendMenuAction('saveEditorFile') },
+        { label: 'Save As', accelerator: 'CmdOrCtrl+Shift+S', enabled: editorMenuEnabled, click: () => sendMenuAction('saveEditorFileAs') },
         { type: 'separator' },
-        { label: 'Close workspace', click: () => sendMenuAction('closeWorkspace') },
+        { label: 'Close', accelerator: 'CmdOrCtrl+W', click: () => sendMenuAction('closeFocused') },
+        { label: 'Close Workspace', click: () => sendMenuAction('closeWorkspace') },
         { label: 'Exit', role: 'quit' },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { label: 'Undo', role: 'undo' },
+        { label: 'Redo', role: 'redo' },
+        { type: 'separator' },
+        { label: 'Cut', role: 'cut' },
+        { label: 'Copy', role: 'copy' },
+        { label: 'Paste', role: 'paste' },
+        { label: 'Find', accelerator: 'CmdOrCtrl+F', click: () => sendMenuAction('findInPage') },
+        { label: 'Find in Files', accelerator: 'CmdOrCtrl+Shift+F', click: () => sendMenuAction('findInFiles') },
+        { type: 'separator' },
+        { label: 'Models', click: () => sendMenuAction('openModelSetup') },
+        { label: 'Preferences', accelerator: 'CmdOrCtrl+,', click: () => sendMenuAction('openPreferences') },
+        { label: 'Settings', click: () => sendMenuAction('openSettings') },
       ],
     },
     {
       label: 'View',
       submenu: [
-        { label: 'New Panel', accelerator: 'Ctrl+Shift+N', click: () => sendMenuAction('newAgentWindow') },
-        { label: 'Theme...', click: () => sendMenuAction('openThemeModal') },
         {
           label: 'Layout',
           submenu: [
@@ -1737,14 +2086,6 @@ function setAppMenu() {
         { role: 'zoomOut' },
         { type: 'separator' },
         { role: 'togglefullscreen' },
-      ],
-    },
-    {
-      label: 'Edit',
-      submenu: [
-        { label: 'Application settings...', accelerator: 'CmdOrCtrl+,', click: () => sendMenuAction('openAppSettings') },
-        { type: 'separator' },
-        { label: 'Model setup...', click: () => sendMenuAction('openModelSetup') },
       ],
     },
     {

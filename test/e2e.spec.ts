@@ -22,6 +22,34 @@ let page: Page
 let testUserDataDir = ''
 let appWindowUsable = false
 
+function isSplashWindow(candidate: Page) {
+  if (candidate.isClosed()) return true
+  const url = candidate.url()
+  if (url.includes('/splash.html')) return true
+  if (url.includes('Barnaby%20Splash')) return true
+  return false
+}
+
+async function resolveMainWindow(app: ElectronApplication, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    const windows = app.windows().filter((candidate) => !candidate.isClosed())
+    const mainWindow = windows.find((candidate) => !isSplashWindow(candidate))
+    if (mainWindow) return mainWindow
+
+    try {
+      const waitMs = Math.max(1, Math.min(1000, deadline - Date.now()))
+      const candidate = await app.waitForEvent('window', { timeout: waitMs })
+      if (!isSplashWindow(candidate)) return candidate
+    } catch {
+      // Poll again until timeout.
+    }
+  }
+
+  throw new Error('Timed out waiting for Barnaby main window.')
+}
+
 if (process.platform === 'linux') {
   // pass ubuntu
   test(() => expect(true).true)
@@ -33,7 +61,7 @@ if (process.platform === 'linux') {
       cwd: root,
       env: { ...process.env, NODE_ENV: 'development' },
     })
-    page = await electronApp.firstWindow()
+    page = await resolveMainWindow(electronApp)
     appWindowUsable = !page.isClosed()
 
     const mainWin: JSHandle<BrowserWindow> = await electronApp.browserWindow(page)
@@ -57,7 +85,7 @@ if (process.platform === 'linux') {
 
   describe('[electron-vite-react] e2e tests', async () => {
     function ensureAppWindow() {
-      if (!appWindowUsable || !page || page.isClosed()) {
+      if (!appWindowUsable || !page || page.isClosed() || isSplashWindow(page)) {
         // Some CI/desktop-hosted environments close Electron windows immediately.
         // Treat this suite as a best-effort smoke test in those environments.
         expect(true).true

@@ -22,13 +22,21 @@ type GitStatusEntry = {
   renamedFrom?: string
 }
 
-type ProviderName = 'codex' | 'gemini'
+type ProviderName = 'codex' | 'claude' | 'gemini'
 type ProviderAuthStatus = {
-  provider: ProviderName
+  provider: string
   installed: boolean
   authenticated: boolean
   detail: string
   checkedAt: number
+}
+type ProviderConfigForAuth = {
+  id: string
+  cliCommand: string
+  cliPath?: string
+  authCheckCommand?: string
+  loginCommand?: string
+  upgradeCommand?: string
 }
 
 type WorkspaceLockOwner = {
@@ -63,7 +71,7 @@ interface Window {
         permissionMode?: 'verify-first' | 'proceed-always'
         approvalPolicy?: 'on-request' | 'never'
         sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
-        provider?: 'codex' | 'gemini'
+        provider?: 'codex' | 'claude' | 'gemini'
         modelConfig?: Record<string, string>
       },
     ): Promise<{ threadId: string }>
@@ -134,6 +142,7 @@ interface Window {
       size: number
     }>
     pickWorkspaceSavePath(workspaceRoot: string, relativePath: string): Promise<string | null>
+    pickWorkspaceOpenPath(workspaceRoot: string): Promise<string | null>
     getGitStatus(workspaceRoot: string): Promise<{
       ok: boolean
       branch: string
@@ -149,8 +158,16 @@ interface Window {
     }>
     setRecentWorkspaces(list: string[]): void
     setEditorMenuState(enabled: boolean): void
-    getProviderAuthStatus(provider: ProviderName): Promise<ProviderAuthStatus>
-    startProviderLogin(provider: ProviderName): Promise<{ started: boolean; detail: string }>
+    showContextMenu(kind: 'input-selection' | 'chat-selection'): Promise<{ ok: boolean }>
+    getProviderAuthStatus(config: ProviderConfigForAuth): Promise<ProviderAuthStatus>
+    startProviderLogin(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }>
+    upgradeProviderCli(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }>
+    getGeminiAvailableModels(): Promise<{ id: string; displayName: string }[]>
+    getAvailableModels(): Promise<{
+      codex: { id: string; displayName: string }[]
+      claude: { id: string; displayName: string }[]
+      gemini: { id: string; displayName: string }[]
+    }>
     onEvent(cb: (payload: { agentWindowId: string; evt: any }) => void): () => void
     onMenu(cb: (payload: { action: string; path?: string }) => void): () => void
   }

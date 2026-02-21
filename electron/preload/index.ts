@@ -11,7 +11,7 @@ export type FireHarnessCodexEvent =
 export type CodexConnectOptions = {
   cwd: string
   model: string
-  provider?: 'codex' | 'gemini'
+  provider?: 'codex' | 'claude' | 'gemini'
   permissionMode?: 'verify-first' | 'proceed-always'
   approvalPolicy?: 'on-request' | 'never'
   sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -29,13 +29,21 @@ type WorkspaceTreeOptions = {
   includeNodeModules?: boolean
 }
 
-type ProviderName = 'codex' | 'gemini'
+type ProviderName = 'codex' | 'claude' | 'gemini'
 type ProviderAuthStatus = {
-  provider: ProviderName
+  provider: string
   installed: boolean
   authenticated: boolean
   detail: string
   checkedAt: number
+}
+type ProviderConfigForAuth = {
+  id: string
+  cliCommand: string
+  cliPath?: string
+  authCheckCommand?: string
+  loginCommand?: string
+  upgradeCommand?: string
 }
 
 type WorkspaceLockOwner = {
@@ -59,6 +67,8 @@ type WorkspaceLockAcquireResult =
       lockFilePath: string
       owner?: WorkspaceLockOwner | null
     }
+
+type ContextMenuKind = 'input-selection' | 'chat-selection'
 
 // --------- Expose a narrow API to the Renderer process ---------
 const api = {
@@ -179,6 +189,9 @@ const api = {
   pickWorkspaceSavePath(workspaceRoot: string, relativePath: string) {
     return ipcRenderer.invoke('agentorchestrator:pickWorkspaceSavePath', workspaceRoot, relativePath) as Promise<string | null>
   },
+  pickWorkspaceOpenPath(workspaceRoot: string) {
+    return ipcRenderer.invoke('agentorchestrator:pickWorkspaceOpenPath', workspaceRoot) as Promise<string | null>
+  },
   getGitStatus(workspaceRoot: string) {
     return ipcRenderer.invoke('agentorchestrator:getGitStatus', workspaceRoot) as Promise<{
       ok: boolean
@@ -208,11 +221,27 @@ const api = {
   setEditorMenuState(enabled: boolean) {
     ipcRenderer.send('agentorchestrator:setEditorMenuState', Boolean(enabled))
   },
-  getProviderAuthStatus(provider: ProviderName) {
-    return ipcRenderer.invoke('agentorchestrator:getProviderAuthStatus', provider) as Promise<ProviderAuthStatus>
+  showContextMenu(kind: ContextMenuKind) {
+    return ipcRenderer.invoke('agentorchestrator:showContextMenu', kind) as Promise<{ ok: boolean }>
   },
-  startProviderLogin(provider: ProviderName) {
-    return ipcRenderer.invoke('agentorchestrator:startProviderLogin', provider) as Promise<{ started: boolean; detail: string }>
+  getProviderAuthStatus(config: ProviderConfigForAuth) {
+    return ipcRenderer.invoke('agentorchestrator:getProviderAuthStatus', config) as Promise<ProviderAuthStatus>
+  },
+  startProviderLogin(config: ProviderConfigForAuth) {
+    return ipcRenderer.invoke('agentorchestrator:startProviderLogin', config) as Promise<{ started: boolean; detail: string }>
+  },
+  upgradeProviderCli(config: ProviderConfigForAuth) {
+    return ipcRenderer.invoke('agentorchestrator:upgradeProviderCli', config) as Promise<{ started: boolean; detail: string }>
+  },
+  getGeminiAvailableModels() {
+    return ipcRenderer.invoke('agentorchestrator:getGeminiAvailableModels') as Promise<{ id: string; displayName: string }[]>
+  },
+  getAvailableModels() {
+    return ipcRenderer.invoke('agentorchestrator:getAvailableModels') as Promise<{
+      codex: { id: string; displayName: string }[]
+      claude: { id: string; displayName: string }[]
+      gemini: { id: string; displayName: string }[]
+    }>
   },
   onEvent(cb: (payload: { agentWindowId: string; evt: FireHarnessCodexEvent }) => void) {
     const listener = (_event: IpcRendererEvent, payload: { agentWindowId: string; evt: FireHarnessCodexEvent }) => cb(payload)

@@ -25,7 +25,8 @@ Barnaby provides:
 - Subscription based parallel agents, not expensive API
 - Multiple agent panels with split layouts (horizontal, vertical, grid)
 - Workspace selection and per-workspace defaults
-- Model setup and provider routing (Codex and Gemini)
+- Model setup and provider routing (Codex, Claude, and Gemini)
+- Connectivity checks for Codex, Claude, and Gemini CLIs
 - Streaming chat with markdown rendering
 - Queue-aware sending and auto-scroll in chat windows
 - Menu actions for workspace management (new/open/recent/close/exit)
@@ -49,8 +50,43 @@ For most desktop workflow use, the subscription/CLI path gives faster setup and 
 
 - Node.js 18+ recommended
 - npm
-- Codex CLI installed and logged in (available in `PATH`)
-- Gemini CLI installed and logged in (available in `PATH`)
+- Codex CLI installed and authenticated (available in `PATH`)
+- Claude CLI installed (available in `PATH`)
+- Gemini CLI installed and authenticated (available in `PATH`)
+
+## Provider Coverage
+
+- CODEX: full support (connectivity checks + model routing in panels)
+- CLAUDE: full support (connectivity checks + model routing in panels)
+- GEMINI: full support (connectivity checks + model routing in panels)
+- Other CLIs: can be added when they provide a stable non-interactive CLI flow (`--print`/`--prompt` style) and an adapter is implemented
+
+## CLI Setup (Codex + Claude + Gemini)
+
+Barnaby connects to local CLI sessions, so the required CLIs must be installed, signed in, and resolvable from your terminal.
+
+1. Install each CLI from its official docs.
+2. Open a new terminal after install.
+3. Verify CLIs are available on `PATH`:
+
+```sh
+codex --version
+claude --version
+gemini --version
+```
+
+On Windows, you can also confirm command resolution with:
+
+```powershell
+where codex
+where claude
+where gemini
+```
+
+4. Authenticate each CLI (follow the provider's login flow). If your CLI supports an explicit auth command, use that; otherwise run the CLI once and complete the sign-in prompts.
+5. Sanity-check outside Barnaby by running one simple prompt/command in each CLI you plan to use.
+
+If either command is not found, restart the terminal (or OS) so `PATH` updates apply.
 
 ## Development
 

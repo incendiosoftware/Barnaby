@@ -8,18 +8,22 @@ const IGNORED_DIRS = new Set([
   '.DS_Store',
   'node_modules',
   'dist',
+  'dist-electron',
   'build',
+  'release',
   'coverage',
   '.next',
   '.nuxt',
   '.output',
+  '.barnaby',
   'target',
   'vendor',
   'bower_components',
+  '__pycache__',
 ])
 
-const MAX_TREE_DEPTH = 4
-const MAX_NODES = 300
+const MAX_TREE_DEPTH = 3
+const MAX_NODES = 150
 
 export function generateWorkspaceTreeText(root: string): string {
   let output = 'Current Workspace Structure:\n'

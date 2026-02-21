@@ -2166,7 +2166,8 @@ function createAboutWindow() {
   const splashImageUrl = pathToFileURL(splashImagePath).toString()
   const version = app.getVersion()
   const appName = 'Barnaby'
-  const description = 'Barnaby: local agent loops without API keys.'
+  const description = 'Barnaby is a desktop AI agent orchestrator that connects to your existing CLI subscriptions (Codex, Claude, Gemini).'
+  const blurb = 'Run parallel windowed agents with split layouts (horizontal, vertical, grid), workspace-aware orchestration, and provider routing. Barnaby uses your local CLI sessions directly — no API keys required.'
   const email = 'incendiosoftware@gmail.com'
 
   const html = `<!doctype html>
@@ -2181,57 +2182,66 @@ function createAboutWindow() {
       padding: 0;
       width: 100%;
       height: 100%;
-      background: #ececec;
-      color: #333;
+      background: #0b0b0b;
+      color: #e0e0e0;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       overflow: hidden;
       user-select: none;
     }
     .container {
       display: flex;
-      width: 100%;
-      height: 100%;
-    }
-    .left {
-      width: 40%;
-      background: #0b0b0b;
-      display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
+      height: 100%;
+      padding: 32px;
+      text-align: center;
     }
-    .left img {
-      max-width: 80%;
-      max-height: 80%;
+    .splash-container {
+      width: 280px;
+      margin-bottom: 20px;
+    }
+    .splash-container img {
+      width: 100%;
+      height: auto;
       object-fit: contain;
     }
-    .right {
-      width: 60%;
-      padding: 24px;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-    }
     h1 {
-      margin: 0 0 8px 0;
+      margin: 0 0 4px 0;
       font-size: 24px;
-      font-weight: 600;
+      font-weight: 700;
+      color: #ffffff;
     }
     .version {
-      color: #666;
+      color: #888;
       font-size: 13px;
-      margin-bottom: 16px;
+      margin-bottom: 24px;
+    }
+    .content {
+      max-width: 440px;
     }
     .description {
+      font-size: 15px;
+      line-height: 1.5;
+      margin-bottom: 12px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+    .blurb {
       font-size: 14px;
-      line-height: 1.4;
-      margin-bottom: 16px;
+      line-height: 1.5;
+      color: #aaa;
+      margin-bottom: 32px;
     }
     .contact {
       font-size: 12px;
-      color: #888;
+      color: #666;
+      border-top: 1px solid #222;
+      padding-top: 16px;
+      width: 100%;
     }
     .contact a {
-      color: #0066cc;
+      color: #4daafc;
       text-decoration: none;
       cursor: pointer;
     }
@@ -2239,16 +2249,17 @@ function createAboutWindow() {
 </head>
 <body>
   <div class="container">
-    <div class="left">
+    <div class="splash-container">
       <img src="${splashImageUrl}" alt="Barnaby Splash" />
     </div>
-    <div class="right">
-      <h1>${appName}</h1>
-      <div class="version">Version ${version}</div>
+    <h1>${appName}</h1>
+    <div class="version">Version ${version}</div>
+    <div class="content">
       <div class="description">${description}</div>
-      <div class="contact">
-        Contact: <a href="mailto:${email}">${email}</a>
-      </div>
+      <div class="blurb">${blurb}</div>
+    </div>
+    <div class="contact">
+      Contact: <a href="mailto:${email}">${email}</a> | <a href="https://barnaby.build">barnaby.build</a>
     </div>
   </div>
 </body>
@@ -2256,7 +2267,7 @@ function createAboutWindow() {
 
   const aboutWin = new BrowserWindow({
     width: 500,
-    height: 300,
+    height: 520,
     resizable: false,
     minimizable: false,
     maximizable: false,

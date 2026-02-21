@@ -113,13 +113,10 @@ export class GeminiClient extends EventEmitter {
     const imageRefs = imagePaths.length > 0 ? '\n\n' + imagePaths.map((p) => `@${p}`).join('\n') : ''
     const userText = trimmed ? trimmed + imageRefs : imagePaths.map((p) => `@${p}`).join('\n')
     const fileContext = resolveAtFileReferences(userText, this.cwd)
-    this.history.push({ role: 'user', text: userText + fileContext })
+    const fullMessage = userText + fileContext
+    this.history.push({ role: 'user', text: fullMessage })
 
-    const tree = generateWorkspaceTreeText(this.cwd)
-    const COMPLETION_SYSTEM = `You are a coding assistant. I have provided the workspace structure below. I will provide file contents when you ask or when I reference them (e.g. @filename).
-
-${tree}`
-    const prompt = this.buildPrompt(COMPLETION_SYSTEM)
+    const prompt = this.buildGeminiPrompt(fullMessage)
     await this.runTurn(prompt)
   }
 
@@ -128,13 +125,10 @@ ${tree}`
     if (!trimmed) return
 
     const fileContext = resolveAtFileReferences(trimmed, this.cwd)
-    this.history.push({ role: 'user', text: trimmed + fileContext })
+    const fullMessage = trimmed + fileContext
+    this.history.push({ role: 'user', text: fullMessage })
 
-    const tree = generateWorkspaceTreeText(this.cwd)
-    const COMPLETION_SYSTEM = `You are a coding assistant. I have provided the workspace structure below. I will provide file contents when you ask or when I reference them (e.g. @filename).
-
-${tree}`
-    const prompt = this.buildPrompt(COMPLETION_SYSTEM)
+    const prompt = this.buildGeminiPrompt(fullMessage)
     await this.runTurn(prompt)
   }
 
@@ -177,6 +171,12 @@ ${tree}`
 
         proc.stderr.on('data', (chunk: string) => {
           stderr += chunk
+          const trimmed = chunk.trim()
+          if (!trimmed) return
+          const isNoise = /quota|retrying after|rate.?limit|capacity.*exhausted|reset after/i.test(trimmed)
+          if (!isNoise) {
+            this.emitEvent({ type: 'assistantDelta', delta: chunk })
+          }
         })
 
         proc.on('error', (err) => {
@@ -250,12 +250,16 @@ ${tree}`
     this.history = []
   }
 
-  private buildPrompt(systemInstruction: string): string {
-    const recent = this.history.slice(-12)
-    const transcript = recent
-      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}:\n${m.text}`)
-      .join('\n\n')
-    return [systemInstruction, transcript, 'Assistant:'].filter(Boolean).join('\n\n')
+  private buildGeminiPrompt(userMessage: string): string {
+    const tree = generateWorkspaceTreeText(this.cwd)
+    const context = `Workspace: ${this.cwd}\n\n${tree}`
+
+    const lastAssistant = [...this.history].reverse().find((m) => m.role === 'assistant')
+    const continuationHint = lastAssistant
+      ? `\n\nFor context, your previous response was:\n${lastAssistant.text.slice(0, 2000)}\n\n`
+      : ''
+
+    return `${context}${continuationHint}\n\n${userMessage}`
   }
 
   private async assertGeminiCliAvailable() {

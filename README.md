@@ -102,8 +102,16 @@ npm run dev
 - Standard local build (portable-only artifact): `npm run build`
 - Dist-only build (no release artifact): `npm run build:dist`
 - Full release build (installer + portable): `npm run build:release`
+- Portable build without version bump (for CI/release workflow): `npm run build:portable:raw`
+- Releasable prep (bump + notes scaffold + portable build): `npm run release:prepare`
 
 `build:dist` automatically increments the app version on every run.
+
+## GitHub Release Automation
+
+- Auto release on push: include `[release]` in the commit message and push to `main`.
+- Manual release: run GitHub workflow `Release` with `releasable=true`.
+- Release notes source file: `RELEASE_NOTES_<version>.md` (generate with `npm run release:notes`).
 
 ## Project Structure
 

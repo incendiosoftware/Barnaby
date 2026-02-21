@@ -33,6 +33,27 @@ For "build and run":
 1. Run `npm run build`
 2. Launch app (typically `npx electron .` unless user explicitly requests running the portable exe directly)
 
+## Release Automation Shortcuts
+
+Use these exact flows when the user asks:
+
+- **Local build only**: `npm run build:dist:raw`
+- **Local releasable build (bumps version + creates notes + builds portable)**: `npm run release:prepare`
+- **Push only**: `git add -A && git commit -m "<message>" && git push origin main`
+- **Push with release**:
+  1. Commit message must include `[release]` (example: `release: v0.0.90 [release]`)
+  2. `git push origin main`
+  3. GitHub Action `release.yml` will build portable and publish release/tag `v<package.json version>`
+- **Build with release (no push trigger needed)**:
+  - Run workflow manually: GitHub Actions -> `Release` -> `Run workflow` -> `releasable=true`
+  - Or with CLI: `gh workflow run release.yml -f releasable=true`
+
+### Release Notes Rules
+
+- Preferred release notes file: `RELEASE_NOTES_<version>.md`
+- Generate scaffold file for current version: `npm run release:notes`
+- The release workflow uses `RELEASE_NOTES_<version>.md` if present, otherwise auto-generates fallback notes.
+
 ## Plan Mode Workflow
 
 - If the user sets `Mode: Plan`, do not make code or file changes in that turn unless they explicitly switch modes or approve implementation.

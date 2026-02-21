@@ -2166,9 +2166,22 @@ function createAboutWindow() {
   const splashImageUrl = pathToFileURL(splashImagePath).toString()
   const version = app.getVersion()
   const appName = 'Barnaby'
-  const description = 'Barnaby is a desktop AI agent orchestrator that connects to your existing CLI subscriptions (Codex, Claude, Gemini).'
-  const blurb = 'Run parallel windowed agents with split layouts (horizontal, vertical, grid), workspace-aware orchestration, and provider routing. Barnaby uses your local CLI sessions directly — no API keys required.'
+  const description = 'Barnaby is an autonomous agent desktop for developers. It orchestrates parallel agent loops directly through your local CLI subscriptions.'
+  const blurb = 'No API keys, no middleman. Connect to Codex, Claude, and Gemini via your existing terminal sessions. Experience workspace-aware agents with flexible split layouts and intelligent provider routing.'
   const email = 'incendiosoftware@gmail.com'
+
+  const isDark = nativeTheme.shouldUseDarkColors
+  const theme = {
+    bg: isDark ? '#0b0b0b' : '#f5f5f5',
+    text: isDark ? '#e0e0e0' : '#171717',
+    h1: isDark ? '#ffffff' : '#0a0a0a',
+    version: isDark ? '#888' : '#525252',
+    description: isDark ? '#ffffff' : '#0a0a0a',
+    blurb: isDark ? '#aaa' : '#404040',
+    contact: isDark ? '#666' : '#737373',
+    link: isDark ? '#4daafc' : '#2563eb',
+    border: isDark ? '#222' : '#e5e5e5'
+  }
 
   const html = `<!doctype html>
 <html lang="en">
@@ -2182,8 +2195,8 @@ function createAboutWindow() {
       padding: 0;
       width: 100%;
       height: 100%;
-      background: #0b0b0b;
-      color: #e0e0e0;
+      background: ${theme.bg};
+      color: ${theme.text};
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       overflow: hidden;
       user-select: none;
@@ -2198,8 +2211,8 @@ function createAboutWindow() {
       text-align: center;
     }
     .splash-container {
-      width: 280px;
-      margin-bottom: 20px;
+      width: 320px;
+      margin-bottom: 24px;
     }
     .splash-container img {
       width: 100%;
@@ -2210,10 +2223,10 @@ function createAboutWindow() {
       margin: 0 0 4px 0;
       font-size: 24px;
       font-weight: 700;
-      color: #ffffff;
+      color: ${theme.h1};
     }
     .version {
-      color: #888;
+      color: ${theme.version};
       font-size: 13px;
       margin-bottom: 24px;
     }
@@ -2221,27 +2234,27 @@ function createAboutWindow() {
       max-width: 440px;
     }
     .description {
-      font-size: 15px;
+      font-size: 16px;
       line-height: 1.5;
       margin-bottom: 12px;
       font-weight: 600;
-      color: #ffffff;
+      color: ${theme.description};
     }
     .blurb {
       font-size: 14px;
       line-height: 1.5;
-      color: #aaa;
+      color: ${theme.blurb};
       margin-bottom: 32px;
     }
     .contact {
       font-size: 12px;
-      color: #666;
-      border-top: 1px solid #222;
+      color: ${theme.contact};
+      border-top: 1px solid ${theme.border};
       padding-top: 16px;
       width: 100%;
     }
     .contact a {
-      color: #4daafc;
+      color: ${theme.link};
       text-decoration: none;
       cursor: pointer;
     }
@@ -2267,7 +2280,7 @@ function createAboutWindow() {
 
   const aboutWin = new BrowserWindow({
     width: 500,
-    height: 520,
+    height: 540,
     resizable: false,
     minimizable: false,
     maximizable: false,

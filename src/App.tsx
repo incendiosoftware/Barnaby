@@ -2203,6 +2203,60 @@ export default function App() {
     setFocusedEditorId(null)
   }
 
+  function archivePanelToHistory(panel: AgentPanelState) {
+    const hasConversation = panel.messages.some((m) => m.role === 'user' || m.role === 'assistant')
+    if (!hasConversation) return
+    const title = getConversationPrecis(panel) || panel.title || 'Untitled chat'
+    const entry: ChatHistoryEntry = {
+      id: newId(),
+      title,
+      savedAt: Date.now(),
+      workspaceRoot: panel.cwd || workspaceRoot,
+      model: panel.model || DEFAULT_MODEL,
+      permissionMode: panel.permissionMode,
+      sandbox: panel.sandbox,
+      fontScale: panel.fontScale,
+      messages: cloneChatMessages(panel.messages),
+    }
+    setChatHistory((prev) => [entry, ...prev].slice(0, MAX_CHAT_HISTORY_ENTRIES))
+  }
+
+  function openChatFromHistory(historyId: string) {
+    const entry = chatHistory.find((x) => x.id === historyId)
+    if (!entry) return
+    if (panelsRef.current.length >= MAX_PANELS) {
+      alert(`Maximum ${MAX_PANELS} panels open. Close one panel first.`)
+      return
+    }
+    const panelId = newId()
+    const restoredMessages = cloneChatMessages(entry.messages)
+    setPanels((prev) => {
+      if (prev.length >= MAX_PANELS) return prev
+      return [
+        ...prev,
+        {
+          id: panelId,
+          title: entry.title,
+          cwd: entry.workspaceRoot || workspaceRoot,
+          model: entry.model || DEFAULT_MODEL,
+          permissionMode: entry.permissionMode,
+          sandbox: entry.sandbox,
+          status: `Loaded from history (${new Date(entry.savedAt).toLocaleString()})`,
+          connected: false,
+          streaming: false,
+          messages: restoredMessages,
+          attachments: [],
+          input: '',
+          pendingInputs: [],
+          fontScale: entry.fontScale,
+          usage: undefined,
+        },
+      ]
+    })
+    setActivePanelId(panelId)
+    setFocusedEditorId(null)
+  }
+
   function registerTextarea(panelId: string, el: HTMLTextAreaElement | null) {
     if (!el) {
       textareaRefs.current.delete(panelId)

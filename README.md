@@ -22,6 +22,7 @@ Website: https://barnaby.build
 
 Barnaby provides:
 
+- Subscription based parallel agents, not expensive API
 - Multiple agent panels with split layouts (horizontal, vertical, grid)
 - Workspace selection and per-workspace defaults
 - Model setup and provider routing (Codex and Gemini)

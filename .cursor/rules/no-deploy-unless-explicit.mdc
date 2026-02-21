@@ -1,0 +1,19 @@
+---
+description: Do not infer deploy/publish for this repo
+alwaysApply: true
+---
+
+# Deploy Semantics
+
+- Do not ask "where to deploy" for normal build requests.
+- Default assumption: local artifact build only.
+- Treat "deploy" as publish/release distribution only when user explicitly asks.
+
+# Required Build Output Summary
+
+After build, report:
+
+- Version number
+- Exact artifact filename/path
+- File timestamp
+- File size

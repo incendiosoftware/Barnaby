@@ -7,10 +7,13 @@ export type ClaudeClientEvent =
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
 
+const INITIAL_HISTORY_MAX_MESSAGES = 24
+
 export type ClaudeConnectOptions = {
   cwd: string
   model: string
   permissionMode?: 'verify-first' | 'proceed-always'
+  initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
 export class ClaudeClient extends EventEmitter {
@@ -65,7 +68,10 @@ export class ClaudeClient extends EventEmitter {
     }
     this.emitEvent({ type: 'status', status: 'starting', message: 'Connecting to Claude CLI...' })
     await this.assertClaudeCliAvailable()
-    this.history = []
+    this.history =
+      (options.initialHistory?.length ?? 0) > 0
+        ? options.initialHistory!.slice(-INITIAL_HISTORY_MAX_MESSAGES)
+        : []
     this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })
     return { threadId: 'claude' }
   }

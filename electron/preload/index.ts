@@ -15,6 +15,7 @@ export type CodexConnectOptions = {
   permissionMode?: 'verify-first' | 'proceed-always'
   approvalPolicy?: 'on-request' | 'never'
   sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
 type WorkspaceTreeNode = {
@@ -75,10 +76,16 @@ const api = {
   connect(agentWindowId: string, options: CodexConnectOptions) {
     return ipcRenderer.invoke('agentorchestrator:connect', agentWindowId, options) as Promise<{ threadId: string }>
   },
-  sendMessage(agentWindowId: string, text: string, imagePaths?: string[]) {
+  sendMessage(
+    agentWindowId: string,
+    text: string,
+    imagePaths?: string[],
+    priorMessagesForContext?: Array<{ role: string; content: string }>,
+  ) {
     return ipcRenderer.invoke('agentorchestrator:sendMessageEx', agentWindowId, {
       text,
       imagePaths: imagePaths ?? [],
+      priorMessagesForContext,
     }) as Promise<void>
   },
   loadChatHistory() {

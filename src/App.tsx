@@ -983,6 +983,19 @@ function cloneChatMessages(messages: ChatMessage[]): ChatMessage[] {
   }))
 }
 
+const INITIAL_HISTORY_MAX_MESSAGES = 24
+
+function panelMessagesToInitialHistory(
+  messages: ChatMessage[],
+  maxMessages = INITIAL_HISTORY_MAX_MESSAGES,
+): Array<{ role: 'user' | 'assistant'; text: string }> {
+  const trimmed = messages.slice(-maxMessages)
+  return trimmed
+    .filter((m): m is ChatMessage & { role: 'user' | 'assistant' } => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({ role: m.role, text: (m.content ?? '').trim() }))
+    .filter((m) => m.text.length > 0)
+}
+
 function parseHistoryMessages(raw: unknown): ChatMessage[] {
   if (!Array.isArray(raw)) return []
   const next: ChatMessage[] = []
@@ -1836,6 +1849,7 @@ export default function App() {
   const lastFindInPageQueryRef = useRef('')
   const lastFindInFilesQueryRef = useRef('')
   const reconnectingRef = useRef(new Set<string>())
+  const needsContextOnNextCodexSendRef = useRef<Record<string, boolean>>({})
   const workspaceRootRef = useRef(workspaceRoot)
   const workspaceListRef = useRef(workspaceList)
   const activeWorkspaceLockRef = useRef('')
@@ -4325,6 +4339,7 @@ export default function App() {
     cwd: string,
     permissionMode: PermissionMode,
     sandbox: SandboxMode,
+    initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>,
   ) {
     const mi = modelConfig.interfaces.find((m) => m.id === model)
     await withTimeout(
@@ -4336,6 +4351,7 @@ export default function App() {
         sandbox,
         provider: mi?.provider ?? 'codex',
         modelConfig: mi?.config,
+        initialHistory,
       }),
       CONNECT_TIMEOUT_MS,
       'connect',
@@ -4347,6 +4363,10 @@ export default function App() {
     const w = panelsRef.current.find((x) => x.id === winId)
     if (!w) return
     reconnectingRef.current.add(winId)
+    const provider = getModelProvider(w.model)
+    if (provider === 'codex' && w.messages.length > 0) {
+      needsContextOnNextCodexSendRef.current[winId] = true
+    }
     setPanels((prev) =>
       prev.map((p) =>
         p.id !== winId
@@ -4360,7 +4380,8 @@ export default function App() {
       ),
     )
     try {
-      await connectWindow(winId, w.model, w.cwd, w.permissionMode, w.sandbox)
+      const initialHistory = w.messages.length > 0 ? panelMessagesToInitialHistory(w.messages) : undefined
+      await connectWindow(winId, w.model, w.cwd, w.permissionMode, w.sandbox, initialHistory)
       setPanels((prev) =>
         prev.map((p) =>
           p.id !== winId
@@ -4398,12 +4419,13 @@ export default function App() {
     cwd: string,
     permissionMode: PermissionMode,
     sandbox: SandboxMode,
+    initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>,
   ) {
     try {
-      await connectWindow(winId, model, cwd, permissionMode, sandbox)
+      await connectWindow(winId, model, cwd, permissionMode, sandbox, initialHistory)
       return
     } catch {
-      await connectWindow(winId, model, cwd, permissionMode, sandbox)
+      await connectWindow(winId, model, cwd, permissionMode, sandbox, initialHistory)
     }
   }
 
@@ -4458,6 +4480,11 @@ export default function App() {
               },
         ),
       )
+      const needContext = !w.connected && w.messages.length > 0
+      const initialHistory = needContext ? panelMessagesToInitialHistory(w.messages) : undefined
+      if (needContext && provider === 'codex') {
+        needsContextOnNextCodexSendRef.current[winId] = true
+      }
       if (!w.connected) {
         appendPanelDebug(winId, 'auth', `Checking provider "${provider}"`)
         await ensureProviderReady(provider, `${w.model}`)
@@ -4472,7 +4499,7 @@ export default function App() {
           ),
         )
         appendPanelDebug(winId, 'connect', `Connecting model ${w.model} (${provider})`)
-        await connectWindowWithRetry(winId, w.model, w.cwd, w.permissionMode, w.sandbox)
+        await connectWindowWithRetry(winId, w.model, w.cwd, w.permissionMode, w.sandbox, initialHistory)
         appendPanelDebug(winId, 'connect', 'Connected')
       }
       setPanels((prev) =>
@@ -4489,7 +4516,21 @@ export default function App() {
       if (provider !== 'codex' && provider !== 'gemini' && imagePaths.length > 0) {
         throw new Error('Image attachments are supported for Codex and Gemini panels only.')
       }
-      await withTimeout(api.sendMessage(winId, outgoingText, imagePaths), TURN_START_TIMEOUT_MS, 'turn/start')
+      const needsPriorMessages =
+        provider === 'codex' &&
+        w.messages.length > 0 &&
+        (needContext || needsContextOnNextCodexSendRef.current[winId])
+      const priorMessagesForContext = needsPriorMessages
+        ? w.messages.map((m) => ({ role: m.role, content: m.content ?? '' }))
+        : undefined
+      await withTimeout(
+        api.sendMessage(winId, outgoingText, imagePaths, priorMessagesForContext),
+        TURN_START_TIMEOUT_MS,
+        'turn/start',
+      )
+      if (needsPriorMessages) {
+        needsContextOnNextCodexSendRef.current[winId] = false
+      }
       appendPanelDebug(winId, 'turn/start', 'Turn started')
     } catch (e: any) {
       const errMsg = formatConnectionError(e)
@@ -6010,7 +6051,7 @@ export default function App() {
                         }))
                       }
                     />
-                    <span>Inject debug notes into chat timeline</span>
+                    <span className="text-red-700 dark:text-red-300">Inject debug notes into chat timeline</span>
                   </label>
                   <label className="flex items-center gap-2">
                     <input
@@ -6023,7 +6064,7 @@ export default function App() {
                         }))
                       }
                     />
-                    <span>Show activity updates in chat timeline</span>
+                    <span className="text-amber-700 dark:text-amber-300">Show activity updates in chat timeline</span>
                   </label>
                   <label className="flex items-center gap-2">
                     <input
@@ -6036,7 +6077,7 @@ export default function App() {
                         }))
                       }
                     />
-                    <span>Show reasoning updates in chat timeline</span>
+                    <span className="text-emerald-700 dark:text-emerald-300">Show reasoning updates in chat timeline</span>
                   </label>
                   <label className="flex items-center gap-2">
                     <input
@@ -6049,7 +6090,7 @@ export default function App() {
                         }))
                       }
                     />
-                    <span>Show operation trace in chat timeline</span>
+                    <span className="text-blue-900 dark:text-blue-300">Show operation trace in chat timeline</span>
                   </label>
                 </div>
               </section>
@@ -6669,16 +6710,16 @@ export default function App() {
             return rows.map((row) => {
               if (row.type === 'operationBatch') {
                 return (
-                  <div key={`op-batch-${row.units.map((u) => u.id).join('-')}`} className="w-full space-y-0.5">
+                  <div key={`op-batch-${row.units.map((u) => u.id).join('-')}`} className="w-full space-y-0 -my-0.5">
                     {row.units.map((unit) => {
                       const ageMs = Math.max(0, activityClock - unit.updatedAt)
                       const fadeProgress = Math.min(1, Math.max(0, (ageMs - OPERATION_TRACE_VISIBLE_MS) / OPERATION_TRACE_FADE_MS))
                       const traceText = unit.body.replace(/\s*\n+\s*/g, ' | ').trim()
                       const fadedOpacity = Math.max(OPERATION_TRACE_MIN_OPACITY, 1 - fadeProgress)
                       return (
-                        <div key={unit.id} className="px-1">
+                        <div key={unit.id} className="px-1 py-0">
                           <div
-                            className="rounded px-2 py-0.5 text-[11px] leading-4 text-neutral-500 dark:text-neutral-400 transition-opacity duration-300"
+                            className="rounded px-2 py-0 text-[11px] leading-[1.2] text-blue-900 dark:text-blue-300 transition-opacity duration-300"
                             style={{
                               opacity: fadedOpacity,
                               display: '-webkit-box',
@@ -6703,6 +6744,9 @@ export default function App() {
                 if (isOperationTrace) return null
                 if (isReasoningActivity && !showReasoningUpdates) return null
                 if (!isReasoningActivity && !showActivityUpdates) return null
+              const activityToneClass = isReasoningActivity
+                ? 'text-emerald-700 dark:text-emerald-300'
+                : 'text-amber-700 dark:text-amber-300'
               const isOpen = timelineOpenByUnitId[unit.id] ?? unit.defaultOpen
               const activitySummary = unit.title || unit.body.trim().split(/\r?\n/)[0]?.slice(0, 80) || 'Activity'
               return (
@@ -6715,7 +6759,7 @@ export default function App() {
                     }}
                     className="group"
                   >
-                    <summary className="list-none cursor-pointer py-0.5 text-[10.5px] text-neutral-400 dark:text-neutral-500 flex items-center justify-between gap-2">
+                    <summary className={`list-none cursor-pointer py-0.5 text-[10.5px] flex items-center justify-between gap-2 ${activityToneClass}`}>
                       <span>{activitySummary}</span>
                       <svg
                         width="12"
@@ -6728,7 +6772,7 @@ export default function App() {
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                     </summary>
-                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5 text-neutral-500 dark:text-neutral-400">
+                    <div className={`mt-1 pl-0 py-1 text-[12px] leading-5 ${activityToneClass}`}>
                       {unit.body}
                     </div>
                   </details>
@@ -6767,7 +6811,7 @@ export default function App() {
                           ? 'bg-neutral-50 border-neutral-200 text-neutral-700 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-300'
                           : '',
                         isDebugSystemNote
-                          ? 'bg-fuchsia-50/85 border-fuchsia-200 text-fuchsia-900 dark:bg-fuchsia-950/35 dark:border-fuchsia-900 dark:text-fuchsia-200'
+                          ? 'bg-red-50/90 border-red-200 text-red-900 dark:bg-red-950/35 dark:border-red-900 dark:text-red-200'
                           : '',
                       ].join(' '),
                 ].filter(Boolean).join(' ')}
@@ -6928,7 +6972,7 @@ export default function App() {
                         <div
                           className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] ${
                             isDebugSystemNote
-                              ? 'italic text-fuchsia-800 dark:text-fuchsia-200'
+                              ? 'italic text-red-800 dark:text-red-200'
                               : 'text-neutral-700 dark:text-neutral-300'
                           }`}
                         >
@@ -7050,7 +7094,7 @@ export default function App() {
                 ) : m.content ? (
                   <div
                     className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${
-                      isDebugSystemNote ? 'italic text-fuchsia-800 dark:text-fuchsia-200' : ''
+                      isDebugSystemNote ? 'italic text-red-800 dark:text-red-200' : ''
                     }`}
                   >
                     {m.content}

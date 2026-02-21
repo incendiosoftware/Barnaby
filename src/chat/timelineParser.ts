@@ -125,9 +125,16 @@ export function buildTimelineForPanel(input: BuildTimelineInput): TimelineUnit[]
   }
 
   const orderedActivity = mergeActivityItems(input.activityItems)
-  for (const item of orderedActivity) {
+  const msgCount = input.messages.length
+  const actCount = orderedActivity.length
+  for (let j = 0; j < orderedActivity.length; j += 1) {
+    const item = orderedActivity[j]
     const detailSuffix = item.detail ? `\n${item.detail}` : ''
     const countSuffix = item.count > 1 ? ` x${item.count}` : ''
+    const createdAt =
+      actCount > 0 && msgCount > 0
+        ? 0.5 + (j / (actCount + 1)) * Math.max(0, msgCount - 1)
+        : item.at
     units.push({
       id: `activity-${item.id}`,
       panelId: input.panelId,
@@ -137,7 +144,7 @@ export function buildTimelineForPanel(input: BuildTimelineInput): TimelineUnit[]
       body: `${item.label}${countSuffix}${detailSuffix}`.trim(),
       markdown: false,
       activityKind: item.kind,
-      createdAt: item.at,
+      createdAt,
       updatedAt: item.at,
       status: 'completed',
       collapsible: true,

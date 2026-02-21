@@ -101,6 +101,7 @@ type WorkspaceLockAcquireResult =
 type ConnectOptions = CodexConnectOptions & {
   provider?: 'codex' | 'claude' | 'gemini'
   modelConfig?: Record<string, string>
+  initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 type ContextMenuKind = 'input-selection' | 'chat-selection'
 
@@ -536,6 +537,74 @@ function getDiagnosticsInfo() {
     chatHistoryPath: getChatHistoryFilePath(),
     appStatePath: getAppStateFilePath(),
     runtimeLogPath: getRuntimeLogFilePath(),
+  }
+}
+
+type DiagnosticsPathTarget = 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog'
+
+function resolveDiagnosticsPathTarget(target: DiagnosticsPathTarget) {
+  const info = getDiagnosticsInfo()
+  switch (target) {
+    case 'userData':
+      return { path: info.userDataPath, kind: 'directory' as const }
+    case 'storage':
+      return { path: info.storageDir, kind: 'directory' as const }
+    case 'chatHistory':
+      return { path: info.chatHistoryPath, kind: 'file' as const }
+    case 'appState':
+      return { path: info.appStatePath, kind: 'file' as const }
+    case 'runtimeLog':
+      return { path: info.runtimeLogPath, kind: 'file' as const }
+  }
+}
+
+async function openDiagnosticsPath(rawTarget: unknown) {
+  const target = typeof rawTarget === 'string' ? (rawTarget as DiagnosticsPathTarget) : undefined
+  if (
+    target !== 'userData' &&
+    target !== 'storage' &&
+    target !== 'chatHistory' &&
+    target !== 'appState' &&
+    target !== 'runtimeLog'
+  ) {
+    return {
+      ok: false as const,
+      path: '',
+      error: 'Unknown diagnostics path target.',
+    }
+  }
+
+  const resolved = resolveDiagnosticsPathTarget(target)
+  if (!resolved) {
+    return {
+      ok: false as const,
+      path: '',
+      error: 'Unknown diagnostics path target.',
+    }
+  }
+
+  try {
+    if (resolved.kind === 'directory') {
+      fs.mkdirSync(resolved.path, { recursive: true })
+    } else if (target === 'runtimeLog') {
+      fs.mkdirSync(path.dirname(resolved.path), { recursive: true })
+      if (!fs.existsSync(resolved.path)) {
+        fs.writeFileSync(resolved.path, '', 'utf8')
+      }
+    }
+  } catch (err) {
+    return {
+      ok: false as const,
+      path: resolved.path,
+      error: errorMessage(err),
+    }
+  }
+
+  const result = await shell.openPath(resolved.path)
+  return {
+    ok: !result,
+    path: resolved.path,
+    error: result || undefined,
   }
 }
 
@@ -1603,7 +1672,10 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
   if (provider === 'gemini') {
     const client = new GeminiClient()
     client.on('event', (evt: GeminiClientEvent) => forwardEvent(agentWindowId, evt))
-    const result = await client.connect({ model: options.model }) as { threadId: string }
+    const result = await client.connect({
+      model: options.model,
+      initialHistory: options.initialHistory,
+    }) as { threadId: string }
     agentClients.set(agentWindowId, client)
     return { client, result }
   }
@@ -1615,6 +1687,7 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
       cwd: options.cwd,
       model: options.model,
       permissionMode: options.permissionMode,
+      initialHistory: options.initialHistory,
     }) as { threadId: string }
     agentClients.set(agentWindowId, client)
     return { client, result }
@@ -1790,11 +1863,26 @@ ipcMain.handle('agentorchestrator:sendMessage', async (_evt, agentWindowId: stri
   return {}
 })
 
-ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: string, payload: { text: string; imagePaths?: string[] }) => {
+function formatPriorMessagesForContext(messages: Array<{ role: string; content: string }>): string {
+  if (!messages.length) return ''
+  const transcript = messages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}:\n${(m.content ?? '').trim()}`)
+    .filter((s) => s.length > 0)
+    .join('\n\n')
+  return transcript ? `Previous conversation:\n\n${transcript}\n\nUser continues: ` : ''
+}
+
+ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: string, payload: { text: string; imagePaths?: string[]; priorMessagesForContext?: Array<{ role: string; content: string }> }) => {
   const client = agentClients.get(agentWindowId)
   if (!client) return {}
-  const text = typeof payload?.text === 'string' ? payload.text : ''
+  let text = typeof payload?.text === 'string' ? payload.text : ''
   const imagePaths = Array.isArray(payload?.imagePaths) ? payload.imagePaths.filter((p): p is string => typeof p === 'string' && p.trim().length > 0) : []
+  const priorMessages = Array.isArray(payload?.priorMessagesForContext) ? payload.priorMessagesForContext : []
+  if (priorMessages.length > 0) {
+    const prefix = formatPriorMessagesForContext(priorMessages.slice(-24))
+    if (prefix) text = prefix + text
+  }
   if (imagePaths.length > 0) {
     const withImages = client as { sendUserMessageWithImages?: (t: string, paths: string[]) => Promise<void> }
     if (typeof withImages.sendUserMessageWithImages !== 'function') {
@@ -1845,6 +1933,10 @@ ipcMain.handle('agentorchestrator:getDiagnosticsInfo', async () => {
 
 ipcMain.handle('agentorchestrator:openRuntimeLog', async () => {
   return openRuntimeLogFile()
+})
+
+ipcMain.handle('agentorchestrator:openDiagnosticsPath', async (_evt, target: unknown) => {
+  return openDiagnosticsPath(target)
 })
 
 ipcMain.handle('agentorchestrator:openExternalUrl', async (_evt, rawUrl: string) => {

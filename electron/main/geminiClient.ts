@@ -7,8 +7,11 @@ export type GeminiClientEvent =
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
 
+const INITIAL_HISTORY_MAX_MESSAGES = 24
+
 export type GeminiConnectOptions = {
   model: string
+  initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
 export class GeminiClient extends EventEmitter {
@@ -75,7 +78,10 @@ export class GeminiClient extends EventEmitter {
     }
     this.emitEvent({ type: 'status', status: 'starting', message: 'Connecting to Gemini CLI...' })
     await this.assertGeminiCliAvailable()
-    this.history = []
+    this.history =
+      (options.initialHistory?.length ?? 0) > 0
+        ? options.initialHistory!.slice(-INITIAL_HISTORY_MAX_MESSAGES)
+        : []
     this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })
     return { threadId: 'gemini' }
   }

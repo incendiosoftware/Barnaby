@@ -73,9 +73,15 @@ interface Window {
         sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
         provider?: 'codex' | 'claude' | 'gemini'
         modelConfig?: Record<string, string>
+        initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
       },
     ): Promise<{ threadId: string }>
-    sendMessage(agentWindowId: string, text: string, imagePaths?: string[]): Promise<void>
+    sendMessage(
+      agentWindowId: string,
+      text: string,
+      imagePaths?: string[],
+      priorMessagesForContext?: Array<{ role: string; content: string }>,
+    ): Promise<void>
     loadChatHistory(): Promise<unknown[]>
     saveChatHistory(entries: unknown[]): Promise<{
       ok: boolean

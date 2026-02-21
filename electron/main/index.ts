@@ -113,6 +113,7 @@ type ProviderConfigForAuth = {
   authCheckCommand?: string
   loginCommand?: string
   upgradeCommand?: string
+  upgradePackage?: string
 }
 type ProviderAuthStatus = {
   provider: string
@@ -1368,7 +1369,17 @@ async function launchProviderLogin(config: ProviderConfigForAuth): Promise<{ sta
 }
 
 async function launchProviderUpgrade(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }> {
-  const command = config.upgradeCommand
+  const pkg = config.upgradePackage
+  const fallbackCommand = config.upgradeCommand
+
+  // Prefer clean reinstall (uninstall + install @latest) to avoid corrupted nested deps (e.g. gemini-cli-core)
+  const command =
+    pkg
+      ? process.platform === 'win32'
+        ? `npm uninstall -g ${pkg} & npm install -g ${pkg}@latest`
+        : `npm uninstall -g ${pkg}; npm install -g ${pkg}@latest`
+      : fallbackCommand
+
   if (!command) {
     return { started: false, detail: `No upgrade command configured for ${config.id}.` }
   }

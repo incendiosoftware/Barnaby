@@ -108,6 +108,7 @@ npm run dev
 ## Project Structure
 
 ```text
+docs/            Documentation (AGENTS.md, BACKLOG.md, STATUS_LOG.md)
 electron/        Electron main and preload
 src/             React renderer UI
 public/          Static assets

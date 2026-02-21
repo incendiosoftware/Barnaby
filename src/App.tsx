@@ -305,6 +305,7 @@ type ProviderConfig = {
   authCheckCommand?: string
   loginCommand?: string
   upgradeCommand?: string
+  upgradePackage?: string
   cliPath?: string
   isBuiltIn?: boolean
 }
@@ -411,6 +412,7 @@ const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderCon
     authCheckCommand: 'login status',
     loginCommand: 'codex login',
     upgradeCommand: 'npm update -g @openai/codex',
+    upgradePackage: '@openai/codex',
     isBuiltIn: true,
   },
   claude: {
@@ -422,6 +424,7 @@ const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderCon
     authCheckCommand: '--version',
     loginCommand: 'claude',
     upgradeCommand: 'npm update -g @anthropic-ai/claude',
+    upgradePackage: '@anthropic-ai/claude',
     isBuiltIn: true,
   },
   gemini: {
@@ -433,6 +436,7 @@ const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderCon
     authCheckCommand: '--version',
     loginCommand: 'gemini',
     upgradeCommand: 'npm update -g @google/gemini-cli',
+    upgradePackage: '@google/gemini-cli',
     isBuiltIn: true,
   },
 }
@@ -3617,7 +3621,7 @@ export default function App() {
   }
 
   async function startProviderUpgradeFlow(config: ProviderConfig) {
-    if (!config.upgradeCommand) return
+    if (!config.upgradeCommand && !config.upgradePackage) return
     setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
     try {
       const result = await api.upgradeProviderCli({
@@ -3627,6 +3631,7 @@ export default function App() {
         authCheckCommand: config.authCheckCommand,
         loginCommand: config.loginCommand,
         upgradeCommand: config.upgradeCommand,
+        upgradePackage: config.upgradePackage,
       })
       setProviderAuthActionByName((prev) => ({
         ...prev,
@@ -6009,13 +6014,17 @@ export default function App() {
                             >
                               {status?.authenticated ? 'Re-authenticate' : 'Open login'}
                             </button>
-                            {config.upgradeCommand && (
+                            {(config.upgradeCommand || config.upgradePackage) && (
                               <button
                                 type="button"
                                 className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
                                 disabled={loading}
                                 onClick={() => void startProviderUpgradeFlow(config)}
-                                title={config.upgradeCommand}
+                                title={
+                                  config.upgradePackage
+                                    ? `Clean reinstall: npm uninstall -g ${config.upgradePackage}; npm install -g ${config.upgradePackage}@latest`
+                                    : config.upgradeCommand
+                                }
                               >
                                 Upgrade CLI
                               </button>

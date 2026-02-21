@@ -45,6 +45,7 @@ type ProviderConfigForAuth = {
   authCheckCommand?: string
   loginCommand?: string
   upgradeCommand?: string
+  upgradePackage?: string
 }
 
 type WorkspaceLockOwner = {

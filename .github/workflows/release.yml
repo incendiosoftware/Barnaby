@@ -56,12 +56,19 @@ jobs:
           fi
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.app_version.outputs.value }}
-          name: v${{ steps.app_version.outputs.value }}
-          target_commitish: ${{ github.sha }}
-          body_path: ${{ steps.notes.outputs.path }}
-          files: |
-            release/${{ steps.app_version.outputs.value }}/Barnaby_${{ steps.app_version.outputs.value }}_portable.exe
-          fail_on_unmatched_files: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.app_version.outputs.value }}"
+          TAG="v${VERSION}"
+          ASSET="release/${VERSION}/Barnaby_${VERSION}_portable.exe"
+          NOTES="${{ steps.notes.outputs.path }}"
+          TARGET="${{ github.sha }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" --clobber
+            gh release edit "$TAG" --title "$TAG" --notes-file "$NOTES"
+          else
+            gh release create "$TAG" "$ASSET" --title "$TAG" --notes-file "$NOTES" --target "$TARGET"
+          fi

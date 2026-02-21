@@ -109,8 +109,8 @@ npm run dev
 
 ## GitHub Release Automation
 
-- Auto release on push: include `[release]` in the commit message and push to `main`.
-- Manual release: run GitHub workflow `Release` with `releasable=true`.
+- Trigger release workflow manually after push: `gh workflow run release.yml -f releasable=true --ref main`.
+- Manual release in UI: run GitHub workflow `Release` with `releasable=true`.
 - Release notes source file: `RELEASE_NOTES_<version>.md` (generate with `npm run release:notes`).
 
 ## Project Structure

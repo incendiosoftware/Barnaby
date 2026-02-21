@@ -11,11 +11,13 @@ const INITIAL_HISTORY_MAX_MESSAGES = 24
 
 export type GeminiConnectOptions = {
   model: string
+  cwd: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
 export class GeminiClient extends EventEmitter {
   private model: string = 'gemini-2.0-flash'
+  private cwd: string = process.cwd()
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeProc: ChildProcessWithoutNullStreams | null = null
 
@@ -69,6 +71,7 @@ export class GeminiClient extends EventEmitter {
     const requestedModel = options.model || 'gemini-2.0-flash'
     const normalized = this.normalizeModelId(requestedModel)
     this.model = normalized
+    this.cwd = options.cwd || process.cwd()
     if (normalized !== requestedModel) {
       this.emitEvent({
         type: 'status',
@@ -96,7 +99,7 @@ export class GeminiClient extends EventEmitter {
     this.history.push({ role: 'user', text: userText })
 
     const COMPLETION_SYSTEM =
-      'You are a coding assistant running inside Agent Orchestrator. Complete tasks fully. Do not stop after describing a plan - execute the plan and provide concrete outputs. When the user includes image references (@path), interpret and respond to the images as part of the request.'
+      'You are a coding assistant with full workspace access. You have tools to read files, write files, search, and make edits. Use them to complete tasks. Execute your plan—do not stop after describing it. When the user includes image references (@path), interpret and respond to the images.'
     const prompt = this.buildPrompt(COMPLETION_SYSTEM)
     await this.runTurn(prompt)
   }
@@ -108,7 +111,7 @@ export class GeminiClient extends EventEmitter {
     this.history.push({ role: 'user', text: trimmed })
 
     const COMPLETION_SYSTEM =
-      'You are a coding assistant running inside Agent Orchestrator. Complete tasks fully. Do not stop after describing a plan - execute the plan and provide concrete outputs.'
+      'You are a coding assistant with full workspace access. You have tools to read files, write files, search, and make edits. Use them to complete tasks. Execute your plan—do not stop after describing it.'
     const prompt = this.buildPrompt(COMPLETION_SYSTEM)
     await this.runTurn(prompt)
   }
@@ -116,14 +119,15 @@ export class GeminiClient extends EventEmitter {
   private async runTurn(prompt: string): Promise<void> {
     const startTurn = (modelId: string): Promise<void> =>
       new Promise((resolve, reject) => {
-        const args = ['-m', modelId, '-p', prompt]
+        const args = ['-m', modelId, '-p', prompt, '--approval-mode=auto_edit']
+        const spawnOpts = { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'] as const }
         const proc =
           process.platform === 'win32'
             ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
-                stdio: ['pipe', 'pipe', 'pipe'],
+                ...spawnOpts,
                 windowsHide: true,
-              })
-            : spawn('gemini', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+              } as object)
+            : spawn('gemini', args, spawnOpts)
 
         this.activeProc = proc
         proc.stdout.setEncoding('utf8')
@@ -224,13 +228,14 @@ export class GeminiClient extends EventEmitter {
 
   private async assertGeminiCliAvailable() {
     await new Promise<void>((resolve, reject) => {
+      const spawnOpts = { cwd: this.cwd, stdio: ['ignore', 'pipe', 'pipe'] as const }
       const proc =
         process.platform === 'win32'
           ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', '--version'], {
-              stdio: ['ignore', 'pipe', 'pipe'],
+              ...spawnOpts,
               windowsHide: true,
-            })
-          : spawn('gemini', ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] })
+            } as object)
+          : spawn('gemini', ['--version'], spawnOpts)
 
       let stderr = ''
       proc.stderr.setEncoding('utf8')

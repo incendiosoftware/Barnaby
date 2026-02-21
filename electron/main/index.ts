@@ -1685,6 +1685,7 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
     client.on('event', (evt: GeminiClientEvent) => forwardEvent(agentWindowId, evt))
     const result = await client.connect({
       model: options.model,
+      cwd: options.cwd,
       initialHistory: options.initialHistory,
     }) as { threadId: string }
     agentClients.set(agentWindowId, client)

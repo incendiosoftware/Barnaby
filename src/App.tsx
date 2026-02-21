@@ -6,6 +6,20 @@ import { buildTimelineForPanel } from './chat/timelineParser'
 import type { TimelineUnit } from './chat/timelineTypes'
 
 type Theme = 'light' | 'dark'
+
+type StandaloneTheme = {
+  id: string
+  name: string
+  mode: Theme
+  accent500: string
+  accent600: string
+  accent700: string
+  accentText: string
+  accentSoft: string
+  accentSoftDark: string
+  dark950: string
+  dark900: string
+}
 type ChatRole = 'user' | 'assistant' | 'system'
 type MessageFormat = 'text' | 'markdown'
 type PastedImageAttachment = { id: string; path: string; label: string; mimeType?: string }
@@ -46,6 +60,7 @@ type WorkspaceSettings = {
   defaultModel: string
   permissionMode: PermissionMode
   sandbox: SandboxMode
+  themeId: string
 }
 
 type WorkspaceTreeNode = {
@@ -124,7 +139,7 @@ type ChatHistoryEntry = {
 
 type ApplicationSettings = {
   restoreSessionOnStartup: boolean
-  themePresetId: string
+  themeId: string
   responseStyle: 'concise' | 'standard' | 'detailed'
   showDebugNotesInTimeline: boolean
   showActivityUpdates: boolean
@@ -132,18 +147,6 @@ type ApplicationSettings = {
   showOperationTrace: boolean
 }
 
-type ThemePreset = {
-  id: string
-  name: string
-  accent500: string
-  accent600: string
-  accent700: string
-  accentText: string
-  accentSoft: string
-  accentSoftDark: string
-  dark950: string
-  dark900: string
-}
 
 type PersistedEditorPanelState = {
   id?: unknown
@@ -249,6 +252,9 @@ const DEFAULT_WORKSPACE_ROOT = 'E:\\Retirement\\FIREMe'
 const DEFAULT_MODEL = 'gpt-5.3-codex'
 const MODEL_BANNER_PREFIX = 'Model: '
 const STARTUP_READY_MESSAGE = 'I am ready'
+const AUTO_CONTINUE_PROMPT = 'Please continue from where you left off. Complete the task fully.'
+const STARTUP_LOCKED_WORKSPACE_PROMPT =
+  'The workspace being opened is locked by another Barnaby. Select another workspace or try again.'
 
 type ModelProvider = 'codex' | 'claude' | 'gemini'
 type ConnectivityProvider = 'codex' | 'claude' | 'gemini'
@@ -263,6 +269,19 @@ type ModelInterface = {
 
 type ModelConfig = {
   interfaces: ModelInterface[]
+}
+
+type AvailableCatalogModels = {
+  codex: { id: string; displayName: string }[]
+  claude: { id: string; displayName: string }[]
+  gemini: { id: string; displayName: string }[]
+}
+
+type AppSettingsView = 'connectivity' | 'models' | 'preferences' | 'agents' | 'diagnostics'
+
+type ModelCatalogRefreshStatus = {
+  kind: 'success' | 'error'
+  message: string
 }
 
 type ProviderConfig = {
@@ -315,6 +334,16 @@ type WorkspaceLockAcquireResult =
       owner?: WorkspaceLockOwner | null
     }
 
+type WorkspaceApplyFailure =
+  | {
+      kind: 'request-error'
+      message: string
+    }
+  | {
+      kind: 'lock-denied'
+      result: WorkspaceLockAcquireResult
+    }
+
 const DEFAULT_MODEL_INTERFACES: ModelInterface[] = [
   { id: 'gpt-5.3-codex', displayName: 'GPT 5.3 (Codex)', provider: 'codex', enabled: true },
   { id: 'gpt-5.2-codex', displayName: 'GPT 5.2 (Codex)', provider: 'codex', enabled: true },
@@ -341,6 +370,10 @@ const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-w
 const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
 const STATUS_SYMBOL_ICON_CLASS = 'h-[13px] w-[13px] text-neutral-600 dark:text-neutral-300'
 const CONNECTIVITY_PROVIDERS: ConnectivityProvider[] = ['codex', 'claude', 'gemini']
+const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'preferences', 'agents', 'diagnostics']
+const OPERATION_TRACE_VISIBLE_MS = 1200
+const OPERATION_TRACE_FADE_MS = 2600
+const OPERATION_TRACE_MIN_OPACITY = 0.4
 
 const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderConfig> = {
   codex: {
@@ -376,6 +409,33 @@ const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderCon
     upgradeCommand: 'npm update -g @google/gemini-cli',
     isBuiltIn: true,
   },
+}
+
+function syncModelConfigWithCatalog(prev: ModelConfig, available: AvailableCatalogModels): ModelConfig {
+  const catalogIdsByProvider: Record<ModelProvider, Set<string>> = {
+    codex: new Set(available.codex.map((m) => m.id)),
+    claude: new Set(available.claude.map((m) => m.id)),
+    gemini: new Set(available.gemini.map((m) => m.id)),
+  }
+  const catalogModelsByProvider: Record<ModelProvider, { id: string; displayName: string }[]> = {
+    codex: available.codex,
+    claude: available.claude,
+    gemini: available.gemini,
+  }
+  const kept = prev.interfaces.filter((m) => {
+    const catalogIds = catalogIdsByProvider[m.provider]
+    return catalogIds.size === 0 || catalogIds.has(m.id)
+  })
+  const existingIds = new Set(kept.map((m) => m.id))
+  const nextInterfaces = [...kept]
+  for (const provider of CONNECTIVITY_PROVIDERS) {
+    for (const model of catalogModelsByProvider[provider]) {
+      if (existingIds.has(model.id)) continue
+      nextInterfaces.push({ id: model.id, displayName: model.displayName, provider, enabled: true })
+      existingIds.add(model.id)
+    }
+  }
+  return { interfaces: nextInterfaces }
 }
 
 function renderSandboxSymbol(mode: SandboxMode) {
@@ -517,11 +577,16 @@ function looksIncomplete(content: string): boolean {
   return false
 }
 
+const THINKING_MAX_CHARS = 180
+
 function isLikelyThinkingUpdate(content: string): boolean {
   const text = content.trim()
   if (!text) return false
+  if (text.length > THINKING_MAX_CHARS) return false
   if (text.includes('```')) return false
   if (/^#{1,6}\s/m.test(text)) return false
+  const paragraphCount = (text.match(/\n\s*\n/g) || []).length + 1
+  if (paragraphCount >= 2) return false
   const lower = text.toLowerCase().replace(/\s+/g, ' ')
   const markers = [
     "i'll ",
@@ -571,17 +636,27 @@ function isLikelyThinkingUpdate(content: string): boolean {
   return false
 }
 
+function stripSyntheticAutoContinueMessages(messages: ChatMessage[]): ChatMessage[] {
+  const filtered = messages.filter((message) => {
+    if (message.role !== 'user') return true
+    if ((message.attachments?.length ?? 0) > 0) return true
+    return message.content.trim() !== AUTO_CONTINUE_PROMPT
+  })
+  return filtered.length === messages.length ? messages : filtered
+}
+
 function filterMessagesForPresentation(
   messages: ChatMessage[],
   responseStyle: 'concise' | 'standard' | 'detailed',
 ): ChatMessage[] {
-  if (responseStyle === 'detailed') return messages
+  const visibleMessages = stripSyntheticAutoContinueMessages(messages)
+  if (responseStyle === 'detailed') return visibleMessages
   if (responseStyle === 'concise') {
-    return messages.filter((m) => !(m.role === 'assistant' && isLikelyThinkingUpdate(m.content)))
+    return visibleMessages.filter((m) => !(m.role === 'assistant' && isLikelyThinkingUpdate(m.content)))
   }
   const next: ChatMessage[] = []
-  for (let i = 0; i < messages.length; i += 1) {
-    const current = messages[i]
+  for (let i = 0; i < visibleMessages.length; i += 1) {
+    const current = visibleMessages[i]
     const isThinking = current.role === 'assistant' && isLikelyThinkingUpdate(current.content)
     if (!isThinking) {
       next.push(current)
@@ -592,23 +667,23 @@ function filterMessagesForPresentation(
     // when there is no final assistant response in the same turn.
     let endOfThinkingRun = i
     while (
-      endOfThinkingRun + 1 < messages.length &&
-      messages[endOfThinkingRun + 1].role === 'assistant' &&
-      isLikelyThinkingUpdate(messages[endOfThinkingRun + 1].content)
+      endOfThinkingRun + 1 < visibleMessages.length &&
+      visibleMessages[endOfThinkingRun + 1].role === 'assistant' &&
+      isLikelyThinkingUpdate(visibleMessages[endOfThinkingRun + 1].content)
     ) {
       endOfThinkingRun += 1
     }
 
     let turnBoundary = endOfThinkingRun + 1
-    while (turnBoundary < messages.length && messages[turnBoundary].role !== 'user') {
+    while (turnBoundary < visibleMessages.length && visibleMessages[turnBoundary].role !== 'user') {
       turnBoundary += 1
     }
-    const hasFinalAssistantInTurn = messages
+    const hasFinalAssistantInTurn = visibleMessages
       .slice(endOfThinkingRun + 1, turnBoundary)
       .some((m) => m.role === 'assistant' && !isLikelyThinkingUpdate(m.content))
 
     if (!hasFinalAssistantInTurn) {
-      const latestThinking = messages[endOfThinkingRun]
+      const latestThinking = visibleMessages[endOfThinkingRun]
       const prev = next[next.length - 1]
       const isDuplicate =
         prev &&
@@ -623,7 +698,6 @@ function filterMessagesForPresentation(
   }
   return next
 }
-const THEME_STORAGE_KEY = 'agentorchestrator.theme'
 const WORKSPACE_STORAGE_KEY = 'agentorchestrator.workspaceRoot'
 const WORKSPACE_LIST_STORAGE_KEY = 'agentorchestrator.workspaceList'
 const WORKSPACE_SETTINGS_STORAGE_KEY = 'agentorchestrator.workspaceSettings'
@@ -653,22 +727,30 @@ const TOKEN_ESTIMATE_MESSAGE_OVERHEAD = 8
 const TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS = 850
 const TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS = 700
 const APP_STATE_AUTOSAVE_MS = 800
-const DEFAULT_THEME_PRESET_ID = 'default'
-const THEME_PRESETS: ThemePreset[] = [
-  { id: 'default', name: 'default', accent500: '#3b82f6', accent600: '#2563eb', accent700: '#1d4ed8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(30,58,138,0.28)', dark950: '#0a0a0a', dark900: '#171717' },
-  { id: 'obsidian-black', name: 'Obsidian Black', accent500: '#7c3aed', accent600: '#6d28d9', accent700: '#5b21b6', accentText: '#ddd6fe', accentSoft: '#ede9fe', accentSoftDark: 'rgba(124,58,237,0.24)', dark950: '#000000', dark900: '#0a0a0a' },
-  { id: 'dracula', name: 'Dracula', accent500: '#bd93f9', accent600: '#a87ef5', accent700: '#8f62ea', accentText: '#f3e8ff', accentSoft: '#f5f3ff', accentSoftDark: 'rgba(189,147,249,0.25)', dark950: '#191a21', dark900: '#232533' },
-  { id: 'nord', name: 'Nord', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#2e3440', dark900: '#3b4252' },
-  { id: 'solarized-dark', name: 'Solarized Dark', accent500: '#2aa198', accent600: '#268e87', accent700: '#1f7a74', accentText: '#d1fae5', accentSoft: '#dcfce7', accentSoftDark: 'rgba(42,161,152,0.26)', dark950: '#002b36', dark900: '#073642' },
-  { id: 'gruvbox-dark', name: 'Gruvbox Dark', accent500: '#d79921', accent600: '#b57614', accent700: '#9a5f10', accentText: '#fef3c7', accentSoft: '#fffbeb', accentSoftDark: 'rgba(215,153,33,0.26)', dark950: '#1d2021', dark900: '#282828' },
-  { id: 'tokyo-night', name: 'Tokyo Night', accent500: '#7aa2f7', accent600: '#5f88e8', accent700: '#4c74d0', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(122,162,247,0.26)', dark950: '#1a1b26', dark900: '#24283b' },
-  { id: 'catppuccin-mocha', name: 'Catppuccin Mocha', accent500: '#cba6f7', accent600: '#b68cf0', accent700: '#9f73e3', accentText: '#f5e8ff', accentSoft: '#faf5ff', accentSoftDark: 'rgba(203,166,247,0.26)', dark950: '#1e1e2e', dark900: '#313244' },
-  { id: 'github-dark', name: 'GitHub Dark', accent500: '#58a6ff', accent600: '#3b82d6', accent700: '#2f6fb8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(88,166,255,0.26)', dark950: '#0d1117', dark900: '#161b22' },
-  { id: 'monokai', name: 'Monokai', accent500: '#a6e22e', accent600: '#84cc16', accent700: '#65a30d', accentText: '#ecfccb', accentSoft: '#f7fee7', accentSoftDark: 'rgba(166,226,46,0.22)', dark950: '#1f1f1f', dark900: '#272822' },
-  { id: 'one-dark', name: 'One Dark', accent500: '#61afef', accent600: '#3d8fd9', accent700: '#2f75ba', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(97,175,239,0.26)', dark950: '#1e2127', dark900: '#282c34' },
-  { id: 'ayu-mirage', name: 'Ayu Mirage', accent500: '#ffb454', accent600: '#f59e0b', accent700: '#d97706', accentText: '#ffedd5', accentSoft: '#fff7ed', accentSoftDark: 'rgba(255,180,84,0.24)', dark950: '#1f2430', dark900: '#242936' },
-  { id: 'material-ocean', name: 'Material Ocean', accent500: '#82aaff', accent600: '#5d8bef', accent700: '#4a74d1', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(130,170,255,0.26)', dark950: '#0f111a', dark900: '#1a1c25' },
-  { id: 'synthwave-84', name: 'Synthwave 84', accent500: '#ff7edb', accent600: '#ec4899', accent700: '#be185d', accentText: '#fce7f3', accentSoft: '#fdf2f8', accentSoftDark: 'rgba(255,126,219,0.26)', dark950: '#241b2f', dark900: '#2b213a' },
+const DEFAULT_THEME_ID = 'default-dark'
+const THEME_ID_STORAGE_KEY = 'agentorchestrator.themeId'
+const WORKSPACE_THEME_INHERIT = 'application'
+
+const THEMES: StandaloneTheme[] = [
+  { id: 'default-light', name: 'Default Light', mode: 'light', accent500: '#3b82f6', accent600: '#2563eb', accent700: '#1d4ed8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(30,58,138,0.28)', dark950: '#0a0a0a', dark900: '#171717' },
+  { id: 'default-dark', name: 'Default Dark', mode: 'dark', accent500: '#3b82f6', accent600: '#2563eb', accent700: '#1d4ed8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(30,58,138,0.28)', dark950: '#0a0a0a', dark900: '#171717' },
+  { id: 'obsidian-black', name: 'Obsidian Black', mode: 'dark', accent500: '#7c3aed', accent600: '#6d28d9', accent700: '#5b21b6', accentText: '#ddd6fe', accentSoft: '#ede9fe', accentSoftDark: 'rgba(124,58,237,0.24)', dark950: '#000000', dark900: '#0a0a0a' },
+  { id: 'dracula', name: 'Dracula', mode: 'dark', accent500: '#bd93f9', accent600: '#a87ef5', accent700: '#8f62ea', accentText: '#f3e8ff', accentSoft: '#f5f3ff', accentSoftDark: 'rgba(189,147,249,0.25)', dark950: '#191a21', dark900: '#232533' },
+  { id: 'nord-light', name: 'Nord Light', mode: 'light', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#2e3440', dark900: '#3b4252' },
+  { id: 'nord-dark', name: 'Nord Dark', mode: 'dark', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#2e3440', dark900: '#3b4252' },
+  { id: 'solarized-light', name: 'Solarized Light', mode: 'light', accent500: '#2aa198', accent600: '#268e87', accent700: '#1f7a74', accentText: '#d1fae5', accentSoft: '#dcfce7', accentSoftDark: 'rgba(42,161,152,0.26)', dark950: '#002b36', dark900: '#073642' },
+  { id: 'solarized-dark', name: 'Solarized Dark', mode: 'dark', accent500: '#2aa198', accent600: '#268e87', accent700: '#1f7a74', accentText: '#d1fae5', accentSoft: '#dcfce7', accentSoftDark: 'rgba(42,161,152,0.26)', dark950: '#002b36', dark900: '#073642' },
+  { id: 'gruvbox-light', name: 'Gruvbox Light', mode: 'light', accent500: '#d79921', accent600: '#b57614', accent700: '#9a5f10', accentText: '#fef3c7', accentSoft: '#fffbeb', accentSoftDark: 'rgba(215,153,33,0.26)', dark950: '#1d2021', dark900: '#282828' },
+  { id: 'gruvbox-dark', name: 'Gruvbox Dark', mode: 'dark', accent500: '#d79921', accent600: '#b57614', accent700: '#9a5f10', accentText: '#fef3c7', accentSoft: '#fffbeb', accentSoftDark: 'rgba(215,153,33,0.26)', dark950: '#1d2021', dark900: '#282828' },
+  { id: 'tokyo-night-light', name: 'Tokyo Night Light', mode: 'light', accent500: '#7aa2f7', accent600: '#5f88e8', accent700: '#4c74d0', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(122,162,247,0.26)', dark950: '#1a1b26', dark900: '#24283b' },
+  { id: 'tokyo-night-dark', name: 'Tokyo Night Dark', mode: 'dark', accent500: '#7aa2f7', accent600: '#5f88e8', accent700: '#4c74d0', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(122,162,247,0.26)', dark950: '#1a1b26', dark900: '#24283b' },
+  { id: 'catppuccin-mocha', name: 'Catppuccin Mocha', mode: 'dark', accent500: '#cba6f7', accent600: '#b68cf0', accent700: '#9f73e3', accentText: '#f5e8ff', accentSoft: '#faf5ff', accentSoftDark: 'rgba(203,166,247,0.26)', dark950: '#1e1e2e', dark900: '#313244' },
+  { id: 'github-dark', name: 'GitHub Dark', mode: 'dark', accent500: '#58a6ff', accent600: '#3b82d6', accent700: '#2f6fb8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(88,166,255,0.26)', dark950: '#0d1117', dark900: '#161b22' },
+  { id: 'monokai', name: 'Monokai', mode: 'dark', accent500: '#a6e22e', accent600: '#84cc16', accent700: '#65a30d', accentText: '#ecfccb', accentSoft: '#f7fee7', accentSoftDark: 'rgba(166,226,46,0.22)', dark950: '#1f1f1f', dark900: '#272822' },
+  { id: 'one-dark', name: 'One Dark', mode: 'dark', accent500: '#61afef', accent600: '#3d8fd9', accent700: '#2f75ba', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(97,175,239,0.26)', dark950: '#1e2127', dark900: '#282c34' },
+  { id: 'ayu-mirage', name: 'Ayu Mirage', mode: 'dark', accent500: '#ffb454', accent600: '#f59e0b', accent700: '#d97706', accentText: '#ffedd5', accentSoft: '#fff7ed', accentSoftDark: 'rgba(255,180,84,0.24)', dark950: '#1f2430', dark900: '#242936' },
+  { id: 'material-ocean', name: 'Material Ocean', mode: 'dark', accent500: '#82aaff', accent600: '#5d8bef', accent700: '#4a74d1', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(130,170,255,0.26)', dark950: '#0f111a', dark900: '#1a1c25' },
+  { id: 'synthwave-84', name: 'Synthwave 84', mode: 'dark', accent500: '#ff7edb', accent600: '#ec4899', accent700: '#be185d', accentText: '#fce7f3', accentSoft: '#fdf2f8', accentSoftDark: 'rgba(255,126,219,0.26)', dark950: '#241b2f', dark900: '#2b213a' },
 ]
 
 function getNextFontScale(current: number, deltaY: number) {
@@ -777,10 +859,51 @@ function resolveWorkspaceRelativePathFromChatHref(workspaceRoot: string, href: s
   return normalizeWorkspaceRelativePath(decoded)
 }
 
-function getInitialTheme(): Theme {
-  const stored = (globalThis.localStorage?.getItem(THEME_STORAGE_KEY) ?? '').toLowerCase()
-  if (stored === 'light' || stored === 'dark') return stored
-  return 'dark'
+const LEGACY_PRESET_TO_THEME_ID: Record<string, { light: string; dark: string }> = {
+  default: { light: 'default-light', dark: 'default-dark' },
+  'obsidian-black': { light: 'default-light', dark: 'obsidian-black' },
+  dracula: { light: 'default-light', dark: 'dracula' },
+  nord: { light: 'nord-light', dark: 'nord-dark' },
+  'solarized-dark': { light: 'solarized-light', dark: 'solarized-dark' },
+  'gruvbox-dark': { light: 'gruvbox-light', dark: 'gruvbox-dark' },
+  'tokyo-night': { light: 'tokyo-night-light', dark: 'tokyo-night-dark' },
+  'catppuccin-mocha': { light: 'default-light', dark: 'catppuccin-mocha' },
+  'github-dark': { light: 'default-light', dark: 'github-dark' },
+  monokai: { light: 'default-light', dark: 'monokai' },
+  'one-dark': { light: 'default-light', dark: 'one-dark' },
+  'ayu-mirage': { light: 'default-light', dark: 'ayu-mirage' },
+  'material-ocean': { light: 'default-light', dark: 'material-ocean' },
+  'synthwave-84': { light: 'default-light', dark: 'synthwave-84' },
+}
+
+function getInitialThemeId(): string {
+  const stored = globalThis.localStorage?.getItem(THEME_ID_STORAGE_KEY) ?? ''
+  if (THEMES.some((t) => t.id === stored)) return stored
+  const legacyTheme = (globalThis.localStorage?.getItem('agentorchestrator.theme') ?? '').toLowerCase()
+  let legacyPreset: string | null = null
+  try {
+    const app = globalThis.localStorage?.getItem(APP_SETTINGS_STORAGE_KEY)
+    if (app) {
+      const p = JSON.parse(app) as { themePresetId?: string }
+      legacyPreset = p?.themePresetId ?? null
+    }
+  } catch {
+    /* ignore */
+  }
+  const mapping = legacyPreset && LEGACY_PRESET_TO_THEME_ID[legacyPreset]
+  if (mapping) {
+    const id = legacyTheme === 'light' ? mapping.light : mapping.dark
+    if (THEMES.some((t) => t.id === id)) return id
+  }
+  if (legacyPreset && THEMES.some((t) => t.id === legacyPreset)) return legacyPreset
+  if (legacyTheme === 'light') return 'default-light'
+  return DEFAULT_THEME_ID
+}
+
+function normalizeWorkspaceThemeId(value: unknown): string {
+  if (value === WORKSPACE_THEME_INHERIT) return WORKSPACE_THEME_INHERIT
+  if (typeof value !== 'string' || !value.trim()) return WORKSPACE_THEME_INHERIT
+  return THEMES.some((t) => t.id === value) ? value : WORKSPACE_THEME_INHERIT
 }
 
 function getInitialWorkspaceRoot() {
@@ -892,7 +1015,7 @@ function parseHistoryMessages(raw: unknown): ChatMessage[] {
       attachments: attachments && attachments.length > 0 ? attachments : undefined,
     })
   }
-  return next
+  return stripSyntheticAutoContinueMessages(next)
 }
 
 function parseChatHistoryEntries(raw: unknown, fallbackWorkspaceRoot: string): ChatHistoryEntry[] {
@@ -945,7 +1068,7 @@ function getInitialApplicationSettings(): ApplicationSettings {
     if (!raw) {
       return {
         restoreSessionOnStartup: true,
-        themePresetId: DEFAULT_THEME_PRESET_ID,
+        themeId: DEFAULT_THEME_ID,
         responseStyle: 'standard',
         showDebugNotesInTimeline: false,
         showActivityUpdates: false,
@@ -957,10 +1080,10 @@ function getInitialApplicationSettings(): ApplicationSettings {
     return {
       restoreSessionOnStartup:
         typeof parsed?.restoreSessionOnStartup === 'boolean' ? parsed.restoreSessionOnStartup : true,
-      themePresetId:
-        typeof parsed?.themePresetId === 'string' && parsed.themePresetId
-          ? parsed.themePresetId
-          : DEFAULT_THEME_PRESET_ID,
+      themeId: (() => {
+        if (typeof parsed?.themeId === 'string' && THEMES.some((t) => t.id === parsed.themeId)) return parsed.themeId
+        return getInitialThemeId()
+      })(),
       responseStyle:
         parsed?.responseStyle === 'concise' || parsed?.responseStyle === 'standard' || parsed?.responseStyle === 'detailed'
           ? parsed.responseStyle
@@ -973,7 +1096,7 @@ function getInitialApplicationSettings(): ApplicationSettings {
   } catch {
     return {
       restoreSessionOnStartup: true,
-      themePresetId: DEFAULT_THEME_PRESET_ID,
+      themeId: DEFAULT_THEME_ID,
       responseStyle: 'standard',
       showDebugNotesInTimeline: false,
       showActivityUpdates: false,
@@ -1204,7 +1327,7 @@ function formatHistoryOptionLabel(entry: ChatHistoryEntry): string {
 }
 
 function getConversationPrecis(panel: AgentPanelState): string {
-  const firstUser = panel.messages.find((m) => m.role === 'user')
+  const firstUser = stripSyntheticAutoContinueMessages(panel.messages).find((m) => m.role === 'user')
   if (!firstUser?.content?.trim()) return panel.title
   const text = firstUser.content.trim().replace(/\s+/g, ' ')
   const maxLen = 36
@@ -1551,6 +1674,16 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
           value?.sandbox === 'read-only' || value?.sandbox === 'danger-full-access'
             ? value.sandbox
             : 'workspace-write',
+        themeId: (() => {
+          const v = value as Partial<WorkspaceSettings> & { themeMode?: string; themePresetId?: string }
+          if (v?.themeId && THEMES.some((t) => t.id === v.themeId)) return v.themeId
+          const legacyMode = v?.themeMode === 'light' || v?.themeMode === 'dark' ? v.themeMode : 'dark'
+          const legacyPreset = typeof v?.themePresetId === 'string' ? v.themePresetId : null
+          const mapping = legacyPreset && LEGACY_PRESET_TO_THEME_ID[legacyPreset]
+          if (mapping) return legacyMode === 'light' ? mapping.light : mapping.dark
+          if (legacyPreset && THEMES.some((t) => t.id === legacyPreset)) return legacyPreset
+          return WORKSPACE_THEME_INHERIT
+        })(),
       }
     }
     for (const p of list) {
@@ -1560,6 +1693,7 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
           defaultModel: DEFAULT_MODEL,
           permissionMode: 'verify-first',
           sandbox: 'workspace-write',
+          themeId: WORKSPACE_THEME_INHERIT,
         }
       }
     }
@@ -1572,6 +1706,7 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
         defaultModel: DEFAULT_MODEL,
         permissionMode: 'verify-first',
         sandbox: 'workspace-write',
+        themeId: WORKSPACE_THEME_INHERIT,
       }
     }
     return result
@@ -1591,7 +1726,6 @@ function getInitialExplorerPrefsByWorkspace(): Record<string, ExplorerPrefs> {
 export default function App() {
   const api = useMemo(() => window.agentOrchestrator ?? window.fireharness, [])
 
-  const [theme, setTheme] = useState<Theme>(() => getInitialTheme())
   const [workspaceRoot, setWorkspaceRoot] = useState(() => getInitialWorkspaceRoot())
   const [workspaceList, setWorkspaceList] = useState<string[]>(() => getInitialWorkspaceList())
   const [workspaceSettingsByPath, setWorkspaceSettingsByPath] = useState<Record<string, WorkspaceSettings>>(() =>
@@ -1599,16 +1733,18 @@ export default function App() {
   )
   const [showWorkspaceModal, setShowWorkspaceModal] = useState(false)
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false)
+  const [workspacePickerPrompt, setWorkspacePickerPrompt] = useState<string | null>(null)
   const [workspaceModalMode, setWorkspaceModalMode] = useState<'new' | 'edit'>('edit')
   const [workspaceForm, setWorkspaceForm] = useState<WorkspaceSettings>({
     path: getInitialWorkspaceRoot(),
     defaultModel: DEFAULT_MODEL,
     permissionMode: 'verify-first',
     sandbox: 'workspace-write',
+    themeId: WORKSPACE_THEME_INHERIT,
   })
   const [showThemeModal, setShowThemeModal] = useState(false)
   const [showAppSettingsModal, setShowAppSettingsModal] = useState(false)
-  const [appSettingsView, setAppSettingsView] = useState<'models' | 'preferences' | 'connectivity' | 'responses' | 'diagnostics'>('connectivity')
+  const [appSettingsView, setAppSettingsView] = useState<AppSettingsView>('connectivity')
   const [applicationSettings, setApplicationSettings] = useState<ApplicationSettings>(() => getInitialApplicationSettings())
   const [diagnosticsInfo, setDiagnosticsInfo] = useState<{
     userDataPath: string
@@ -1623,6 +1759,8 @@ export default function App() {
   const [providerAuthLoadingByName, setProviderAuthLoadingByName] = useState<Record<string, boolean>>({})
   const [providerAuthActionByName, setProviderAuthActionByName] = useState<Record<string, string | null>>({})
   const [modelConfig, setModelConfig] = useState<ModelConfig>(() => getInitialModelConfig())
+  const [modelCatalogRefreshStatus, setModelCatalogRefreshStatus] = useState<ModelCatalogRefreshStatus | null>(null)
+  const [modelCatalogRefreshPending, setModelCatalogRefreshPending] = useState(false)
   const [providerRegistry, setProviderRegistry] = useState<ProviderRegistry>(() => getInitialProviderRegistry())
   const [editingModel, setEditingModel] = useState<ModelInterface | null>(null)
   const [showProviderSetupModal, setShowProviderSetupModal] = useState(false)
@@ -1735,28 +1873,41 @@ export default function App() {
       ),
     [panels, panelActivityById, applicationSettings.responseStyle],
   )
-  const activeThemePreset = useMemo(
-    () => THEME_PRESETS.find((preset) => preset.id === applicationSettings.themePresetId) ?? THEME_PRESETS[0],
-    [applicationSettings.themePresetId],
+  const activeWorkspaceSettings = useMemo(
+    () => workspaceSettingsByPath[workspaceRoot],
+    [workspaceRoot, workspaceSettingsByPath],
   )
+  const effectiveThemeId = useMemo(() => {
+    const wsThemeId = activeWorkspaceSettings?.themeId
+    if (wsThemeId && wsThemeId !== WORKSPACE_THEME_INHERIT) return wsThemeId
+    return applicationSettings.themeId
+  }, [activeWorkspaceSettings, applicationSettings.themeId])
+  const activeTheme = useMemo(
+    () => THEMES.find((t) => t.id === effectiveThemeId) ?? THEMES.find((t) => t.id === DEFAULT_THEME_ID)!,
+    [effectiveThemeId],
+  )
+  const effectiveTheme: Theme = activeTheme.mode
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark')
-    localStorage.setItem(THEME_STORAGE_KEY, theme)
-    void api.setWindowTheme?.(theme).catch(() => {})
-  }, [api, theme])
+    localStorage.setItem(THEME_ID_STORAGE_KEY, applicationSettings.themeId)
+  }, [applicationSettings.themeId])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
+    void api.setWindowTheme?.(effectiveTheme).catch(() => {})
+  }, [api, effectiveTheme])
 
   useEffect(() => {
     const root = document.documentElement
-    root.style.setProperty('--theme-accent-500', activeThemePreset.accent500)
-    root.style.setProperty('--theme-accent-600', activeThemePreset.accent600)
-    root.style.setProperty('--theme-accent-700', activeThemePreset.accent700)
-    root.style.setProperty('--theme-accent-text', activeThemePreset.accentText)
-    root.style.setProperty('--theme-accent-soft', activeThemePreset.accentSoft)
-    root.style.setProperty('--theme-accent-soft-dark', activeThemePreset.accentSoftDark)
-    root.style.setProperty('--theme-dark-950', activeThemePreset.dark950)
-    root.style.setProperty('--theme-dark-900', activeThemePreset.dark900)
-  }, [activeThemePreset])
+    root.style.setProperty('--theme-accent-500', activeTheme.accent500)
+    root.style.setProperty('--theme-accent-600', activeTheme.accent600)
+    root.style.setProperty('--theme-accent-700', activeTheme.accent700)
+    root.style.setProperty('--theme-accent-text', activeTheme.accentText)
+    root.style.setProperty('--theme-accent-soft', activeTheme.accentSoft)
+    root.style.setProperty('--theme-accent-soft-dark', activeTheme.accentSoftDark)
+    root.style.setProperty('--theme-dark-950', activeTheme.dark950)
+    root.style.setProperty('--theme-dark-900', activeTheme.dark900)
+  }, [activeTheme])
 
   useEffect(() => {
     workspaceRootRef.current = workspaceRoot
@@ -1977,35 +2128,9 @@ export default function App() {
     modelsCatalogFetchedRef.current = true
     void (async () => {
       try {
-        const { codex, claude, gemini } = await api.getAvailableModels()
-        const catalogCodexIds = new Set(codex.map((m) => m.id))
-        const catalogClaudeIds = new Set(claude.map((m) => m.id))
-        const catalogGeminiIds = new Set(gemini.map((m) => m.id))
-        if (codex.length === 0 && claude.length === 0 && gemini.length === 0) return
-        setModelConfig((prev) => {
-          const kept = prev.interfaces.filter(
-            (m) => {
-              if (m.provider === 'codex') return catalogCodexIds.size === 0 || catalogCodexIds.has(m.id)
-              if (m.provider === 'claude') return catalogClaudeIds.size === 0 || catalogClaudeIds.has(m.id)
-              if (m.provider === 'gemini') return catalogGeminiIds.size === 0 || catalogGeminiIds.has(m.id)
-              return true
-            },
-          )
-          const existingIds = new Set(kept.map((m) => m.id))
-          const toAdd: ModelInterface[] = [
-            ...codex
-              .filter((m) => !existingIds.has(m.id))
-              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'codex' as ModelProvider, enabled: true })),
-            ...claude
-              .filter((m) => !existingIds.has(m.id))
-              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'claude' as ModelProvider, enabled: true })),
-            ...gemini
-              .filter((m) => !existingIds.has(m.id))
-              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'gemini' as ModelProvider, enabled: true })),
-          ]
-          for (const m of toAdd) existingIds.add(m.id)
-          return { interfaces: [...kept, ...toAdd] }
-        })
+        const available = await api.getAvailableModels()
+        if (available.codex.length === 0 && available.claude.length === 0 && available.gemini.length === 0) return
+        setModelConfig((prev) => syncModelConfigWithCatalog(prev, available))
       } catch {
         // ignore - use built-in models only
       }
@@ -2250,7 +2375,7 @@ export default function App() {
   }, [workspaceRoot, workspaceSettingsByPath, modelConfig])
 
   useEffect(() => {
-    const t = setInterval(() => setActivityClock(Date.now()), 1500)
+    const t = setInterval(() => setActivityClock(Date.now()), 400)
     return () => clearInterval(t)
   }, [])
 
@@ -2390,19 +2515,40 @@ export default function App() {
     setFocusedEditorId(nextFocusedEditor)
   }
 
-  async function applyWorkspaceRoot(nextRoot: string, options?: { showFailureAlert?: boolean; rebindPanels?: boolean }) {
+  function openWorkspacePicker(prompt?: string | null) {
+    const nextPrompt = typeof prompt === 'string' && prompt.trim() ? prompt.trim() : null
+    setWorkspacePickerPrompt(nextPrompt)
+    setShowWorkspacePicker(true)
+  }
+
+  function closeWorkspacePicker() {
+    setShowWorkspacePicker(false)
+    setWorkspacePickerPrompt(null)
+  }
+
+  async function applyWorkspaceRoot(
+    nextRoot: string,
+    options?: {
+      showFailureAlert?: boolean
+      rebindPanels?: boolean
+      onFailure?: (failure: WorkspaceApplyFailure) => void
+    },
+  ) {
     const targetRoot = nextRoot.trim()
     if (!targetRoot) return null
     const showFailureAlert = options?.showFailureAlert ?? true
     const rebindPanels = options?.rebindPanels ?? false
+    const onFailure = options?.onFailure
 
     let lockResult: WorkspaceLockAcquireResult
     try {
       lockResult = await api.claimWorkspace(targetRoot)
     } catch (err) {
+      const message = formatError(err)
       if (showFailureAlert) {
-        alert(`Cannot open workspace:\n${targetRoot}\n\n${formatError(err)}`)
+        alert(`Cannot open workspace:\n${targetRoot}\n\n${message}`)
       }
+      onFailure?.({ kind: 'request-error', message })
       return null
     }
 
@@ -2410,6 +2556,7 @@ export default function App() {
       if (showFailureAlert) {
         alert(formatWorkspaceClaimFailure(targetRoot, lockResult))
       }
+      onFailure?.({ kind: 'lock-denied', result: lockResult })
       return null
     }
 
@@ -2447,11 +2594,12 @@ export default function App() {
         const openedRoot = await applyWorkspaceRoot(next, { showFailureAlert: true, rebindPanels: false })
         if (!openedRoot) return
         applyWorkspaceSnapshot(openedRoot)
-        if (source === 'picker') setShowWorkspacePicker(false)
+        if (source === 'picker') closeWorkspacePicker()
         if (source === 'workspace-create') setShowWorkspaceModal(false)
       })()
       return
     }
+    if (source === 'picker') closeWorkspacePicker()
     setPendingWorkspaceSwitch({ targetRoot: next, source })
   }
 
@@ -2479,7 +2627,7 @@ export default function App() {
     setSelectedWorkspaceFile(null)
     setExpandedDirectories({})
     applyWorkspaceSnapshot(openedRoot)
-    if (pending.source === 'picker') setShowWorkspacePicker(false)
+    if (pending.source === 'picker') closeWorkspacePicker()
     if (pending.source === 'workspace-create') setShowWorkspaceModal(false)
   }
 
@@ -2491,8 +2639,21 @@ export default function App() {
       const preferredRoot = workspaceRootRef.current?.trim()
       if (!preferredRoot) return
 
-      const openedPreferred = await applyWorkspaceRoot(preferredRoot, { showFailureAlert: false, rebindPanels: false })
+      const failureRef = { value: null as WorkspaceApplyFailure | null }
+      const openedPreferred = await applyWorkspaceRoot(preferredRoot, {
+        showFailureAlert: false,
+        rebindPanels: false,
+        onFailure: (f) => {
+          failureRef.value = f
+        },
+      })
       if (disposed || openedPreferred) return
+      const failure = failureRef.value
+      if (failure?.kind === 'lock-denied' && !failure.result.ok && failure.result.reason === 'in-use') {
+        setWorkspaceRoot('')
+        openWorkspacePicker(STARTUP_LOCKED_WORKSPACE_PROMPT)
+        return
+      }
 
       for (const candidate of workspaceListRef.current) {
         const next = candidate.trim()
@@ -2543,7 +2704,8 @@ export default function App() {
   )
 
   function upsertPanelToHistory(panel: AgentPanelState) {
-    const hasConversation = panel.messages.some(
+    const sanitizedMessages = stripSyntheticAutoContinueMessages(panel.messages)
+    const hasConversation = sanitizedMessages.some(
       (m) => m.role === 'user' || (m.role === 'assistant' && m.content.trim() !== STARTUP_READY_MESSAGE),
     )
     if (!hasConversation) return
@@ -2558,7 +2720,7 @@ export default function App() {
       permissionMode: panel.permissionMode,
       sandbox: panel.sandbox,
       fontScale: panel.fontScale,
-      messages: cloneChatMessages(panel.messages),
+      messages: cloneChatMessages(sanitizedMessages),
     }
     setChatHistory((prev) => [entry, ...prev.filter((item) => item.id !== entryId)].slice(0, MAX_CHAT_HISTORY_ENTRIES))
   }
@@ -2577,7 +2739,7 @@ export default function App() {
       return
     }
     const panelId = newId()
-    const restoredMessages = cloneChatMessages(entry.messages)
+    const restoredMessages = cloneChatMessages(stripSyntheticAutoContinueMessages(entry.messages))
     setPanels((prev) => {
       if (prev.length >= MAX_PANELS) return prev
       return [
@@ -2608,7 +2770,8 @@ export default function App() {
   }
 
   function archivePanelToHistory(panel: AgentPanelState) {
-    const hasConversation = panel.messages.some((m) => m.role === 'user' || m.role === 'assistant')
+    const sanitizedMessages = stripSyntheticAutoContinueMessages(panel.messages)
+    const hasConversation = sanitizedMessages.some((m) => m.role === 'user' || m.role === 'assistant')
     if (!hasConversation) return
     const title = getConversationPrecis(panel) || panel.title || 'Untitled chat'
     const entry: ChatHistoryEntry = {
@@ -2620,7 +2783,7 @@ export default function App() {
       permissionMode: panel.permissionMode,
       sandbox: panel.sandbox,
       fontScale: panel.fontScale,
-      messages: cloneChatMessages(panel.messages),
+      messages: cloneChatMessages(sanitizedMessages),
     }
     setChatHistory((prev) => [entry, ...prev].slice(0, MAX_CHAT_HISTORY_ENTRIES))
   }
@@ -2753,6 +2916,7 @@ export default function App() {
         defaultModel: DEFAULT_MODEL,
         permissionMode: 'verify-first',
         sandbox: 'workspace-write',
+        themeId: WORKSPACE_THEME_INHERIT,
       } as WorkspaceSettings)
 
     if (mode === 'new') {
@@ -2761,6 +2925,7 @@ export default function App() {
         defaultModel: current.defaultModel ?? DEFAULT_MODEL,
         permissionMode: current.permissionMode ?? 'verify-first',
         sandbox: current.sandbox ?? 'workspace-write',
+        themeId: normalizeWorkspaceThemeId(current.themeId ?? (current as any).themePresetId),
       } satisfies WorkspaceSettings
     }
 
@@ -2769,6 +2934,7 @@ export default function App() {
       defaultModel: current.defaultModel ?? DEFAULT_MODEL,
       permissionMode: current.permissionMode ?? 'verify-first',
       sandbox: current.sandbox ?? 'workspace-write',
+      themeId: normalizeWorkspaceThemeId(current.themeId ?? (current as any).themePresetId),
     } satisfies WorkspaceSettings
   }
 
@@ -2780,6 +2946,7 @@ export default function App() {
       defaultModel: form.defaultModel.trim() || DEFAULT_MODEL,
       permissionMode,
       sandbox,
+      themeId: normalizeWorkspaceThemeId((form as any).themeId ?? (form as any).themePresetId),
     }
   }
 
@@ -2790,7 +2957,8 @@ export default function App() {
       left.path === right.path &&
       left.defaultModel === right.defaultModel &&
       left.permissionMode === right.permissionMode &&
-      left.sandbox === right.sandbox
+      left.sandbox === right.sandbox &&
+      left.themeId === right.themeId
     )
   }
 
@@ -2887,12 +3055,20 @@ export default function App() {
 
   function queueDelta(agentWindowId: string, delta: string) {
     deltaBuffers.current.set(agentWindowId, (deltaBuffers.current.get(agentWindowId) ?? '') + delta)
+    // Flush immediately on newline for line-by-line streaming feel.
+    if (delta.includes('\n')) {
+      const t = flushTimers.current.get(agentWindowId)
+      if (t) clearTimeout(t)
+      flushTimers.current.delete(agentWindowId)
+      flushWindowDelta(agentWindowId)
+      return
+    }
     if (flushTimers.current.has(agentWindowId)) return
-    // Quick win: buffer high-frequency deltas, flush ~30fps.
+    // Shorter debounce (16ms) for smoother word-by-word feel.
     const t = setTimeout(() => {
       flushTimers.current.delete(agentWindowId)
       flushWindowDelta(agentWindowId)
-    }, 33)
+    }, 16)
     flushTimers.current.set(agentWindowId, t)
   }
 
@@ -3012,9 +3188,7 @@ export default function App() {
               const count = autoContinueCountRef.current.get(agentWindowId) ?? 0
               if (count < MAX_AUTO_CONTINUE && w.pendingInputs.length === 0) {
                 autoContinueCountRef.current.set(agentWindowId, count + 1)
-                const autoPrompt = 'Please continue from where you left off. Complete the task fully.'
-                pendingInputs = [...w.pendingInputs, autoPrompt]
-                nextMessages = [...nextMessages, { id: newId(), role: 'user', content: autoPrompt, format: 'text' as const }]
+                pendingInputs = [...w.pendingInputs, AUTO_CONTINUE_PROMPT]
               }
             } else {
               autoContinueCountRef.current.delete(agentWindowId)
@@ -3069,7 +3243,7 @@ export default function App() {
         return
       }
       if (action === 'openWorkspacePicker') {
-        setShowWorkspacePicker(true)
+        openWorkspacePicker()
         return
       }
       if (action === 'openFile') {
@@ -3078,7 +3252,7 @@ export default function App() {
       }
       if (action === 'openWorkspace' && typeof actionPath === 'string') {
         requestWorkspaceSwitch(actionPath, 'menu')
-        setShowWorkspacePicker(false)
+        closeWorkspacePicker()
         return
       }
       if (action === 'closeFocused') {
@@ -3103,7 +3277,7 @@ export default function App() {
         setShowAppSettingsModal(true)
         return
       }
-      if (action === 'openAppSettings') {
+      if (action === 'openAppSettings' || action === 'openConnectivity' || action === 'openSettings') {
         setAppSettingsView('connectivity')
         setShowAppSettingsModal(true)
         return
@@ -3118,8 +3292,13 @@ export default function App() {
         setShowAppSettingsModal(true)
         return
       }
-      if (action === 'openSettings') {
-        setAppSettingsView('connectivity')
+      if (action === 'openAgents') {
+        setAppSettingsView('agents')
+        setShowAppSettingsModal(true)
+        return
+      }
+      if (action === 'openDiagnostics') {
+        setAppSettingsView('diagnostics')
         setShowAppSettingsModal(true)
         return
       }
@@ -3708,11 +3887,7 @@ export default function App() {
     const query = input.trim()
     if (!query) return
     lastFindInPageQueryRef.current = query
-    const findInWindow = (window as Window & { find?: (...args: unknown[]) => boolean }).find
-    const found = findInWindow?.(query, false, false, true, false, false, false) ?? false
-    if (!found) {
-      alert(`No matches found for "${query}".`)
-    }
+    void api.findInPage?.(query)
   }
 
   function collectWorkspaceFilePaths(nodes: WorkspaceTreeNode[]): string[] {
@@ -4311,8 +4486,8 @@ export default function App() {
         ),
       )
       appendPanelDebug(winId, 'turn/start', 'Starting turn...')
-      if (provider !== 'codex' && imagePaths.length > 0) {
-        throw new Error('Image attachments are currently supported for Codex panels only.')
+      if (provider !== 'codex' && provider !== 'gemini' && imagePaths.length > 0) {
+        throw new Error('Image attachments are supported for Codex and Gemini panels only.')
       }
       await withTimeout(api.sendMessage(winId, outgoingText, imagePaths), TURN_START_TIMEOUT_MS, 'turn/start')
       appendPanelDebug(winId, 'turn/start', 'Turn started')
@@ -4829,6 +5004,26 @@ export default function App() {
               </div>
             )}
             <div className="space-y-1.5">
+              <label className="text-neutral-600 dark:text-neutral-400">Theme</label>
+              <select
+                className={`w-full ${UI_SELECT_CLASS}`}
+                value={workspaceForm.themeId}
+                onChange={(e) =>
+                  setWorkspaceForm((prev) => ({
+                    ...prev,
+                    themeId: normalizeWorkspaceThemeId(e.target.value),
+                  }))
+                }
+              >
+                <option value={WORKSPACE_THEME_INHERIT}>Use application setting</option>
+                {THEMES.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
               <span className="text-neutral-600 dark:text-neutral-400">Timeline controls</span>
               <div className="text-xs text-neutral-500 dark:text-neutral-400">
                 Debug and trace visibility is now global.
@@ -5235,25 +5430,23 @@ export default function App() {
                 </svg>
               </button>
             </div>
-            <div className="p-4 space-y-3 text-sm">
-              <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="theme"
-                  checked={theme === 'light'}
-                  onChange={() => setTheme('light')}
-                />
-                <span>Light</span>
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="theme"
-                  checked={theme === 'dark'}
-                  onChange={() => setTheme('dark')}
-                />
-                <span>Dark</span>
-              </label>
+            <div className="p-4 space-y-2 text-sm max-h-72 overflow-y-auto">
+              {THEMES.map((t) => (
+                <label key={t.id} className="flex items-center gap-2 cursor-pointer hover:bg-neutral-100 dark:hover:bg-neutral-800/50 rounded px-2 py-1 -mx-2 -my-0.5">
+                  <input
+                    type="radio"
+                    name="theme"
+                    checked={applicationSettings.themeId === t.id}
+                    onChange={() =>
+                      setApplicationSettings((prev) => ({
+                        ...prev,
+                        themeId: t.id,
+                      }))
+                    }
+                  />
+                  <span>{t.name}</span>
+                </label>
+              ))}
             </div>
             <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end">
               <button
@@ -5284,7 +5477,7 @@ export default function App() {
               </button>
             </div>
             <div className="px-4 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-2 shrink-0 flex-wrap">
-              {(['models', 'preferences', 'connectivity', 'responses', 'diagnostics'] as const).map((view) => (
+              {APP_SETTINGS_VIEWS.map((view) => (
                 <button
                   key={view}
                   type="button"
@@ -5295,10 +5488,10 @@ export default function App() {
                   }`}
                   onClick={() => setAppSettingsView(view)}
                 >
+                  {view === 'connectivity' && 'CLI Connectivity'}
                   {view === 'models' && 'Models'}
                   {view === 'preferences' && 'Preferences'}
-                  {view === 'connectivity' && 'CLI Connectivity'}
-                  {view === 'responses' && 'Responses'}
+                  {view === 'agents' && 'Agents'}
                   {view === 'diagnostics' && 'Diagnostics'}
                 </button>
               ))}
@@ -5315,41 +5508,38 @@ export default function App() {
                     type="button"
                     className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
                     onClick={async () => {
+                      setModelCatalogRefreshPending(true)
+                      setModelCatalogRefreshStatus(null)
                       try {
-                        const { codex, claude, gemini } = await api.getAvailableModels()
-                        const catalogCodexIds = new Set(codex.map((m) => m.id))
-                        const catalogClaudeIds = new Set(claude.map((m) => m.id))
-                        const catalogGeminiIds = new Set(gemini.map((m) => m.id))
-                        if (codex.length === 0 && claude.length === 0 && gemini.length === 0) return
-                        setModelConfig((prev) => {
-                          const kept = prev.interfaces.filter(
-                            (m) => {
-                              if (m.provider === 'codex') return catalogCodexIds.size === 0 || catalogCodexIds.has(m.id)
-                              if (m.provider === 'claude') return catalogClaudeIds.size === 0 || catalogClaudeIds.has(m.id)
-                              if (m.provider === 'gemini') return catalogGeminiIds.size === 0 || catalogGeminiIds.has(m.id)
-                              return true
-                            },
-                          )
-                          const existingIds = new Set(kept.map((m) => m.id))
-                          const toAdd: ModelInterface[] = [
-                            ...codex
-                              .filter((m) => !existingIds.has(m.id))
-                              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'codex' as ModelProvider, enabled: true })),
-                            ...claude
-                              .filter((m) => !existingIds.has(m.id))
-                              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'claude' as ModelProvider, enabled: true })),
-                            ...gemini
-                              .filter((m) => !existingIds.has(m.id))
-                              .map((m) => ({ id: m.id, displayName: m.displayName, provider: 'gemini' as ModelProvider, enabled: true })),
-                          ]
-                          return { interfaces: [...kept, ...toAdd] }
-                        })
-                      } catch { /* ignore */ }
+                        const available = await api.getAvailableModels()
+                        if (available.codex.length === 0 && available.claude.length === 0 && available.gemini.length === 0) {
+                          setModelCatalogRefreshStatus({ kind: 'error', message: 'Catalog refresh failed: no models were returned.' })
+                          return
+                        }
+                        setModelConfig((prev) => syncModelConfigWithCatalog(prev, available))
+                        setModelCatalogRefreshStatus({ kind: 'success', message: 'Models refreshed from catalog.' })
+                      } catch (err) {
+                        setModelCatalogRefreshStatus({ kind: 'error', message: `Catalog refresh failed: ${formatError(err)}` })
+                      } finally {
+                        setModelCatalogRefreshPending(false)
+                      }
                     }}
+                    disabled={modelCatalogRefreshPending}
                   >
-                    Refresh models from catalog
+                    {modelCatalogRefreshPending ? 'Refreshing models...' : 'Refresh models from catalog'}
                   </button>
                   <span className="text-xs text-neutral-500 dark:text-neutral-400">Fetches from barnaby.build</span>
+                  {modelCatalogRefreshStatus && (
+                    <span
+                      className={`text-xs ${
+                        modelCatalogRefreshStatus.kind === 'error'
+                          ? 'text-red-600 dark:text-red-400'
+                          : 'text-emerald-700 dark:text-emerald-400'
+                      }`}
+                    >
+                      {modelCatalogRefreshStatus.message}
+                    </span>
+                  )}
                 </div>
               )}
               {editingModel ? (
@@ -5489,53 +5679,28 @@ export default function App() {
 
               <section className="space-y-3">
                 <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Appearance</div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-2">
-                    <div className="text-xs text-neutral-600 dark:text-neutral-400">Theme mode</div>
-                    <div className="flex items-center gap-4">
-                      <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
-                        <input
-                          type="radio"
-                          name="app-theme-mode"
-                          checked={theme === 'dark'}
-                          onChange={() => setTheme('dark')}
-                        />
-                        Black
-                      </label>
-                      <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
-                        <input
-                          type="radio"
-                          name="app-theme-mode"
-                          checked={theme === 'light'}
-                          onChange={() => setTheme('light')}
-                        />
-                        Light
-                      </label>
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3">
-                    <div className="text-xs text-neutral-600 dark:text-neutral-400 mb-2">Theme preset</div>
-                    <div className="grid grid-cols-1 gap-2">
-                      {THEME_PRESETS.map((preset) => (
-                        <button
-                          key={preset.id}
-                          type="button"
-                          onClick={() =>
-                            setApplicationSettings((prev) => ({
-                              ...prev,
-                              themePresetId: preset.id,
-                            }))
-                          }
-                          className={`px-3 py-2 rounded-md border text-left text-sm ${
-                            applicationSettings.themePresetId === preset.id
-                              ? 'border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
-                              : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-                          }`}
-                        >
-                          <span>{preset.name}</span>
-                        </button>
-                      ))}
-                    </div>
+                <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3">
+                  <div className="text-xs text-neutral-600 dark:text-neutral-400 mb-2">Theme</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto">
+                    {THEMES.map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() =>
+                          setApplicationSettings((prev) => ({
+                            ...prev,
+                            themeId: t.id,
+                          }))
+                        }
+                        className={`px-3 py-2 rounded-md border text-left text-sm ${
+                          applicationSettings.themeId === t.id
+                            ? 'border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
+                            : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                        }`}
+                      >
+                        <span>{t.name}</span>
+                      </button>
+                    ))}
                   </div>
                 </div>
               </section>
@@ -5768,10 +5933,10 @@ export default function App() {
                 </>
               )}
 
-              {appSettingsView === 'responses' && (
+              {appSettingsView === 'agents' && (
                 <>
               <section className="space-y-3">
-                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Response style</div>
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Agents</div>
                 <div className="space-y-2 text-sm text-neutral-700 dark:text-neutral-300">
                   <label className="flex items-start gap-2">
                     <input
@@ -6121,7 +6286,7 @@ export default function App() {
               <div className="font-medium">Open workspace</div>
               <button
                 className={UI_CLOSE_ICON_BUTTON_CLASS}
-                onClick={() => setShowWorkspacePicker(false)}
+                onClick={closeWorkspacePicker}
                 title="Close"
               >
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
@@ -6131,6 +6296,11 @@ export default function App() {
               </button>
             </div>
             <div className="p-4 max-h-[60vh] overflow-auto">
+              {workspacePickerPrompt && (
+                <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700/60 dark:bg-amber-900/20 dark:text-amber-100">
+                  {workspacePickerPrompt}
+                </div>
+              )}
               <div className="space-y-1">
                 {workspaceList.map((p) => (
                   <button
@@ -6143,7 +6313,6 @@ export default function App() {
                     }`}
                     onClick={() => {
                       requestWorkspaceSwitch(p, 'picker')
-                      setShowWorkspacePicker(false)
                     }}
                   >
                     {p}
@@ -6164,13 +6333,13 @@ export default function App() {
                       defaultModel: DEFAULT_MODEL,
                       permissionMode: 'verify-first',
                       sandbox: 'workspace-write',
+                      themeId: WORKSPACE_THEME_INHERIT,
                     },
                   }))
                   requestWorkspaceSwitch(selected, 'picker')
                   try {
                     await api.writeWorkspaceConfig?.(selected)
                   } catch {}
-                  setShowWorkspacePicker(false)
                 }}
               >
                 + Select folder...
@@ -6283,6 +6452,26 @@ export default function App() {
                   </select>
                 </div>
               )}
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <span className="text-neutral-600 dark:text-neutral-400">Theme</span>
+                <select
+                  className={UI_SELECT_CLASS}
+                  value={workspaceForm.themeId}
+                  onChange={(e) =>
+                    setWorkspaceForm((prev) => ({
+                      ...prev,
+                      themeId: normalizeWorkspaceThemeId(e.target.value),
+                    }))
+                  }
+                >
+                  <option value={WORKSPACE_THEME_INHERIT}>Use application setting</option>
+                  {THEMES.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="grid grid-cols-[140px_1fr] gap-2">
                 <span className="text-neutral-600 dark:text-neutral-400">Timeline controls</span>
                 <div className="col-start-2 text-xs text-neutral-500 dark:text-neutral-400">
@@ -6458,35 +6647,76 @@ export default function App() {
               </div>
             </div>
           )}
-          {timelineUnits.map((unit) => {
-            if (unit.kind === 'activity') {
-              const isReasoningActivity = unit.activityKind === 'reasoning'
-              const isOperationTrace = unit.activityKind === 'operation'
-              if (isOperationTrace && !showOperationTrace) return null
-              if (isReasoningActivity && !showReasoningUpdates) return null
-              if (!isReasoningActivity && !isOperationTrace && !showActivityUpdates) return null
+          {(() => {
+            type Row = { type: 'single'; unit: TimelineUnit } | { type: 'operationBatch'; units: TimelineUnit[] }
+            const rows: Row[] = []
+            let i = 0
+            while (i < timelineUnits.length) {
+              const unit = timelineUnits[i]
+              const isOp = unit.kind === 'activity' && unit.activityKind === 'operation'
+              if (isOp && showOperationTrace) {
+                const batch: TimelineUnit[] = []
+                while (i < timelineUnits.length && timelineUnits[i].kind === 'activity' && timelineUnits[i].activityKind === 'operation') {
+                  batch.push(timelineUnits[i])
+                  i += 1
+                }
+                rows.push({ type: 'operationBatch', units: batch })
+                continue
+              }
+              rows.push({ type: 'single', unit })
+              i += 1
+            }
+            return rows.map((row) => {
+              if (row.type === 'operationBatch') {
+                return (
+                  <div key={`op-batch-${row.units.map((u) => u.id).join('-')}`} className="w-full space-y-0.5">
+                    {row.units.map((unit) => {
+                      const ageMs = Math.max(0, activityClock - unit.updatedAt)
+                      const fadeProgress = Math.min(1, Math.max(0, (ageMs - OPERATION_TRACE_VISIBLE_MS) / OPERATION_TRACE_FADE_MS))
+                      const traceText = unit.body.replace(/\s*\n+\s*/g, ' | ').trim()
+                      const fadedOpacity = Math.max(OPERATION_TRACE_MIN_OPACITY, 1 - fadeProgress)
+                      return (
+                        <div key={unit.id} className="px-1">
+                          <div
+                            className="rounded px-2 py-0.5 text-[11px] leading-4 text-neutral-500 dark:text-neutral-400 transition-opacity duration-300"
+                            style={{
+                              opacity: fadedOpacity,
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                            }}
+                            title={unit.body}
+                          >
+                            {traceText}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              }
+              const unit = row.unit
+              if (unit.kind === 'activity') {
+                const isReasoningActivity = unit.activityKind === 'reasoning'
+                const isOperationTrace = unit.activityKind === 'operation'
+                if (isOperationTrace) return null
+                if (isReasoningActivity && !showReasoningUpdates) return null
+                if (!isReasoningActivity && !showActivityUpdates) return null
               const isOpen = timelineOpenByUnitId[unit.id] ?? unit.defaultOpen
-              const activityCardClass = isOperationTrace
-                ? 'group rounded-xl border border-violet-200 bg-violet-50/70 dark:border-violet-900/60 dark:bg-violet-950/25'
-                : 'group rounded-xl border border-amber-200 bg-amber-50/75 dark:border-amber-900/60 dark:bg-amber-950/20'
-              const activitySummaryClass = isOperationTrace
-                ? 'list-none cursor-pointer px-3 py-1.5 text-[11px] text-violet-900 dark:text-violet-200 flex items-center justify-between'
-                : 'list-none cursor-pointer px-3 py-1.5 text-[11px] text-amber-800 dark:text-amber-200 flex items-center justify-between'
-              const activityBodyClass = isOperationTrace
-                ? 'border-t border-violet-200 dark:border-violet-900/60 px-3 py-2 text-[12px] leading-5 text-violet-900 dark:text-violet-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere]'
-                : 'border-t border-amber-200 dark:border-amber-900/60 px-3 py-2 text-[12px] leading-5 text-amber-900 dark:text-amber-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere]'
+              const activitySummary = unit.title || unit.body.trim().split(/\r?\n/)[0]?.slice(0, 80) || 'Activity'
               return (
-                <div key={unit.id} className="w-full">
+                <div key={unit.id} className="w-full py-1">
                   <details
                     open={isOpen}
                     onToggle={(e) => {
                       const next = e.currentTarget.open
                       setTimelineOpenByUnitId((prev) => (prev[unit.id] === next ? prev : { ...prev, [unit.id]: next }))
                     }}
-                    className={activityCardClass}
+                    className="group"
                   >
-                    <summary className={activitySummaryClass}>
-                      <span>{unit.title || (isOperationTrace ? 'Operation trace' : 'Activity')}</span>
+                    <summary className="list-none cursor-pointer py-0.5 text-[10.5px] text-neutral-400 dark:text-neutral-500 flex items-center justify-between gap-2">
+                      <span>{activitySummary}</span>
                       <svg
                         width="12"
                         height="12"
@@ -6498,7 +6728,7 @@ export default function App() {
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                     </summary>
-                    <div className={activityBodyClass}>
+                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5 text-neutral-500 dark:text-neutral-400">
                       {unit.body}
                     </div>
                   </details>
@@ -6519,21 +6749,28 @@ export default function App() {
             let codeBlockIndex = 0
             const shouldCollapseThinking = unit.kind === 'thinking'
             const thinkingOpen = timelineOpenByUnitId[unit.id] ?? unit.defaultOpen
+            const thinkingInProgress = unit.status === 'in_progress'
+            const thinkingSummary = m.content.trim().split(/\r?\n/)[0]?.trim().slice(0, 80) || 'Progress update'
             return (
             <div key={m.id} className="w-full">
               <div
                 className={[
-                  'w-full rounded-2xl px-3.5 py-2.5 border shadow-sm',
-                  m.role === 'user'
-                    ? 'bg-blue-50/90 border-blue-200 text-blue-950 dark:bg-blue-950/40 dark:border-blue-900 dark:text-blue-100'
-                    : 'bg-white border-neutral-200/90 text-neutral-900 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100',
-                  m.role === 'system'
-                    ? 'bg-neutral-50 border-neutral-200 text-neutral-700 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-300'
-                    : '',
-                  isDebugSystemNote
-                    ? 'bg-fuchsia-50/85 border-fuchsia-200 text-fuchsia-900 dark:bg-fuchsia-950/35 dark:border-fuchsia-900 dark:text-fuchsia-200'
-                    : '',
-                ].join(' ')}
+                  'w-full',
+                  shouldCollapseThinking
+                    ? 'py-1'
+                    : [
+                        'rounded-2xl px-3.5 py-2.5 border shadow-sm',
+                        m.role === 'user'
+                          ? 'bg-blue-50/90 border-blue-200 text-blue-950 dark:bg-blue-950/40 dark:border-blue-900 dark:text-blue-100'
+                          : 'bg-white border-neutral-200/90 text-neutral-900 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100',
+                        m.role === 'system'
+                          ? 'bg-neutral-50 border-neutral-200 text-neutral-700 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-300'
+                          : '',
+                        isDebugSystemNote
+                          ? 'bg-fuchsia-50/85 border-fuchsia-200 text-fuchsia-900 dark:bg-fuchsia-950/35 dark:border-fuchsia-900 dark:text-fuchsia-200'
+                          : '',
+                      ].join(' '),
+                ].filter(Boolean).join(' ')}
               >
                 {isCodeLifecycleUnit && hasFencedCodeBlocks && (
                   <div className="mb-2 flex justify-end">
@@ -6561,10 +6798,10 @@ export default function App() {
                         prev[unit.id] === next ? prev : { ...prev, [unit.id]: next },
                       )
                     }}
-                    className="group rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-100/80 dark:bg-neutral-950/45"
+                    className="group"
                   >
-                    <summary className="list-none cursor-pointer px-3 py-1.5 text-[10.5px] text-neutral-600 dark:text-neutral-400 flex items-center justify-between">
-                      <span>Progress update</span>
+                    <summary className={`list-none cursor-pointer py-0.5 text-[10.5px] text-neutral-400 dark:text-neutral-500 flex items-center justify-between gap-2 ${thinkingInProgress ? 'animate-pulse motion-reduce:animate-none' : ''}`}>
+                      <span>{thinkingSummary}</span>
                       <svg
                         width="12"
                         height="12"
@@ -6576,7 +6813,7 @@ export default function App() {
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                     </summary>
-                    <div className="border-t border-neutral-200 dark:border-neutral-800 px-3 py-2 text-[12px] leading-5 text-neutral-700 dark:text-neutral-300">
+                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5 text-neutral-500 dark:text-neutral-400">
                       {m.role === 'assistant' && m.format === 'markdown' ? (
                         <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-1 prose-headings:my-1 prose-code:text-blue-800 dark:prose-code:text-blue-300">
                           <ReactMarkdown
@@ -6836,7 +7073,7 @@ export default function App() {
               </div>
             </div>
             )
-          })}
+          })})()}
         </div>
 
         <div className="relative z-10 border-t border-neutral-200/80 dark:border-neutral-800 p-2.5 bg-white dark:bg-neutral-950">
@@ -6912,7 +7149,13 @@ export default function App() {
               title={sendTitle}
             >
               {isBusy && !hasInput ? (
-                <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  className="animate-spin motion-reduce:animate-none"
+                >
                   <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeOpacity="0.28" strokeWidth="2" />
                   <path d="M10 3.5a6.5 6.5 0 0 1 6.5 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                 </svg>

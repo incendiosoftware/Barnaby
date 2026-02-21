@@ -80,6 +80,21 @@ export class GeminiClient extends EventEmitter {
     return { threadId: 'gemini' }
   }
 
+  async sendUserMessageWithImages(text: string, localImagePaths: string[]) {
+    const trimmed = text.trim()
+    const imagePaths = (localImagePaths ?? []).filter((p) => typeof p === 'string' && p.trim())
+    if (!trimmed && imagePaths.length === 0) return
+
+    const imageRefs = imagePaths.length > 0 ? '\n\n' + imagePaths.map((p) => `@${p}`).join('\n') : ''
+    const userText = trimmed ? trimmed + imageRefs : imagePaths.map((p) => `@${p}`).join('\n')
+    this.history.push({ role: 'user', text: userText })
+
+    const COMPLETION_SYSTEM =
+      'You are a coding assistant running inside Agent Orchestrator. Complete tasks fully. Do not stop after describing a plan - execute the plan and provide concrete outputs. When the user includes image references (@path), interpret and respond to the images as part of the request.'
+    const prompt = this.buildPrompt(COMPLETION_SYSTEM)
+    await this.runTurn(prompt)
+  }
+
   async sendUserMessage(text: string) {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -89,10 +104,12 @@ export class GeminiClient extends EventEmitter {
     const COMPLETION_SYSTEM =
       'You are a coding assistant running inside Agent Orchestrator. Complete tasks fully. Do not stop after describing a plan - execute the plan and provide concrete outputs.'
     const prompt = this.buildPrompt(COMPLETION_SYSTEM)
+    await this.runTurn(prompt)
+  }
 
-    const runWithModel = async (modelId: string) => {
-      let full = ''
-      await new Promise<string>((resolve, reject) => {
+  private async runTurn(prompt: string): Promise<void> {
+    const startTurn = (modelId: string): Promise<void> =>
+      new Promise((resolve, reject) => {
         const args = ['-m', modelId, '-p', prompt]
         const proc =
           process.platform === 'win32'
@@ -106,7 +123,10 @@ export class GeminiClient extends EventEmitter {
         proc.stdout.setEncoding('utf8')
         proc.stderr.setEncoding('utf8')
 
+        let full = ''
         let stderr = ''
+        let resolved = false
+
         proc.stdout.on('data', (chunk: string) => {
           if (!chunk) return
           full += chunk
@@ -117,26 +137,38 @@ export class GeminiClient extends EventEmitter {
           stderr += chunk
         })
 
-        proc.on('error', (err) => reject(err))
+        proc.on('error', (err) => {
+          if (!resolved) {
+            resolved = true
+            reject(err)
+          }
+        })
         proc.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
           this.activeProc = null
-          if (code === 0) resolve(full)
-          else reject(new Error(this.formatGeminiExitError(code, signal, stderr)))
+          if (!resolved) {
+            resolved = true
+            if (code === 0) resolve()
+            else reject(new Error(this.formatGeminiExitError(code, signal, stderr)))
+          }
+          if (code === 0) {
+            this.history.push({ role: 'assistant', text: full.trim() || full })
+            this.emitEvent({ type: 'assistantCompleted' })
+          } else {
+            this.emitEvent({ type: 'status', status: 'error', message: this.formatGeminiExitError(code, signal, stderr) })
+            this.emitEvent({ type: 'assistantCompleted' })
+          }
+        })
+
+        setImmediate(() => {
+          if (!resolved) {
+            resolved = true
+            resolve()
+          }
         })
       })
-      return full
-    }
 
     try {
-      let full = await runWithModel(this.model)
-
-      // Auto-recover once if selected model no longer exists.
-      if (!full.trim()) {
-        // no-op: keep behavior unchanged
-      }
-
-      this.history.push({ role: 'assistant', text: full.trim() || full })
-      this.emitEvent({ type: 'assistantCompleted' })
+      await startTurn(this.model)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       if (this.isModelNotFoundError(msg) && this.model !== 'gemini-2.0-flash') {
@@ -147,20 +179,16 @@ export class GeminiClient extends EventEmitter {
             message: `Model "${this.model}" not found. Retrying with gemini-2.0-flash...`,
           })
           this.model = 'gemini-2.0-flash'
-          const fallbackFull = await runWithModel(this.model)
-          this.history.push({ role: 'assistant', text: fallbackFull.trim() || fallbackFull })
-          this.emitEvent({ type: 'status', status: 'ready', message: `Connected (using ${this.model})` })
-          this.emitEvent({ type: 'assistantCompleted' })
-          return
+          await startTurn(this.model)
         } catch (retryErr: unknown) {
           const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr)
           this.emitEvent({ type: 'status', status: 'error', message: retryMsg })
           this.emitEvent({ type: 'assistantCompleted' })
-          return
         }
+      } else {
+        this.emitEvent({ type: 'status', status: 'error', message: msg })
+        this.emitEvent({ type: 'assistantCompleted' })
       }
-      this.emitEvent({ type: 'status', status: 'error', message: msg })
-      this.emitEvent({ type: 'assistantCompleted' })
     }
   }
 

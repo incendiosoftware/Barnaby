@@ -231,6 +231,7 @@ function closeSplashWindow() {
 
 function splashFallbackHtmlDataUrl(splashImagePath: string) {
   const splashImageUrl = pathToFileURL(splashImagePath).toString()
+  const version = app.getVersion()
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -259,12 +260,22 @@ function splashFallbackHtmlDataUrl(splashImagePath: string) {
       user-select: none;
       -webkit-user-drag: none;
     }
+    .version {
+      position: fixed;
+      bottom: 8px;
+      right: 12px;
+      font-size: 11px;
+      color: white;
+      font-family: system-ui, sans-serif;
+      opacity: 0.8;
+    }
   </style>
 </head>
 <body>
   <div class="root">
     <img src="${splashImageUrl}" alt="Barnaby splash" />
   </div>
+  <div class="version">${String(version).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
 </body>
 </html>`
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
@@ -300,7 +311,15 @@ function createSplashWindow() {
     autoHideMenuBar: true,
   })
   splash.setMenuBarVisibility(false)
+  const injectSplashVersion = () => {
+    splash.webContents
+      .executeJavaScript(
+        `(function(){var el=document.getElementById('version');if(el)el.textContent=${JSON.stringify(app.getVersion())};})()`,
+      )
+      .catch(() => {})
+  }
   if (hasSplashHtml) {
+    splash.webContents.once('did-finish-load', injectSplashVersion)
     void splash.loadFile(splashHtmlPath).catch((err) => {
       appendRuntimeLog('splash-loadfile-failed', { splashHtmlPath, error: errorMessage(err) }, 'warn')
       void splash.loadURL(splashFallbackHtmlDataUrl(splashImagePath)).catch(() => {})
@@ -1971,6 +1990,12 @@ ipcMain.handle('agentorchestrator:getAvailableModels', async () => {
   return getAvailableModels()
 })
 
+ipcMain.handle('agentorchestrator:findInPage', async (evt, text: string) => {
+  const wc = evt.sender
+  if (!wc || typeof text !== 'string' || !text.trim()) return
+  wc.findInPage(text.trim(), { findNext: false })
+})
+
 ipcMain.handle('agentorchestrator:showContextMenu', async (evt, kind: unknown) => {
   const menuKind: ContextMenuKind | null =
     kind === 'input-selection' || kind === 'chat-selection' ? kind : null
@@ -2061,9 +2086,11 @@ function setAppMenu() {
         { label: 'Find', accelerator: 'CmdOrCtrl+F', click: () => sendMenuAction('findInPage') },
         { label: 'Find in Files', accelerator: 'CmdOrCtrl+Shift+F', click: () => sendMenuAction('findInFiles') },
         { type: 'separator' },
+        { label: 'Connectivity', click: () => sendMenuAction('openConnectivity') },
         { label: 'Models', click: () => sendMenuAction('openModelSetup') },
         { label: 'Preferences', accelerator: 'CmdOrCtrl+,', click: () => sendMenuAction('openPreferences') },
-        { label: 'Settings', click: () => sendMenuAction('openSettings') },
+        { label: 'Agents', click: () => sendMenuAction('openAgents') },
+        { label: 'Diagnostics', click: () => sendMenuAction('openDiagnostics') },
       ],
     },
     {

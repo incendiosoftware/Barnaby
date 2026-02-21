@@ -7,6 +7,9 @@ No usage billing.
 Just your subscriptions — unlocked.
 
 Website: https://barnaby.build
+Written By: Stuart Mackereth
+Company: Incendio Trading Limited
+Email: incendiosoftware@gmail.com
 
 ## Screenshots
 

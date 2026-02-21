@@ -158,6 +158,7 @@ interface Window {
     }>
     setRecentWorkspaces(list: string[]): void
     setEditorMenuState(enabled: boolean): void
+    findInPage(text: string): Promise<void>
     showContextMenu(kind: 'input-selection' | 'chat-selection'): Promise<{ ok: boolean }>
     getProviderAuthStatus(config: ProviderConfigForAuth): Promise<ProviderAuthStatus>
     startProviderLogin(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }>

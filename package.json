@@ -1,7 +1,7 @@
 {
   "name": "barnaby",
   "productName": "Barnaby",
-  "version": "0.0.71",
+  "version": "0.0.77",
   "main": "dist-electron/main/index.js",
   "description": "Barnaby: local agent loops without API keys.",
   "author": "stuart",
@@ -42,7 +42,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
     "autoprefixer": "^10.4.20",
-    "electron": "^33.2.0",
+    "electron": "^40.6.0",
     "electron-builder": "^26.8.1",
     "postcss": "^8.4.49",
     "postcss-import": "^16.1.0",

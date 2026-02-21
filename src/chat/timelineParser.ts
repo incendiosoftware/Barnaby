@@ -10,11 +10,17 @@ export type BuildTimelineInput = {
 
 const ACTIVITY_MERGE_WINDOW_MS = 8000
 
+/** Max length for reasoning/operational updates; longer messages are formal replies. */
+const THINKING_MAX_CHARS = 180
+
 function defaultIsLikelyThinkingUpdate(content: string) {
   const text = content.trim()
   if (!text) return false
+  if (text.length > THINKING_MAX_CHARS) return false
   if (text.includes('```')) return false
   if (/^#{1,6}\s/m.test(text)) return false
+  const paragraphCount = (text.match(/\n\s*\n/g) || []).length + 1
+  if (paragraphCount >= 2) return false
   const lower = text.toLowerCase().replace(/\s+/g, ' ')
   const markers = [
     "i'll ",
@@ -153,7 +159,7 @@ export function buildTimelineForPanel(input: BuildTimelineInput): TimelineUnit[]
         defaultOpen: index === latestActivityIndex,
       }
     }
-    if (input.streaming && index === sliced.length - 1 && (unit.kind === 'code' || unit.kind === 'assistant')) {
+    if (input.streaming && index === sliced.length - 1 && (unit.kind === 'code' || unit.kind === 'assistant' || unit.kind === 'thinking')) {
       return {
         ...unit,
         status: 'in_progress',

@@ -221,6 +221,9 @@ const api = {
   setEditorMenuState(enabled: boolean) {
     ipcRenderer.send('agentorchestrator:setEditorMenuState', Boolean(enabled))
   },
+  findInPage(text: string) {
+    return ipcRenderer.invoke('agentorchestrator:findInPage', text) as Promise<void>
+  },
   showContextMenu(kind: ContextMenuKind) {
     return ipcRenderer.invoke('agentorchestrator:showContextMenu', kind) as Promise<{ ok: boolean }>
   },

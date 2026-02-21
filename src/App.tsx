@@ -373,7 +373,7 @@ const MAX_PANELS = 5
 const MAX_AUTO_CONTINUE = 3
 const MODAL_BACKDROP_CLASS = 'fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px] flex items-center justify-center p-4'
 const MODAL_CARD_CLASS = 'rounded-2xl border border-neutral-200/80 dark:border-neutral-800 bg-white/95 dark:bg-neutral-950 shadow-2xl'
-const UI_BUTTON_SECONDARY_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-100'
+const UI_BUTTON_SECONDARY_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
 const UI_BUTTON_PRIMARY_CLASS = 'px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-500'
 const UI_ICON_BUTTON_CLASS = 'h-9 w-9 inline-flex items-center justify-center rounded-lg border border-neutral-300 bg-white hover:bg-neutral-50 shadow-sm text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
 const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'
@@ -763,7 +763,7 @@ const WORKSPACE_THEME_INHERIT = 'application'
 
 const THEMES: StandaloneTheme[] = [
   { id: 'default-light', name: 'Default Light', mode: 'light', accent500: '#3b82f6', accent600: '#2563eb', accent700: '#1d4ed8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(30,58,138,0.28)', dark950: '#0a0a0a', dark900: '#171717' },
-  { id: 'default-dark', name: 'Default Dark', mode: 'dark', accent500: '#3b82f6', accent600: '#2563eb', accent700: '#1d4ed8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(30,58,138,0.28)', dark950: '#0a0a0a', dark900: '#171717' },
+  { id: 'default-dark', name: 'Default Dark', mode: 'dark', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#32363d', dark900: '#3f444d' },
   { id: 'obsidian-black', name: 'Obsidian Black', mode: 'dark', accent500: '#7c3aed', accent600: '#6d28d9', accent700: '#5b21b6', accentText: '#ddd6fe', accentSoft: '#ede9fe', accentSoftDark: 'rgba(124,58,237,0.24)', dark950: '#000000', dark900: '#0a0a0a' },
   { id: 'dracula', name: 'Dracula', mode: 'dark', accent500: '#bd93f9', accent600: '#a87ef5', accent700: '#8f62ea', accentText: '#f3e8ff', accentSoft: '#f5f3ff', accentSoftDark: 'rgba(189,147,249,0.25)', dark950: '#191a21', dark900: '#232533' },
   { id: 'nord-light', name: 'Nord Light', mode: 'light', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#2e3440', dark900: '#3b4252' },
@@ -1669,6 +1669,72 @@ function shouldSurfaceRawNoteInChat(method: string): boolean {
   return false
 }
 
+const LIMIT_WARNING_PREFIX = 'Warning (Limits):'
+
+function isUsageLimitMessage(message: string): boolean {
+  const lower = message.toLowerCase()
+  return (
+    lower.includes('limit reached') ||
+    lower.includes('rate limit') ||
+    lower.includes('quota exceeded') ||
+    lower.includes('usage limit') ||
+    lower.includes('too many requests') ||
+    lower.includes('429') ||
+    (lower.includes('exhaust') && lower.includes('limit'))
+  )
+}
+
+function withLimitWarningMessage(messages: ChatMessage[], rawMessage: string): ChatMessage[] {
+  const trimmed = rawMessage.trim()
+  if (!trimmed || !isUsageLimitMessage(trimmed)) return messages
+  const content = `${LIMIT_WARNING_PREFIX} ${trimmed}\n\nSwitch to another model/provider (for example Gemini) or wait for your limit window to reset.`
+  const duplicate = messages.slice(-8).some((m) => m.role === 'system' && m.content === content)
+  if (duplicate) return messages
+  return [...messages, { id: newId(), role: 'system' as const, content, format: 'text' as const, createdAt: Date.now() }]
+}
+
+function formatLimitResetHint(usage: AgentPanelState['usage']) {
+  const raw = usage?.primary?.resetsAt
+  if (raw === null || raw === undefined) return null
+  const date =
+    typeof raw === 'number'
+      ? new Date(raw > 1_000_000_000_000 ? raw : raw * 1000)
+      : typeof raw === 'string'
+        ? new Date(raw)
+        : null
+  if (!date || Number.isNaN(date.getTime())) return null
+  return `Resets at ${date.toLocaleString()}.`
+}
+
+function getRateLimitPercent(usage: AgentPanelState['usage']) {
+  const p = usage?.primary
+  if (!p || typeof p.usedPercent !== 'number') return null
+  return Math.max(0, Math.min(100, p.usedPercent))
+}
+
+function formatRateLimitLabel(usage: AgentPanelState['usage']) {
+  const p = usage?.primary
+  if (!p || typeof p.usedPercent !== 'number') return null
+  const used = Math.max(0, Math.min(100, p.usedPercent))
+  const left = 100 - used
+  const windowMinutes = typeof p.windowMinutes === 'number' ? p.windowMinutes : null
+  const windowLabel = windowMinutes === 300 ? '5h' : windowMinutes ? `${Math.round(windowMinutes / 60)}h` : null
+  return `${windowLabel ? `${windowLabel} ` : ''}${left}% left`
+}
+
+function withExhaustedRateLimitWarning(messages: ChatMessage[], usage: AgentPanelState['usage']) {
+  const usedPercent = getRateLimitPercent(usage)
+  if (usedPercent === null || usedPercent < 99.5) return messages
+  const label = formatRateLimitLabel(usage) ?? `${Math.max(0, Math.round(100 - usedPercent))}% left`
+  const resetHint = formatLimitResetHint(usage)
+  const content = `${LIMIT_WARNING_PREFIX} Codex usage window exhausted (${label}). ${resetHint ?? 'Wait for reset or switch model/provider.'}\n\nYour message was not sent.`
+  const duplicate = messages
+    .slice(-8)
+    .some((m) => m.role === 'system' && m.content.startsWith(`${LIMIT_WARNING_PREFIX} Codex usage window exhausted`))
+  if (duplicate) return messages
+  return [...messages, { id: newId(), role: 'system' as const, content, format: 'text' as const, createdAt: Date.now() }]
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
@@ -1956,11 +2022,17 @@ export default function App() {
     () => workspaceSettingsByPath[workspaceRoot],
     [workspaceRoot, workspaceSettingsByPath],
   )
+  const workspaceFormThemePreviewId = useMemo(() => {
+    if (workspaceForm.path.trim() !== workspaceRoot) return null
+    const previewThemeId = normalizeWorkspaceThemeId(workspaceForm.themeId)
+    return previewThemeId !== WORKSPACE_THEME_INHERIT ? previewThemeId : null
+  }, [workspaceForm.path, workspaceForm.themeId, workspaceRoot])
   const effectiveThemeId = useMemo(() => {
+    if (workspaceFormThemePreviewId) return workspaceFormThemePreviewId
     const wsThemeId = activeWorkspaceSettings?.themeId
     if (wsThemeId && wsThemeId !== WORKSPACE_THEME_INHERIT) return wsThemeId
     return applicationSettings.themeId
-  }, [activeWorkspaceSettings, applicationSettings.themeId])
+  }, [workspaceFormThemePreviewId, activeWorkspaceSettings, applicationSettings.themeId])
   const activeTheme = useMemo(
     () => THEMES.find((t) => t.id === effectiveThemeId) ?? THEMES.find((t) => t.id === DEFAULT_THEME_ID)!,
     [effectiveThemeId],
@@ -3238,6 +3310,10 @@ export default function App() {
                   status: evt.message ?? evt.status,
                   connected: evt.status === 'ready',
                   streaming: evt.status === 'closed' ? false : w.streaming,
+                  messages:
+                    evt.status === 'error' && typeof evt.message === 'string'
+                      ? withLimitWarningMessage(w.messages, evt.message)
+                      : w.messages,
                 },
           ),
         )
@@ -3288,7 +3364,18 @@ export default function App() {
 
       if (evt?.type === 'usageUpdated') {
         setPanels((prev) =>
-          prev.map((w) => (w.id === agentWindowId ? { ...w, usage: evt.usage } : w)),
+          prev.map((w) =>
+            w.id === agentWindowId
+              ? {
+                  ...w,
+                  usage: evt.usage,
+                  messages:
+                    getModelProvider(w.model) === 'codex'
+                      ? withExhaustedRateLimitWarning(w.messages, evt.usage)
+                      : w.messages,
+                }
+              : w,
+          ),
         )
         return
       }
@@ -3406,22 +3493,6 @@ export default function App() {
       unsubMenu?.()
     }
   }, [api, workspaceList, workspaceRoot])
-
-  function formatRateLimitLabel(usage: AgentPanelState['usage']) {
-    const p = usage?.primary
-    if (!p || typeof p.usedPercent !== 'number') return null
-    const used = Math.max(0, Math.min(100, p.usedPercent))
-    const left = 100 - used
-    const windowMinutes = typeof p.windowMinutes === 'number' ? p.windowMinutes : null
-    const windowLabel = windowMinutes === 300 ? '5h' : windowMinutes ? `${Math.round(windowMinutes / 60)}h` : null
-    return `${windowLabel ? `${windowLabel} ` : ''}${left}% left`
-  }
-
-  function getRateLimitPercent(usage: AgentPanelState['usage']) {
-    const p = usage?.primary
-    if (!p || typeof p.usedPercent !== 'number') return null
-    return Math.max(0, Math.min(100, p.usedPercent))
-  }
 
   function estimateTokenCountFromText(text: string) {
     const trimmed = text.trim()
@@ -4465,7 +4536,7 @@ export default function App() {
       )
       queueMicrotask(() => kickQueuedMessage(winId))
     } catch (e) {
-      const errMsg = formatConnectionError(e)
+      const errMsg = formatConnectionError(e, getModelProvider(w.model))
       setPanels((prev) =>
         prev.map((p) =>
           p.id !== winId
@@ -4515,7 +4586,7 @@ export default function App() {
     return () => clearInterval(interval)
   }, [panelActivityById])
 
-  function formatConnectionError(e: unknown): string {
+  function formatConnectionError(e: unknown, provider?: string): string {
     const msg = e instanceof Error ? e.message : String(e)
     if (msg.includes('codex app-server closed') || msg.includes('codex app-server')) {
       return [
@@ -4524,6 +4595,16 @@ export default function App() {
         '- Ensure logged in: `codex login`',
         '- Try using fewer panels (each uses a separate Codex process)',
         'Send another message to reconnect.',
+      ].join('\n')
+    }
+    if (msg.includes('timed out') && provider === 'claude') {
+      return [
+        'Claude turn timed out.',
+        'Common causes:',
+        '- No credits left: check your Claude subscription at claude.ai',
+        '- Claude CLI not in PATH: run `claude --version` in a terminal',
+        '- Slow network or API delay.',
+        'Send another message to retry.',
       ].join('\n')
     }
     if (msg.includes('Not connected') || msg.includes('closed')) {
@@ -4539,6 +4620,25 @@ export default function App() {
     const provider = getModelProvider(w.model)
     const modePrompt = INTERACTION_MODE_META[interactionMode].promptPrefix
     const outgoingText = modePrompt ? `${modePrompt}\n\n${text}` : text
+
+    // Resolve @file mentions
+    const resolvedText = await (async () => {
+      const mentions = Array.from(text.matchAll(/@([^\s]+)/g))
+      if (mentions.length === 0) return outgoingText
+      
+      let context = ''
+      for (const match of mentions) {
+        const path = match[1]
+        try {
+          const file = await api.readWorkspaceTextFile(workspaceRoot, path)
+          context += `\n\nFile: ${path}\n\`\`\`\n${file.content}\n\`\`\``
+        } catch {
+          // Ignore invalid paths
+        }
+      }
+      return outgoingText + context
+    })()
+
     try {
       appendPanelDebug(winId, 'send', `Received user message (${text.length} chars)`)
       setPanels((prev) =>
@@ -4595,7 +4695,7 @@ export default function App() {
         ? w.messages.map((m) => ({ role: m.role, content: m.content ?? '' }))
         : undefined
       await withTimeout(
-        api.sendMessage(winId, outgoingText, imagePaths, priorMessagesForContext),
+        api.sendMessage(winId, resolvedText, imagePaths, priorMessagesForContext),
         TURN_START_TIMEOUT_MS,
         'turn/start',
       )
@@ -4604,7 +4704,7 @@ export default function App() {
       }
       appendPanelDebug(winId, 'turn/start', 'Turn started')
     } catch (e: any) {
-      const errMsg = formatConnectionError(e)
+      const errMsg = formatConnectionError(e, provider)
       appendPanelDebug(winId, 'error', errMsg)
       setPanels((prev) =>
         prev.map((x) =>
@@ -4643,6 +4743,22 @@ export default function App() {
     const messageAttachments = w.attachments.map((a) => ({ ...a }))
     const imagePaths = messageAttachments.map((a) => a.path)
     if (!text && imagePaths.length === 0) return
+    const provider = getModelProvider(w.model)
+    const usedPercent = provider === 'codex' ? getRateLimitPercent(w.usage) : null
+    if (usedPercent !== null && usedPercent >= 99.5) {
+      setPanels((prev) =>
+        prev.map((x) =>
+          x.id !== winId
+            ? x
+            : {
+                ...x,
+                status: 'Codex limit reached',
+                messages: withExhaustedRateLimitWarning(x.messages, x.usage),
+              },
+        ),
+      )
+      return
+    }
     const isBusy = w.streaming || w.pendingInputs.length > 0
     if (isBusy && imagePaths.length > 0) {
       setPanels((prev) =>
@@ -4746,7 +4862,7 @@ export default function App() {
         }),
       )
     } catch (e) {
-      const errMsg = formatConnectionError(e)
+      const errMsg = formatConnectionError(e, provider)
       setPanels((prev) =>
         prev.map((w) =>
           w.id !== winId
@@ -5041,7 +5157,7 @@ export default function App() {
         <div className="flex-1 overflow-auto px-3 py-3">
           <div className="space-y-3 text-xs">
             <div className="space-y-1.5">
-              <label className="text-neutral-600 dark:text-neutral-400">Folder location</label>
+              <label className="text-neutral-600 dark:text-neutral-300">Folder location</label>
               <div className="grid grid-cols-[1fr_auto] gap-2">
                 <input
                   className={`w-full ${UI_INPUT_CLASS} font-mono text-xs`}
@@ -5050,7 +5166,7 @@ export default function App() {
                 />
                 <button
                   type="button"
-                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                   onClick={browseForWorkspaceIntoForm}
                   title="Browse for workspace folder"
                   aria-label="Browse for workspace folder"
@@ -5063,7 +5179,7 @@ export default function App() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <label className="text-neutral-600 dark:text-neutral-400">Default model</label>
+              <label className="text-neutral-600 dark:text-neutral-300">Default model</label>
               <select
                 className={`w-full ${UI_SELECT_CLASS}`}
                 value={workspaceForm.defaultModel}
@@ -5082,7 +5198,7 @@ export default function App() {
               </select>
             </div>
             <div className="space-y-1.5">
-              <label className="text-neutral-600 dark:text-neutral-400">Sandbox</label>
+              <label className="text-neutral-600 dark:text-neutral-300">Sandbox</label>
               <select
                 className={`w-full ${UI_SELECT_CLASS}`}
                 value={workspaceForm.sandbox}
@@ -5107,7 +5223,7 @@ export default function App() {
             </div>
             {workspaceForm.sandbox !== 'read-only' && (
               <div className="space-y-1.5">
-                <label className="text-neutral-600 dark:text-neutral-400">Permissions</label>
+                <label className="text-neutral-600 dark:text-neutral-300">Permissions</label>
                 <select
                   className={`w-full ${UI_SELECT_CLASS}`}
                   value={workspaceForm.permissionMode}
@@ -5124,7 +5240,7 @@ export default function App() {
               </div>
             )}
             <div className="space-y-1.5">
-              <label className="text-neutral-600 dark:text-neutral-400">Theme</label>
+              <label className="text-neutral-600 dark:text-neutral-300">Theme</label>
               <select
                 className={`w-full ${UI_SELECT_CLASS}`}
                 value={workspaceForm.themeId}
@@ -5144,13 +5260,13 @@ export default function App() {
               </select>
             </div>
             <div className="space-y-1.5">
-              <span className="text-neutral-600 dark:text-neutral-400">Timeline controls</span>
+              <span className="text-neutral-600 dark:text-neutral-300">Timeline controls</span>
               <div className="text-xs text-neutral-500 dark:text-neutral-400">
                 Debug and trace visibility is now global.
               </div>
               <button
                 type="button"
-                className="h-7 px-2 inline-flex items-center rounded-md border border-neutral-300 bg-white text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                className="h-7 px-2 inline-flex items-center rounded-md border border-neutral-300 bg-white text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                 onClick={() => {
                   setShowWorkspaceModal(false)
                   setAppSettingsView('connectivity')
@@ -5162,7 +5278,7 @@ export default function App() {
               <div className="pt-1 flex items-center gap-1.5">
                 <button
                   type="button"
-                  className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                   onClick={() => void saveWorkspaceSettings()}
                   disabled={!canSaveWorkspaceSettings}
                   title="Save workspace settings"
@@ -5176,7 +5292,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                   onClick={() => setWorkspaceForm(baselineForm)}
                   disabled={!isWorkspaceSettingsDirty}
                   title="Revert unsaved changes"
@@ -5202,7 +5318,7 @@ export default function App() {
           <div className="font-medium text-neutral-700 dark:text-neutral-300">Agent Orchestrator</div>
           <button
             type="button"
-            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-[11px] text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-[11px] text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
             onClick={() => window.open('https://barnaby.build/orchestrator', '_blank', 'noopener,noreferrer')}
           >
             More Informatin
@@ -5213,7 +5329,7 @@ export default function App() {
   }
 
   return (
-    <div className="theme-preset h-screen w-full min-w-0 max-w-full overflow-hidden flex flex-col bg-neutral-100 text-neutral-950 dark:bg-black dark:text-neutral-100">
+    <div className="theme-preset h-screen w-full min-w-0 max-w-full overflow-hidden flex flex-col bg-neutral-100 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
       <style>{`
         .theme-preset .bg-blue-600 { background-color: var(--theme-accent-600) !important; }
         .theme-preset .hover\\:bg-blue-500:hover { background-color: var(--theme-accent-500) !important; }
@@ -5244,6 +5360,31 @@ export default function App() {
         .dark .theme-preset .dark\\:border-blue-900\\/70 { border-color: color-mix(in srgb, var(--theme-accent-500) 50%, black) !important; }
         .dark .theme-preset .dark\\:bg-neutral-950 { background-color: var(--theme-dark-950) !important; }
         .dark .theme-preset .dark\\:bg-neutral-900 { background-color: var(--theme-dark-900) !important; }
+        .dark .theme-preset .dark\\:bg-neutral-800 { background-color: color-mix(in srgb, var(--theme-dark-900) 84%, white) !important; }
+        .dark .theme-preset .dark\\:border-neutral-800 { border-color: color-mix(in srgb, var(--theme-dark-950) 78%, white) !important; }
+        .dark .theme-preset .dark\\:border-neutral-700 { border-color: color-mix(in srgb, var(--theme-dark-900) 74%, white) !important; }
+        .dark .theme-preset .dark\\:border-neutral-600 { border-color: color-mix(in srgb, var(--theme-dark-900) 65%, white) !important; }
+        .dark .theme-preset .dark\\:text-neutral-300 { color: color-mix(in srgb, #ffffff 82%, var(--theme-dark-900)) !important; }
+        .dark .theme-preset .dark\\:text-neutral-200,
+        .dark .theme-preset .dark\\:text-neutral-100 { color: color-mix(in srgb, #ffffff 90%, var(--theme-dark-900)) !important; }
+
+        .theme-preset * {
+          scrollbar-width: thin;
+          scrollbar-color: rgba(115, 115, 115, 0.55) rgba(229, 229, 229, 0.45);
+        }
+        .theme-preset *::-webkit-scrollbar { width: 10px; height: 10px; }
+        .theme-preset *::-webkit-scrollbar-track { background: rgba(229, 229, 229, 0.45); }
+        .theme-preset *::-webkit-scrollbar-thumb {
+          background: rgba(115, 115, 115, 0.55);
+          border-radius: 999px;
+          border: 2px solid rgba(229, 229, 229, 0.45);
+        }
+        .dark .theme-preset * { scrollbar-color: color-mix(in srgb, var(--theme-dark-900) 65%, white) var(--theme-dark-950); }
+        .dark .theme-preset *::-webkit-scrollbar-track { background: var(--theme-dark-950); }
+        .dark .theme-preset *::-webkit-scrollbar-thumb {
+          background: color-mix(in srgb, var(--theme-dark-900) 65%, white);
+          border-color: var(--theme-dark-950);
+        }
       `}</style>
       <div className="shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 px-4 py-3 bg-white dark:bg-neutral-950">
         <div className="flex flex-wrap items-center justify-between gap-2.5 text-xs min-w-0">
@@ -5626,7 +5767,7 @@ export default function App() {
                 <div className="flex items-center gap-2 mb-4">
                   <button
                     type="button"
-                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                     onClick={async () => {
                       setModelCatalogRefreshPending(true)
                       setModelCatalogRefreshStatus(null)
@@ -5665,14 +5806,14 @@ export default function App() {
               {editingModel ? (
                 <div className="space-y-4">
                   <div className="grid grid-cols-[120px_1fr] items-center gap-2 text-sm">
-                    <span className="text-neutral-600 dark:text-neutral-400">ID</span>
+                    <span className="text-neutral-600 dark:text-neutral-300">ID</span>
                     <input
                       className={`${UI_INPUT_CLASS} font-mono text-sm`}
                       value={modelForm.id}
                       onChange={(e) => setModelForm((p) => ({ ...p, id: e.target.value }))}
                       placeholder="e.g. gemini-2.0-flash"
                     />
-                    <span className="text-neutral-600 dark:text-neutral-400">Display name</span>
+                    <span className="text-neutral-600 dark:text-neutral-300">Display name</span>
                     <input
                       className={UI_INPUT_CLASS}
                       value={modelForm.displayName}
@@ -6302,7 +6443,7 @@ export default function App() {
                 Add a custom CLI provider. The CLI must be installed on your system. Auth check runs the command with the given args; success means connected.
               </p>
               <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-                <span className="text-neutral-600 dark:text-neutral-400">ID</span>
+                <span className="text-neutral-600 dark:text-neutral-300">ID</span>
                 <input
                   className={`${UI_INPUT_CLASS} font-mono`}
                   value={editingProvider.id}
@@ -6310,35 +6451,35 @@ export default function App() {
                   placeholder="e.g. ollama"
                   disabled={!!providerRegistry.customProviders.find((p) => p.id === editingProvider.id)}
                 />
-                <span className="text-neutral-600 dark:text-neutral-400">Display name</span>
+                <span className="text-neutral-600 dark:text-neutral-300">Display name</span>
                 <input
                   className={UI_INPUT_CLASS}
                   value={editingProvider.displayName}
                   onChange={(e) => setEditingProvider((p) => (p ? { ...p, displayName: e.target.value } : p))}
                   placeholder="e.g. Ollama"
                 />
-                <span className="text-neutral-600 dark:text-neutral-400">CLI command</span>
+                <span className="text-neutral-600 dark:text-neutral-300">CLI command</span>
                 <input
                   className={`${UI_INPUT_CLASS} font-mono`}
                   value={editingProvider.cliCommand}
                   onChange={(e) => setEditingProvider((p) => (p ? { ...p, cliCommand: e.target.value } : p))}
                   placeholder="e.g. ollama"
                 />
-                <span className="text-neutral-600 dark:text-neutral-400">CLI path</span>
+                <span className="text-neutral-600 dark:text-neutral-300">CLI path</span>
                 <input
                   className={`${UI_INPUT_CLASS} font-mono`}
                   value={editingProvider.cliPath ?? ''}
                   onChange={(e) => setEditingProvider((p) => (p ? { ...p, cliPath: e.target.value || undefined } : p))}
                   placeholder="Optional; uses PATH if empty"
                 />
-                <span className="text-neutral-600 dark:text-neutral-400">Auth check args</span>
+                <span className="text-neutral-600 dark:text-neutral-300">Auth check args</span>
                 <input
                   className={`${UI_INPUT_CLASS} font-mono`}
                   value={editingProvider.authCheckCommand ?? ''}
                   onChange={(e) => setEditingProvider((p) => (p ? { ...p, authCheckCommand: e.target.value || undefined } : p))}
                   placeholder="e.g. list or --version"
                 />
-                <span className="text-neutral-600 dark:text-neutral-400">Login command</span>
+                <span className="text-neutral-600 dark:text-neutral-300">Login command</span>
                 <input
                   className={`${UI_INPUT_CLASS} font-mono`}
                   value={editingProvider.loginCommand ?? ''}
@@ -6534,7 +6675,7 @@ export default function App() {
             </div>
             <div className="p-4 space-y-4 text-sm">
               <div className="grid grid-cols-[140px_1fr_auto] items-center gap-2">
-                <span className="text-neutral-600 dark:text-neutral-400">Folder location</span>
+                <span className="text-neutral-600 dark:text-neutral-300">Folder location</span>
                 <input
                   className={`w-full ${UI_INPUT_CLASS} font-mono`}
                   value={workspaceForm.path}
@@ -6542,7 +6683,7 @@ export default function App() {
                 />
                 <button
                   type="button"
-                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                   onClick={browseForWorkspaceIntoForm}
                   title="Browse for workspace folder"
                   aria-label="Browse for workspace folder"
@@ -6554,7 +6695,7 @@ export default function App() {
                 </button>
               </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <span className="text-neutral-600 dark:text-neutral-400">Default model</span>
+                <span className="text-neutral-600 dark:text-neutral-300">Default model</span>
                 <select
                   className={UI_SELECT_CLASS}
                   value={workspaceForm.defaultModel}
@@ -6573,7 +6714,7 @@ export default function App() {
                 </select>
               </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <span className="text-neutral-600 dark:text-neutral-400">Sandbox</span>
+                <span className="text-neutral-600 dark:text-neutral-300">Sandbox</span>
                 <div className="space-y-1">
                   <select
                     className={`w-full ${UI_SELECT_CLASS}`}
@@ -6601,7 +6742,7 @@ export default function App() {
               </div>
               {workspaceForm.sandbox !== 'read-only' && (
                 <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                  <span className="text-neutral-600 dark:text-neutral-400">Permissions</span>
+                  <span className="text-neutral-600 dark:text-neutral-300">Permissions</span>
                   <select
                     className={UI_SELECT_CLASS}
                     value={workspaceForm.permissionMode}
@@ -6618,7 +6759,7 @@ export default function App() {
                 </div>
               )}
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                <span className="text-neutral-600 dark:text-neutral-400">Theme</span>
+                <span className="text-neutral-600 dark:text-neutral-300">Theme</span>
                 <select
                   className={UI_SELECT_CLASS}
                   value={workspaceForm.themeId}
@@ -6638,7 +6779,7 @@ export default function App() {
                 </select>
               </div>
               <div className="grid grid-cols-[140px_1fr] gap-2">
-                <span className="text-neutral-600 dark:text-neutral-400">Timeline controls</span>
+                <span className="text-neutral-600 dark:text-neutral-300">Timeline controls</span>
                 <div className="col-start-2 text-xs text-neutral-500 dark:text-neutral-400">
                   Debug and trace visibility is now configured in Application Settings.
                 </div>
@@ -6766,7 +6907,11 @@ export default function App() {
           <div className="flex-1 min-w-0 text-sm font-semibold tracking-tight truncate" title={w.title}>{getConversationPrecis(w)}</div>
           <div className="flex items-center gap-1">
             <button
-              className="h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border border-transparent hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/50 dark:hover:text-blue-300 dark:hover:border-blue-900/60 disabled:opacity-50 disabled:cursor-not-allowed"
+              className={[
+                'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                'border-neutral-300 bg-white text-neutral-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700',
+                'dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-blue-950/50 dark:hover:text-blue-300 dark:hover:border-blue-900/60',
+              ].join(' ')}
               onClick={() => splitAgentPanel(w.id)}
               disabled={panels.length >= MAX_PANELS}
               title={panels.length >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'Split panel'}
@@ -6778,7 +6923,11 @@ export default function App() {
               </svg>
             </button>
             <button
-              className="h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border border-transparent hover:border-red-200 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/50 dark:hover:text-red-300 dark:hover:border-red-900/60"
+              className={[
+                'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border transition-colors',
+                'border-neutral-300 bg-white text-neutral-700 hover:border-red-200 hover:bg-red-50 hover:text-red-700',
+                'dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-red-950/50 dark:hover:text-red-300 dark:hover:border-red-900/60',
+              ].join(' ')}
               onClick={() => closePanel(w.id)}
               title="Close"
             >
@@ -6918,6 +7067,7 @@ export default function App() {
               attachments: unit.attachments,
             }
             const isDebugSystemNote = m.role === 'system' && /^Debug \(/.test(m.content)
+            const isLimitSystemWarning = m.role === 'system' && m.content.startsWith(LIMIT_WARNING_PREFIX)
             const codeUnitPinned = Boolean(timelinePinnedCodeByUnitId[unit.id])
             const isCodeLifecycleUnit = unit.kind === 'code'
             const hasFencedCodeBlocks = m.content.includes('```')
@@ -6941,6 +7091,9 @@ export default function App() {
                           : 'bg-white border-neutral-200/90 text-neutral-900 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100',
                         m.role === 'system'
                           ? 'bg-neutral-50 border-neutral-200 text-neutral-700 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-300'
+                          : '',
+                        isLimitSystemWarning
+                          ? 'bg-amber-50/95 border-amber-300 text-amber-900 dark:bg-amber-950/35 dark:border-amber-800 dark:text-amber-200'
                           : '',
                         isDebugSystemNote
                           ? 'bg-red-50/90 border-red-200 text-red-900 dark:bg-red-950/35 dark:border-red-900 dark:text-red-200'
@@ -7109,6 +7262,8 @@ export default function App() {
                           className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] ${
                             isDebugSystemNote
                               ? 'italic'
+                              : isLimitSystemWarning
+                                ? 'font-semibold text-amber-900 dark:text-amber-200'
                               : 'text-neutral-700 dark:text-neutral-300'
                           }`}
                           style={isDebugSystemNote ? { color: debugNoteColor } : undefined}
@@ -7415,7 +7570,7 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                     'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors',
                     settingsPopover === 'mode'
                       ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
-                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800',
+                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
                   ].join(' ')}
                   title={`Mode: ${INTERACTION_MODE_META[interactionMode].label}`}
                   onClick={() =>
@@ -7458,7 +7613,7 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                     'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors',
                     settingsPopover === 'sandbox'
                       ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
-                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800',
+                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
                   ].join(' ')}
                   title={`Sandbox: ${w.sandbox}`}
                   onClick={() =>
@@ -7501,7 +7656,7 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                     'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors',
                     settingsPopover === 'permission'
                       ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
-                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800',
+                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
                   ].join(' ')}
                   title={`Permissions: ${w.permissionMode}`}
                   onClick={() =>

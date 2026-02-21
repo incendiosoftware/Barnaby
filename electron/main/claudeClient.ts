@@ -1,5 +1,21 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import path from 'node:path'
 import { EventEmitter } from 'node:events'
+
+import { generateWorkspaceTreeText } from './fileTree'
+import { resolveAtFileReferences } from './atFileResolver'
+
+/** Ensure npm global bin is in PATH so Electron can find claude CLI. */
+function getClaudeSpawnEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  if (process.platform === 'win32') {
+    const npmBin = process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : ''
+    if (npmBin && env.PATH && !env.PATH.includes(npmBin)) {
+      env.PATH = `${npmBin}${path.delimiter}${env.PATH}`
+    }
+  }
+  return env
+}
 
 export type ClaudeClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
@@ -80,10 +96,13 @@ export class ClaudeClient extends EventEmitter {
     const trimmed = text.trim()
     if (!trimmed) return
 
-    this.history.push({ role: 'user', text: trimmed })
+    const fileContext = resolveAtFileReferences(trimmed, this.cwd)
+    this.history.push({ role: 'user', text: trimmed + fileContext })
 
-    const COMPLETION_SYSTEM =
-      'You are a coding assistant running inside Barnaby. Complete tasks fully and return concrete outputs.'
+    const tree = generateWorkspaceTreeText(this.cwd)
+    const COMPLETION_SYSTEM = `You are a coding assistant running inside Barnaby. I have provided the workspace structure below. I will provide file contents when you ask or when I reference them (e.g. @filename).
+
+${tree}`
     const prompt = this.buildPrompt()
     const permissionMode = this.permissionMode === 'proceed-always' ? 'acceptEdits' : 'default'
 
@@ -100,21 +119,26 @@ export class ClaudeClient extends EventEmitter {
           permissionMode,
           '--append-system-prompt',
           COMPLETION_SYSTEM,
-          prompt,
         ]
+        const spawnOpts = {
+          cwd: this.cwd,
+          stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
+          env: getClaudeSpawnEnv(),
+        }
         const proc =
           process.platform === 'win32'
             ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'claude', ...args], {
-                cwd: this.cwd,
-                stdio: ['pipe', 'pipe', 'pipe'],
+                ...spawnOpts,
                 windowsHide: true,
-              })
-            : spawn('claude', args, {
-                cwd: this.cwd,
-                stdio: ['pipe', 'pipe', 'pipe'],
-              })
+              } as object)
+            : spawn('claude', args, spawnOpts)
 
         this.activeProc = proc
+        
+        // Write prompt to stdin
+        proc.stdin.write(prompt)
+        proc.stdin.end()
+
         proc.stdout.setEncoding('utf8')
         proc.stderr.setEncoding('utf8')
 
@@ -201,14 +225,18 @@ export class ClaudeClient extends EventEmitter {
 
   private async assertClaudeCliAvailable() {
     await new Promise<void>((resolve, reject) => {
+      const spawnOpts = {
+        cwd: this.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
+        env: getClaudeSpawnEnv(),
+      }
       const proc =
         process.platform === 'win32'
           ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'claude', '--version'], {
-              cwd: this.cwd,
-              stdio: ['ignore', 'pipe', 'pipe'],
+              ...spawnOpts,
               windowsHide: true,
-            })
-          : spawn('claude', ['--version'], { cwd: this.cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+            } as object)
+          : spawn('claude', ['--version'], spawnOpts)
 
       let stderr = ''
       proc.stderr.setEncoding('utf8')

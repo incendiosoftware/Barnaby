@@ -1,5 +1,21 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import path from 'node:path'
 import { EventEmitter } from 'node:events'
+
+/** Ensure npm global bin is in PATH so Electron can find gemini CLI. */
+function getGeminiSpawnEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  if (process.platform === 'win32') {
+    const npmBin = process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : ''
+    if (npmBin && env.PATH && !env.PATH.includes(npmBin)) {
+      env.PATH = `${npmBin}${path.delimiter}${env.PATH}`
+    }
+  }
+  return env
+}
+
+import { generateWorkspaceTreeText } from './fileTree'
+import { resolveAtFileReferences } from './atFileResolver'
 
 export type GeminiClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
@@ -96,10 +112,13 @@ export class GeminiClient extends EventEmitter {
 
     const imageRefs = imagePaths.length > 0 ? '\n\n' + imagePaths.map((p) => `@${p}`).join('\n') : ''
     const userText = trimmed ? trimmed + imageRefs : imagePaths.map((p) => `@${p}`).join('\n')
-    this.history.push({ role: 'user', text: userText })
+    const fileContext = resolveAtFileReferences(userText, this.cwd)
+    this.history.push({ role: 'user', text: userText + fileContext })
 
-    const COMPLETION_SYSTEM =
-      'You are a coding assistant with full workspace access. You have tools to read files, write files, search, and make edits. Use them to complete tasks. Execute your plan—do not stop after describing it. When the user includes image references (@path), interpret and respond to the images.'
+    const tree = generateWorkspaceTreeText(this.cwd)
+    const COMPLETION_SYSTEM = `You are a coding assistant. I have provided the workspace structure below. I will provide file contents when you ask or when I reference them (e.g. @filename).
+
+${tree}`
     const prompt = this.buildPrompt(COMPLETION_SYSTEM)
     await this.runTurn(prompt)
   }
@@ -108,10 +127,13 @@ export class GeminiClient extends EventEmitter {
     const trimmed = text.trim()
     if (!trimmed) return
 
-    this.history.push({ role: 'user', text: trimmed })
+    const fileContext = resolveAtFileReferences(trimmed, this.cwd)
+    this.history.push({ role: 'user', text: trimmed + fileContext })
 
-    const COMPLETION_SYSTEM =
-      'You are a coding assistant with full workspace access. You have tools to read files, write files, search, and make edits. Use them to complete tasks. Execute your plan—do not stop after describing it.'
+    const tree = generateWorkspaceTreeText(this.cwd)
+    const COMPLETION_SYSTEM = `You are a coding assistant. I have provided the workspace structure below. I will provide file contents when you ask or when I reference them (e.g. @filename).
+
+${tree}`
     const prompt = this.buildPrompt(COMPLETION_SYSTEM)
     await this.runTurn(prompt)
   }
@@ -119,8 +141,13 @@ export class GeminiClient extends EventEmitter {
   private async runTurn(prompt: string): Promise<void> {
     const startTurn = (modelId: string): Promise<void> =>
       new Promise((resolve, reject) => {
-        const args = ['-m', modelId, '-p', prompt, '--approval-mode=auto_edit']
-        const spawnOpts = { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'] as const }
+        // Use stdin for the prompt to bypass command line length limits
+        const args = ['-m', modelId, '--approval-mode=auto_edit']
+        const spawnOpts = {
+          cwd: this.cwd,
+          stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
+          env: getGeminiSpawnEnv(),
+        }
         const proc =
           process.platform === 'win32'
             ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
@@ -130,6 +157,11 @@ export class GeminiClient extends EventEmitter {
             : spawn('gemini', args, spawnOpts)
 
         this.activeProc = proc
+        
+        // Write prompt to stdin
+        proc.stdin.write(prompt)
+        proc.stdin.end()
+
         proc.stdout.setEncoding('utf8')
         proc.stderr.setEncoding('utf8')
 
@@ -228,7 +260,11 @@ export class GeminiClient extends EventEmitter {
 
   private async assertGeminiCliAvailable() {
     await new Promise<void>((resolve, reject) => {
-      const spawnOpts = { cwd: this.cwd, stdio: ['ignore', 'pipe', 'pipe'] as const }
+      const spawnOpts = {
+        cwd: this.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
+        env: getGeminiSpawnEnv(),
+      }
       const proc =
         process.platform === 'win32'
           ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', '--version'], {

@@ -35,7 +35,7 @@ export type CodexConnectOptions = {
   provider?: 'codex' | 'claude' | 'gemini'
   permissionMode?: 'verify-first' | 'proceed-always'
   approvalPolicy?: 'on-request' | 'never'
-  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandbox?: 'read-only' | 'workspace-write'
 }
 
 export class CodexAppServerClient extends EventEmitter {

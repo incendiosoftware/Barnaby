@@ -1,9 +1,38 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { buildTimelineForPanel } from './chat/timelineParser'
 import type { TimelineUnit } from './chat/timelineTypes'
+
+function detectLanguage(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() || ''
+  const map: Record<string, string> = {
+    ts: 'typescript',
+    tsx: 'tsx',
+    js: 'javascript',
+    jsx: 'jsx',
+    json: 'json',
+    css: 'css',
+    html: 'html',
+    md: 'markdown',
+    py: 'python',
+    sh: 'bash',
+    yml: 'yaml',
+    yaml: 'yaml',
+    rs: 'rust',
+    go: 'go',
+    java: 'java',
+    c: 'c',
+    cpp: 'cpp',
+    xml: 'xml',
+    sql: 'sql',
+    dockerfile: 'dockerfile',
+  }
+  return map[ext] || 'text'
+}
 
 type Theme = 'light' | 'dark'
 
@@ -32,7 +61,7 @@ type ChatMessage = {
   createdAt?: number
 }
 type PermissionMode = 'verify-first' | 'proceed-always'
-type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+type SandboxMode = 'read-only' | 'workspace-write'
 type AgentInteractionMode = 'agent' | 'plan' | 'debug' | 'ask'
 
 type LayoutMode = 'vertical' | 'horizontal' | 'grid'
@@ -260,10 +289,8 @@ type ActivityFeedItem = {
   count: number
 }
 
-const DEFAULT_WORKSPACE_ROOT = 'E:\\Retirement\\FIREMe'
 const DEFAULT_MODEL = 'gpt-5.3-codex'
 const MODEL_BANNER_PREFIX = 'Model: '
-const STARTUP_READY_MESSAGE = 'I am ready'
 const AUTO_CONTINUE_PROMPT = 'Please continue from where you left off. Complete the task fully.'
 const STARTUP_LOCKED_WORKSPACE_PROMPT =
   'The workspace being opened is locked by another Barnaby. Select another workspace or try again.'
@@ -478,19 +505,10 @@ function renderSandboxSymbol(mode: SandboxMode) {
       </svg>
     )
   }
-  if (mode === 'workspace-write') {
-    return (
-      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-        <path d="M2 4.8H6L7.2 6H14V12.8H2V4.8Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-        <path d="M2 6H14" stroke="currentColor" strokeWidth="1.1" />
-      </svg>
-    )
-  }
   return (
     <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M8 2.2L14 13H2L8 2.2Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-      <path d="M8 5.8V9.3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      <circle cx="8" cy="11.2" r="0.8" fill="currentColor" />
+      <path d="M2 4.8H6L7.2 6H14V12.8H2V4.8Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+      <path d="M2 6H14" stroke="currentColor" strokeWidth="1.1" />
     </svg>
   )
 }
@@ -763,7 +781,7 @@ const WORKSPACE_THEME_INHERIT = 'application'
 
 const THEMES: StandaloneTheme[] = [
   { id: 'default-light', name: 'Default Light', mode: 'light', accent500: '#3b82f6', accent600: '#2563eb', accent700: '#1d4ed8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(30,58,138,0.28)', dark950: '#0a0a0a', dark900: '#171717' },
-  { id: 'default-dark', name: 'Default Dark', mode: 'dark', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#32363d', dark900: '#3f444d' },
+  { id: 'default-dark', name: 'Default Dark', mode: 'dark', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#383838', dark900: '#454545' },
   { id: 'obsidian-black', name: 'Obsidian Black', mode: 'dark', accent500: '#7c3aed', accent600: '#6d28d9', accent700: '#5b21b6', accentText: '#ddd6fe', accentSoft: '#ede9fe', accentSoftDark: 'rgba(124,58,237,0.24)', dark950: '#000000', dark900: '#0a0a0a' },
   { id: 'dracula', name: 'Dracula', mode: 'dark', accent500: '#bd93f9', accent600: '#a87ef5', accent700: '#8f62ea', accentText: '#f3e8ff', accentSoft: '#f5f3ff', accentSoftDark: 'rgba(189,147,249,0.25)', dark950: '#191a21', dark900: '#232533' },
   { id: 'nord-light', name: 'Nord Light', mode: 'light', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#2e3440', dark900: '#3b4252' },
@@ -937,12 +955,12 @@ function normalizeWorkspaceThemeId(value: unknown): string {
 }
 
 function getInitialWorkspaceRoot() {
-  return globalThis.localStorage?.getItem(WORKSPACE_STORAGE_KEY) ?? DEFAULT_WORKSPACE_ROOT
+  return (globalThis.localStorage?.getItem(WORKSPACE_STORAGE_KEY) ?? '').trim()
 }
 
 function getInitialWorkspaceDockSide(): WorkspaceDockSide {
   const stored = (globalThis.localStorage?.getItem(WORKSPACE_DOCK_SIDE_STORAGE_KEY) ?? '').toLowerCase()
-  return stored === 'left' ? 'left' : 'right'
+  return stored === 'right' ? 'right' : 'left'
 }
 
 function getInitialModelConfig(): ModelConfig {
@@ -996,13 +1014,13 @@ function getInitialWorkspaceList(): string[] {
   const root = getInitialWorkspaceRoot()
   try {
     const stored = globalThis.localStorage?.getItem(WORKSPACE_LIST_STORAGE_KEY)
-    if (!stored) return [root]
+    if (!stored) return root ? [root] : []
     const list = JSON.parse(stored) as string[]
-    if (!Array.isArray(list)) return [root]
+    if (!Array.isArray(list)) return root ? [root] : []
     const deduped = [...new Set([root, ...list])]
     return deduped.filter(Boolean)
   } catch {
-    return [root]
+    return root ? [root] : []
   }
 }
 
@@ -1073,7 +1091,7 @@ function parseChatHistoryEntries(raw: unknown, fallbackWorkspaceRoot: string): C
     const title = typeof record.title === 'string' && record.title.trim() ? record.title.trim() : 'Untitled chat'
     const savedAt = typeof record.savedAt === 'number' ? record.savedAt : Date.now()
     const sandbox: SandboxMode =
-      record.sandbox === 'read-only' || record.sandbox === 'workspace-write' || record.sandbox === 'danger-full-access'
+      record.sandbox === 'read-only' || record.sandbox === 'workspace-write'
         ? record.sandbox
         : 'workspace-write'
     const permissionMode: PermissionMode = record.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
@@ -1219,13 +1237,13 @@ function parsePersistedAgentPanel(raw: unknown, fallbackWorkspaceRoot: string): 
   const title = typeof rec.title === 'string' && rec.title.trim() ? rec.title.trim() : `Agent ${id.slice(-4)}`
   const permissionMode: PermissionMode = rec.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
   const sandbox: SandboxMode =
-    rec.sandbox === 'read-only' || rec.sandbox === 'workspace-write' || rec.sandbox === 'danger-full-access'
+    rec.sandbox === 'read-only' || rec.sandbox === 'workspace-write'
       ? rec.sandbox
       : 'workspace-write'
   const cwd =
     typeof rec.cwd === 'string' && rec.cwd.trim()
       ? rec.cwd
-      : fallbackWorkspaceRoot || getInitialWorkspaceRoot()
+      : fallbackWorkspaceRoot || ''
   return {
     id,
     historyId: typeof rec.historyId === 'string' && rec.historyId ? rec.historyId : newId(),
@@ -1258,7 +1276,7 @@ function parsePersistedEditorPanel(raw: unknown, fallbackWorkspaceRoot: string):
     workspaceRoot:
       typeof rec.workspaceRoot === 'string' && rec.workspaceRoot.trim()
         ? rec.workspaceRoot
-        : fallbackWorkspaceRoot || getInitialWorkspaceRoot(),
+        : fallbackWorkspaceRoot || '',
     relativePath,
     title: typeof rec.title === 'string' && rec.title.trim() ? rec.title.trim() : fileNameFromRelativePath(relativePath),
     fontScale: clampFontScale(rec.fontScale),
@@ -1772,13 +1790,6 @@ function makeDefaultPanel(id: string, cwd: string, historyId = newId()): AgentPa
         format: 'text',
         createdAt: Date.now(),
       },
-      {
-        id: newId(),
-        role: 'assistant',
-        content: STARTUP_READY_MESSAGE,
-        format: 'text',
-        createdAt: Date.now() + 1,
-      },
     ],
     attachments: [],
     input: '',
@@ -1796,12 +1807,6 @@ function withModelBanner(messages: ChatMessage[], model: string): ChatMessage[] 
   return [{ id: newId(), role: 'system', content: banner, format: 'text', createdAt: Date.now() }, ...messages]
 }
 
-function withReadyAck(messages: ChatMessage[]): ChatMessage[] {
-  const last = messages[messages.length - 1]
-  if (last?.role === 'assistant' && last.content.trim() === STARTUP_READY_MESSAGE) return messages
-  return [...messages, { id: newId(), role: 'assistant', content: STARTUP_READY_MESSAGE, format: 'text', createdAt: Date.now() }]
-}
-
 function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSettings> {
   try {
     const raw = globalThis.localStorage?.getItem(WORKSPACE_SETTINGS_STORAGE_KEY)
@@ -1815,7 +1820,7 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
         defaultModel: typeof value?.defaultModel === 'string' && value.defaultModel ? value.defaultModel : DEFAULT_MODEL,
         permissionMode: value?.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first',
         sandbox:
-          value?.sandbox === 'read-only' || value?.sandbox === 'danger-full-access'
+          value?.sandbox === 'read-only'
             ? value.sandbox
             : 'workspace-write',
         themeId: (() => {
@@ -2793,7 +2798,10 @@ export default function App() {
     let disposed = false
     const bootstrapWorkspace = async () => {
       const preferredRoot = workspaceRootRef.current?.trim()
-      if (!preferredRoot) return
+      if (!preferredRoot) {
+        openWorkspacePicker('Select a workspace folder to get started.')
+        return
+      }
 
       const failureRef = { value: null as WorkspaceApplyFailure | null }
       const openedPreferred = await applyWorkspaceRoot(preferredRoot, {
@@ -2861,9 +2869,7 @@ export default function App() {
 
   function upsertPanelToHistory(panel: AgentPanelState) {
     const sanitizedMessages = stripSyntheticAutoContinueMessages(panel.messages)
-    const hasConversation = sanitizedMessages.some(
-      (m) => m.role === 'user' || (m.role === 'assistant' && m.content.trim() !== STARTUP_READY_MESSAGE),
-    )
+    const hasConversation = sanitizedMessages.some((m) => m.role === 'user' || m.role === 'assistant')
     if (!hasConversation) return
     const entryId = panel.historyId || newId()
     const title = getConversationPrecis(panel) || panel.title || 'Untitled chat'
@@ -3559,8 +3565,7 @@ export default function App() {
 
   function sandboxModeDescription(mode: SandboxMode) {
     if (mode === 'read-only') return 'Read project files only; no file edits or shell writes.'
-    if (mode === 'workspace-write') return 'Can edit files and run commands inside the workspace folder.'
-    return 'Full access to your machine. Use only when necessary.'
+    return 'Can edit files and run commands inside the workspace folder.'
   }
 
   function formatError(err: unknown) {
@@ -4857,7 +4862,7 @@ export default function App() {
           return {
             ...w,
             cwd: workspaceRoot,
-            messages: withReadyAck(withModelBanner(w.messages, nextModel)),
+            messages: withModelBanner(w.messages, nextModel),
           }
         }),
       )
@@ -5215,7 +5220,6 @@ export default function App() {
               >
                 <option value="read-only">Read only</option>
                 <option value="workspace-write">Workspace write</option>
-                <option value="danger-full-access">Danger full access</option>
               </select>
               <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
                 {sandboxModeDescription(workspaceForm.sandbox)}
@@ -5662,9 +5666,17 @@ export default function App() {
                 </div>
               )}
               {!filePreview.loading && !filePreview.error && !filePreview.binary && (
-                <pre className="p-4 m-0 text-[12px] leading-5 font-mono whitespace-pre overflow-auto text-blue-950 dark:text-blue-100 bg-blue-50/60 dark:bg-blue-950/20">
-                  {filePreview.content}
-                </pre>
+                <div className="h-full overflow-hidden text-[12px] leading-5 font-mono">
+                  <SyntaxHighlighter
+                    language={detectLanguage(filePreview.relativePath)}
+                    style={activeTheme.mode === 'dark' ? oneDark : oneLight}
+                    customStyle={{ margin: 0, padding: '1rem', height: '100%', fontSize: '12px', background: 'transparent' }}
+                    showLineNumbers={true}
+                    wrapLines={false}
+                  >
+                    {filePreview.content}
+                  </SyntaxHighlighter>
+                </div>
               )}
             </div>
             <div className="px-3 py-1.5 border-t border-neutral-200 dark:border-neutral-800 text-[11px] text-neutral-500 dark:text-neutral-400 flex items-center justify-between">
@@ -6391,6 +6403,27 @@ export default function App() {
                     <span className="text-xs text-neutral-600 dark:text-neutral-400">{diagnosticsActionStatus}</span>
                   )}
                 </div>
+
+                <div className="pt-2 border-t border-neutral-200 dark:border-neutral-800">
+                  <div className="text-xs font-medium text-red-600 dark:text-red-400 mb-1">Danger Zone</div>
+                  <button
+                    type="button"
+                    className="px-2.5 py-1.5 rounded-md border border-red-200 bg-red-50 hover:bg-red-100 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/20 dark:hover:bg-red-900/40 dark:text-red-400"
+                    onClick={() => {
+                      if (confirm('Are you sure you want to reset all application settings and data? This will clear your chat history, preferences, and local state, then restart the application as a fresh install. This action cannot be undone.')) {
+                        try {
+                          window.localStorage.clear()
+                          void api.resetApplicationData?.()
+                        } catch (err) {
+                          alert(`Failed to reset: ${err}`)
+                        }
+                      }
+                    }}
+                  >
+                    Reset application to factory defaults
+                  </button>
+                </div>
+
                 {diagnosticsError && (
                   <div className="text-xs text-red-600 dark:text-red-400">{diagnosticsError}</div>
                 )}
@@ -6733,7 +6766,6 @@ export default function App() {
                   >
                     <option value="read-only">Read only</option>
                     <option value="workspace-write">Workspace write</option>
-                    <option value="danger-full-access">Danger full access</option>
                   </select>
                   <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
                     {sandboxModeDescription(workspaceForm.sandbox)}
@@ -7198,29 +7230,35 @@ export default function App() {
                                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                                       </svg>
                                     </summary>
-                                    <pre
-                                      ref={(el) => registerCodeBlockViewport(codeBlockId, el)}
-                                      onScroll={() => onCodeBlockViewportScroll(codeBlockId)}
-                                      className="m-0 rounded-t-none border-t border-blue-200 dark:border-blue-900/60 p-3 overflow-auto max-h-80 whitespace-pre bg-white/80 dark:bg-neutral-950/80"
-                                    >
+                                    <div className="rounded-b-lg overflow-hidden border-t border-blue-200 dark:border-blue-900/60">
                                       {isDiff ? (
-                                        <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>
-                                          {diffLines.map((line, idx) => (
-                                            <div
-                                              key={idx}
-                                              className={[
-                                                line.startsWith('+') ? 'bg-emerald-100/80 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-200' : '',
-                                                line.startsWith('-') ? 'bg-rose-100/80 text-rose-900 dark:bg-rose-900/30 dark:text-rose-200' : '',
-                                              ].join(' ')}
-                                            >
-                                              {line}
-                                            </div>
-                                          ))}
-                                        </code>
+                                        <div className="p-3 overflow-auto max-h-80 whitespace-pre bg-white/80 dark:bg-neutral-950/80">
+                                          <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>
+                                            {diffLines.map((line, idx) => (
+                                              <div
+                                                key={idx}
+                                                className={[
+                                                  line.startsWith('+') ? 'bg-emerald-100/80 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-200' : '',
+                                                  line.startsWith('-') ? 'bg-rose-100/80 text-rose-900 dark:bg-rose-900/30 dark:text-rose-200' : '',
+                                                ].join(' ')}
+                                              >
+                                                {line}
+                                              </div>
+                                            ))}
+                                          </code>
+                                        </div>
                                       ) : (
-                                        <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>{rawChildren}</code>
+                                        <SyntaxHighlighter
+                                          language={lang}
+                                          style={activeTheme.mode === 'dark' ? oneDark : oneLight}
+                                          customStyle={{ margin: 0, padding: '0.75rem', maxHeight: '20rem', fontSize: '12px', background: activeTheme.mode === 'dark' ? 'rgba(10, 10, 10, 0.5)' : 'rgba(255, 255, 255, 0.5)' }}
+                                          showLineNumbers={true}
+                                          wrapLines={false}
+                                        >
+                                          {normalized}
+                                        </SyntaxHighlighter>
                                       )}
-                                    </pre>
+                                    </div>
                                   </details>
                                 )
                               },
@@ -7324,29 +7362,35 @@ export default function App() {
                                 <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                               </svg>
                               </summary>
-                              <pre
-                                ref={(el) => registerCodeBlockViewport(codeBlockId, el)}
-                                onScroll={() => onCodeBlockViewportScroll(codeBlockId)}
-                                className="m-0 rounded-t-none border-t border-blue-200 dark:border-blue-900/60 p-3 overflow-auto max-h-80 whitespace-pre bg-white/80 dark:bg-neutral-950/80"
-                              >
-                              {isDiff ? (
-                                <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>
-                                  {diffLines.map((line, idx) => (
-                                    <div
-                                      key={idx}
-                                      className={[
-                                        line.startsWith('+') ? 'bg-emerald-100/80 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-200' : '',
-                                        line.startsWith('-') ? 'bg-rose-100/80 text-rose-900 dark:bg-rose-900/30 dark:text-rose-200' : '',
-                                      ].join(' ')}
-                                    >
-                                      {line}
+                                    <div className="rounded-b-lg overflow-hidden border-t border-blue-200 dark:border-blue-900/60">
+                                      {isDiff ? (
+                                        <div className="p-3 overflow-auto max-h-80 whitespace-pre bg-white/80 dark:bg-neutral-950/80">
+                                          <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>
+                                            {diffLines.map((line, idx) => (
+                                              <div
+                                                key={idx}
+                                                className={[
+                                                  line.startsWith('+') ? 'bg-emerald-100/80 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-200' : '',
+                                                  line.startsWith('-') ? 'bg-rose-100/80 text-rose-900 dark:bg-rose-900/30 dark:text-rose-200' : '',
+                                                ].join(' ')}
+                                              >
+                                                {line}
+                                              </div>
+                                            ))}
+                                          </code>
+                                        </div>
+                                      ) : (
+                                        <SyntaxHighlighter
+                                          language={lang}
+                                          style={activeTheme.mode === 'dark' ? oneDark : oneLight}
+                                          customStyle={{ margin: 0, padding: '0.75rem', maxHeight: '20rem', fontSize: '12px', background: activeTheme.mode === 'dark' ? 'rgba(10, 10, 10, 0.5)' : 'rgba(255, 255, 255, 0.5)' }}
+                                          showLineNumbers={true}
+                                          wrapLines={false}
+                                        >
+                                          {normalized}
+                                        </SyntaxHighlighter>
+                                      )}
                                     </div>
-                                  ))}
-                                </code>
-                              ) : (
-                                <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>{rawChildren}</code>
-                              )}
-                              </pre>
                             </details>
                           )
                         },
@@ -7630,7 +7674,6 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                     {([
                       ['read-only', 'Read only'],
                       ['workspace-write', 'Workspace write'],
-                      ['danger-full-access', 'Danger full access'],
                     ] as const).map(([value, label]) => (
                       <button
                         key={value}

@@ -71,7 +71,7 @@ interface Window {
         model: string
         permissionMode?: 'verify-first' | 'proceed-always'
         approvalPolicy?: 'on-request' | 'never'
-        sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
+        sandbox?: 'read-only' | 'workspace-write'
         provider?: 'codex' | 'claude' | 'gemini'
         modelConfig?: Record<string, string>
         initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
@@ -170,6 +170,7 @@ interface Window {
     getProviderAuthStatus(config: ProviderConfigForAuth): Promise<ProviderAuthStatus>
     startProviderLogin(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }>
     upgradeProviderCli(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }>
+    resetApplicationData(): Promise<void>
     getGeminiAvailableModels(): Promise<{ id: string; displayName: string }[]>
     getAvailableModels(): Promise<{
       codex: { id: string; displayName: string }[]

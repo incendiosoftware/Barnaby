@@ -14,7 +14,7 @@ export type CodexConnectOptions = {
   provider?: 'codex' | 'claude' | 'gemini'
   permissionMode?: 'verify-first' | 'proceed-always'
   approvalPolicy?: 'on-request' | 'never'
-  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandbox?: 'read-only' | 'workspace-write'
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
@@ -243,6 +243,9 @@ const api = {
   },
   upgradeProviderCli(config: ProviderConfigForAuth) {
     return ipcRenderer.invoke('agentorchestrator:upgradeProviderCli', config) as Promise<{ started: boolean; detail: string }>
+  },
+  resetApplicationData() {
+    return ipcRenderer.invoke('agentorchestrator:resetApplicationData') as Promise<void>
   },
   getGeminiAvailableModels() {
     return ipcRenderer.invoke('agentorchestrator:getGeminiAvailableModels') as Promise<{ id: string; displayName: string }[]>

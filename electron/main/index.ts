@@ -145,7 +145,7 @@ type PersistedChatHistoryEntry = {
   workspaceRoot: string
   model: string
   permissionMode: 'verify-first' | 'proceed-always'
-  sandbox: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandbox: 'read-only' | 'workspace-write'
   fontScale: number
   messages: PersistedChatMessage[]
 }
@@ -742,7 +742,7 @@ function sanitizePersistedChatHistory(raw: unknown): PersistedChatHistoryEntry[]
       model: typeof record.model === 'string' && record.model.trim() ? record.model.trim() : 'gpt-5',
       permissionMode: record.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first',
       sandbox:
-        record.sandbox === 'read-only' || record.sandbox === 'workspace-write' || record.sandbox === 'danger-full-access'
+        record.sandbox === 'read-only' || record.sandbox === 'workspace-write'
           ? record.sandbox
           : 'workspace-write',
       fontScale: typeof record.fontScale === 'number' && Number.isFinite(record.fontScale) ? record.fontScale : 1,
@@ -2086,6 +2086,24 @@ ipcMain.handle('agentorchestrator:upgradeProviderCli', async (_evt, config: Prov
   return launchProviderUpgrade(config)
 })
 
+ipcMain.handle('agentorchestrator:resetApplicationData', async () => {
+  try {
+    const userData = app.getPath('userData')
+    // appStatePath and chatHistoryPath
+    const storageDir = path.join(userData, APP_STORAGE_DIRNAME)
+    const appStatePath = path.join(storageDir, APP_STATE_FILENAME)
+    const chatHistoryPath = path.join(storageDir, CHAT_HISTORY_FILENAME)
+
+    if (fs.existsSync(appStatePath)) fs.unlinkSync(appStatePath)
+    if (fs.existsSync(chatHistoryPath)) fs.unlinkSync(chatHistoryPath)
+  } catch (err) {
+    console.error('Failed to reset application data:', err)
+  }
+  
+  app.relaunch()
+  app.exit(0)
+})
+
 ipcMain.handle('agentorchestrator:getGeminiAvailableModels', async () => {
   return getGeminiAvailableModels()
 })
@@ -2138,6 +2156,135 @@ function sendMenuAction(action: string, payload?: Record<string, unknown>) {
   const message = { action, ...payload }
   win?.webContents.send('agentorchestrator:menu', message)
   win?.webContents.send('fireharness:menu', message)
+}
+
+function createAboutWindow() {
+  const publicRoot = process.env.VITE_PUBLIC
+  if (!publicRoot) return
+
+  const splashImagePath = path.join(publicRoot, 'splash.png')
+  const splashImageUrl = pathToFileURL(splashImagePath).toString()
+  const version = app.getVersion()
+  const appName = 'Barnaby'
+  const description = 'Barnaby: local agent loops without API keys.'
+  const email = 'incendiosoftware@gmail.com'
+
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>About ${appName}</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #ececec;
+      color: #333;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      overflow: hidden;
+      user-select: none;
+    }
+    .container {
+      display: flex;
+      width: 100%;
+      height: 100%;
+    }
+    .left {
+      width: 40%;
+      background: #0b0b0b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .left img {
+      max-width: 80%;
+      max-height: 80%;
+      object-fit: contain;
+    }
+    .right {
+      width: 60%;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 24px;
+      font-weight: 600;
+    }
+    .version {
+      color: #666;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
+    .description {
+      font-size: 14px;
+      line-height: 1.4;
+      margin-bottom: 16px;
+    }
+    .contact {
+      font-size: 12px;
+      color: #888;
+    }
+    .contact a {
+      color: #0066cc;
+      text-decoration: none;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="left">
+      <img src="${splashImageUrl}" alt="Barnaby Splash" />
+    </div>
+    <div class="right">
+      <h1>${appName}</h1>
+      <div class="version">Version ${version}</div>
+      <div class="description">${description}</div>
+      <div class="contact">
+        Contact: <a href="mailto:${email}">${email}</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`
+
+  const aboutWin = new BrowserWindow({
+    width: 500,
+    height: 300,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: `About ${appName}`,
+    autoHideMenuBar: true,
+    parent: win ?? undefined,
+    modal: !!win,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  })
+  
+  aboutWin.setMenuBarVisibility(false)
+  aboutWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  
+  aboutWin.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http:') || url.startsWith('https:') || url.startsWith('mailto:')) {
+      shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  })
+
+  aboutWin.once('ready-to-show', () => {
+    aboutWin.show()
+  })
 }
 
 function setAppMenu() {
@@ -2225,23 +2372,7 @@ function setAppMenu() {
         {
           label: 'About Barnaby',
           click: () => {
-            const parent = win ?? BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-            const opts: Electron.MessageBoxOptions = {
-              type: 'info',
-              title: 'About Barnaby',
-              icon: path.join(process.env.VITE_PUBLIC, 'appicon.png'),
-              message: 'Barnaby',
-              detail: [
-                `Version: ${app.getVersion()}`,
-                'Contact: stuartmackereth@gmail.com',
-              ].join('\n'),
-              buttons: ['OK'],
-            }
-            if (parent) {
-              dialog.showMessageBox(parent, opts)
-            } else {
-              dialog.showMessageBox(opts)
-            }
+            createAboutWindow()
           },
         },
       ],

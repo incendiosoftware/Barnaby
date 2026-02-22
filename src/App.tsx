@@ -173,19 +173,29 @@ type ChatHistoryEntry = {
   messages: ChatMessage[]
 }
 
-type DiagnosticsMessageColorKey = 'debugNote' | 'activityUpdate' | 'reasoningUpdate' | 'operationTrace' | 'timelineMessage'
+type DiagnosticsMessageColors = {
+  debugNotes: string
+  activityUpdates: string
+  reasoningUpdates: string
+  operationTrace: string
+  thinkingProgress: string
+}
 
-type DiagnosticsMessageColors = Record<DiagnosticsMessageColorKey, string>
+type DiagnosticsConfig = {
+  showActivityUpdates: boolean
+  showReasoningUpdates: boolean
+  showOperationTrace: boolean
+  showThinkingProgress: boolean
+  colors: DiagnosticsMessageColors
+}
 
 type ApplicationSettings = {
   restoreSessionOnStartup: boolean
   themeId: string
   responseStyle: 'concise' | 'standard' | 'detailed'
   showDebugNotesInTimeline: boolean
-  showActivityUpdates: boolean
-  showReasoningUpdates: boolean
-  showOperationTrace: boolean
-  diagnosticsMessageColors: DiagnosticsMessageColors
+  verboseDiagnostics: boolean
+  showResponseDurationAfterPrompt: boolean
 }
 
 
@@ -295,8 +305,8 @@ const AUTO_CONTINUE_PROMPT = 'Please continue from where you left off. Complete 
 const STARTUP_LOCKED_WORKSPACE_PROMPT =
   'The workspace being opened is locked by another Barnaby. Select another workspace or try again.'
 
-type ModelProvider = 'codex' | 'claude' | 'gemini'
-type ConnectivityProvider = 'codex' | 'claude' | 'gemini'
+type ModelProvider = 'codex' | 'claude' | 'gemini' | 'openrouter'
+type ConnectivityProvider = 'codex' | 'claude' | 'gemini' | 'openrouter'
 
 type ModelInterface = {
   id: string
@@ -314,6 +324,7 @@ type AvailableCatalogModels = {
   codex: { id: string; displayName: string }[]
   claude: { id: string; displayName: string }[]
   gemini: { id: string; displayName: string }[]
+  openrouter: { id: string; displayName: string }[]
 }
 
 type AppSettingsView = 'connectivity' | 'models' | 'preferences' | 'agents' | 'diagnostics'
@@ -323,7 +334,7 @@ type ModelCatalogRefreshStatus = {
   message: string
 }
 
-type ProviderConfig = {
+type ProviderConfigCli = {
   id: string
   displayName: string
   enabled: boolean
@@ -337,10 +348,22 @@ type ProviderConfig = {
   isBuiltIn?: boolean
 }
 
-type CustomProviderConfig = Omit<ProviderConfig, 'isBuiltIn'>
+type ProviderConfigApi = {
+  id: string
+  displayName: string
+  enabled: boolean
+  type: 'api'
+  apiBaseUrl: string
+  loginUrl?: string
+  isBuiltIn?: boolean
+}
+
+type ProviderConfig = ProviderConfigCli | ProviderConfigApi
+
+type CustomProviderConfig = Omit<ProviderConfigCli, 'isBuiltIn'>
 
 type ProviderRegistry = {
-  overrides: Record<string, { displayName?: string; enabled?: boolean; cliPath?: string }>
+  overrides: Record<string, { displayName?: string; enabled?: boolean; cliPath?: string; apiBaseUrl?: string }>
   customProviders: CustomProviderConfig[]
 }
 
@@ -394,6 +417,8 @@ const DEFAULT_MODEL_INTERFACES: ModelInterface[] = [
   { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', provider: 'gemini', enabled: true },
   { id: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', provider: 'gemini', enabled: true },
   { id: 'gemini-3-pro-preview', displayName: 'Gemini 3 Pro (Preview)', provider: 'gemini', enabled: true },
+  { id: 'openrouter/auto', displayName: 'OpenRouter Auto', provider: 'openrouter', enabled: true },
+  { id: 'meta-llama/llama-3.3-70b-instruct:free', displayName: 'Llama 3.3 70B (Free)', provider: 'openrouter', enabled: true },
 ]
 
 const MAX_PANELS = 5
@@ -403,31 +428,30 @@ const MODAL_CARD_CLASS = 'rounded-2xl border border-neutral-200/80 dark:border-n
 const UI_BUTTON_SECONDARY_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
 const UI_BUTTON_PRIMARY_CLASS = 'px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-500'
 const UI_ICON_BUTTON_CLASS = 'h-9 w-9 inline-flex items-center justify-center rounded-lg border border-neutral-300 bg-white hover:bg-neutral-50 shadow-sm text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'
+const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700'
 const UI_TOOLBAR_ICON_BUTTON_CLASS = 'h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
 const UI_INPUT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 placeholder:text-neutral-500 dark:placeholder:text-neutral-400'
 const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100'
 const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
 const STATUS_SYMBOL_ICON_CLASS = 'h-[13px] w-[13px] text-neutral-600 dark:text-neutral-300'
-const CONNECTIVITY_PROVIDERS: ConnectivityProvider[] = ['codex', 'claude', 'gemini']
+const CONNECTIVITY_PROVIDERS: ConnectivityProvider[] = ['codex', 'claude', 'gemini', 'openrouter']
 const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'preferences', 'agents', 'diagnostics']
 const OPERATION_TRACE_VISIBLE_MS = 1200
 const OPERATION_TRACE_FADE_MS = 2600
 const OPERATION_TRACE_MIN_OPACITY = 0.4
-const DEFAULT_DIAGNOSTICS_MESSAGE_COLORS: DiagnosticsMessageColors = {
-  debugNote: '#b91c1c',
-  activityUpdate: '#b45309',
-  reasoningUpdate: '#047857',
-  operationTrace: '#1e3a8a',
-  timelineMessage: '#737373',
+const DEFAULT_DIAGNOSTICS_CONFIG: DiagnosticsConfig = {
+  showActivityUpdates: false,
+  showReasoningUpdates: false,
+  showOperationTrace: true,
+  showThinkingProgress: true,
+  colors: {
+    debugNotes: '#b91c1c',
+    activityUpdates: '#b45309',
+    reasoningUpdates: '#047857',
+    operationTrace: '#1e3a8a',
+    thinkingProgress: '#737373',
+  },
 }
-const DIAGNOSTICS_MESSAGE_COLOR_FIELDS: Array<{ key: DiagnosticsMessageColorKey; label: string }> = [
-  { key: 'debugNote', label: 'Debug notes' },
-  { key: 'activityUpdate', label: 'Activity updates' },
-  { key: 'reasoningUpdate', label: 'Reasoning updates' },
-  { key: 'operationTrace', label: 'Operation trace' },
-  { key: 'timelineMessage', label: 'Thinking/progress messages' },
-]
 
 const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderConfig> = {
   codex: {
@@ -466,6 +490,15 @@ const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderCon
     upgradePackage: '@google/gemini-cli',
     isBuiltIn: true,
   },
+  openrouter: {
+    id: 'openrouter',
+    displayName: 'OpenRouter',
+    enabled: true,
+    type: 'api',
+    apiBaseUrl: 'https://openrouter.ai/api/v1',
+    loginUrl: 'https://openrouter.ai/keys',
+    isBuiltIn: true,
+  },
 }
 
 function syncModelConfigWithCatalog(prev: ModelConfig, available: AvailableCatalogModels): ModelConfig {
@@ -473,11 +506,13 @@ function syncModelConfigWithCatalog(prev: ModelConfig, available: AvailableCatal
     codex: new Set(available.codex.map((m) => m.id)),
     claude: new Set(available.claude.map((m) => m.id)),
     gemini: new Set(available.gemini.map((m) => m.id)),
+    openrouter: new Set(available.openrouter.map((m) => m.id)),
   }
   const catalogModelsByProvider: Record<ModelProvider, { id: string; displayName: string }[]> = {
     codex: available.codex,
     claude: available.claude,
     gemini: available.gemini,
+    openrouter: available.openrouter,
   }
   const kept = prev.interfaces.filter((m) => {
     const catalogIds = catalogIdsByProvider[m.provider]
@@ -752,6 +787,7 @@ const WORKSPACE_SETTINGS_STORAGE_KEY = 'agentorchestrator.workspaceSettings'
 const WORKSPACE_DOCK_SIDE_STORAGE_KEY = 'agentorchestrator.workspaceDockSide'
 const MODEL_CONFIG_STORAGE_KEY = 'agentorchestrator.modelConfig'
 const PROVIDER_REGISTRY_STORAGE_KEY = 'agentorchestrator.providerRegistry'
+const SETUP_WIZARD_DONE_STORAGE_KEY = 'agentorchestrator.setupWizardDone'
 const EXPLORER_PREFS_STORAGE_KEY = 'agentorchestrator.explorerPrefsByWorkspace'
 const CHAT_HISTORY_STORAGE_KEY = 'agentorchestrator.chatHistory'
 const APP_SETTINGS_STORAGE_KEY = 'agentorchestrator.appSettings'
@@ -760,9 +796,9 @@ const MAX_FONT_SCALE = 1.5
 const FONT_SCALE_STEP = 0.05
 const INPUT_MAX_HEIGHT_PX = 220
 const DEFAULT_EXPLORER_PREFS: ExplorerPrefs = { showHiddenFiles: false, showNodeModules: false }
-const CONNECT_TIMEOUT_MS = 15000
-const TURN_START_TIMEOUT_MS = 15000
-const STALL_WATCHDOG_MS = 60000
+const CONNECT_TIMEOUT_MS = 30000
+const TURN_START_TIMEOUT_MS = 120000
+const STALL_WATCHDOG_MS = 180000
 const COLLAPSIBLE_CODE_MIN_LINES = 14
 const MAX_CHAT_HISTORY_ENTRIES = 80
 const DEFAULT_GPT_CONTEXT_TOKENS = 200_000
@@ -958,6 +994,19 @@ function getInitialWorkspaceRoot() {
   return (globalThis.localStorage?.getItem(WORKSPACE_STORAGE_KEY) ?? '').trim()
 }
 
+function getInitialSetupWizardDone() {
+  return (globalThis.localStorage?.getItem(SETUP_WIZARD_DONE_STORAGE_KEY) ?? '') === '1'
+}
+
+function getDefaultSetupWizardSelection(): Record<ConnectivityProvider, boolean> {
+  return {
+    codex: false,
+    claude: false,
+    gemini: false,
+    openrouter: true,
+  }
+}
+
 function getInitialWorkspaceDockSide(): WorkspaceDockSide {
   const stored = (globalThis.localStorage?.getItem(WORKSPACE_DOCK_SIDE_STORAGE_KEY) ?? '').toLowerCase()
   return stored === 'right' ? 'right' : 'left'
@@ -995,14 +1044,25 @@ function resolveProviderConfigs(registry: ProviderRegistry): ProviderConfig[] {
   for (const id of CONNECTIVITY_PROVIDERS) {
     const builtIn = DEFAULT_BUILTIN_PROVIDER_CONFIGS[id]
     const override = registry.overrides[id]
-    result.push({
-      ...builtIn,
-      ...(override && {
-        displayName: override.displayName ?? builtIn.displayName,
-        enabled: override.enabled ?? builtIn.enabled,
-        cliPath: override.cliPath,
-      }),
-    })
+    if (builtIn.type === 'cli') {
+      result.push({
+        ...builtIn,
+        ...(override && {
+          displayName: override.displayName ?? builtIn.displayName,
+          enabled: override.enabled ?? builtIn.enabled,
+          cliPath: override.cliPath,
+        }),
+      })
+    } else {
+      result.push({
+        ...builtIn,
+        ...(override && {
+          displayName: override.displayName ?? builtIn.displayName,
+          enabled: override.enabled ?? builtIn.enabled,
+          apiBaseUrl: override.apiBaseUrl ?? builtIn.apiBaseUrl,
+        }),
+      })
+    }
   }
   for (const custom of registry.customProviders) {
     result.push({ ...custom, isBuiltIn: false })
@@ -1124,45 +1184,19 @@ function getInitialChatHistory(): ChatHistoryEntry[] {
   }
 }
 
-function normalizeColorHex(value: unknown, fallback: string): string {
-  if (typeof value !== 'string') return fallback
-  const normalized = value.trim().toLowerCase()
-  if (/^#[0-9a-f]{6}$/.test(normalized)) return normalized
-  const short = normalized.match(/^#([0-9a-f]{3})$/)
-  if (!short) return fallback
-  const [, raw] = short
-  return `#${raw[0]}${raw[0]}${raw[1]}${raw[1]}${raw[2]}${raw[2]}`
-}
-
-function parseDiagnosticsMessageColors(raw: unknown): DiagnosticsMessageColors {
-  const source =
-    raw && typeof raw === 'object'
-      ? (raw as Partial<Record<DiagnosticsMessageColorKey, unknown>>)
-      : {}
-  return {
-    debugNote: normalizeColorHex(source.debugNote, DEFAULT_DIAGNOSTICS_MESSAGE_COLORS.debugNote),
-    activityUpdate: normalizeColorHex(source.activityUpdate, DEFAULT_DIAGNOSTICS_MESSAGE_COLORS.activityUpdate),
-    reasoningUpdate: normalizeColorHex(source.reasoningUpdate, DEFAULT_DIAGNOSTICS_MESSAGE_COLORS.reasoningUpdate),
-    operationTrace: normalizeColorHex(source.operationTrace, DEFAULT_DIAGNOSTICS_MESSAGE_COLORS.operationTrace),
-    timelineMessage: normalizeColorHex(source.timelineMessage, DEFAULT_DIAGNOSTICS_MESSAGE_COLORS.timelineMessage),
-  }
-}
 
 function getInitialApplicationSettings(): ApplicationSettings {
+  const defaults: ApplicationSettings = {
+    restoreSessionOnStartup: true,
+    themeId: DEFAULT_THEME_ID,
+    responseStyle: 'standard',
+    showDebugNotesInTimeline: false,
+    verboseDiagnostics: false,
+    showResponseDurationAfterPrompt: false,
+  }
   try {
     const raw = globalThis.localStorage?.getItem(APP_SETTINGS_STORAGE_KEY)
-    if (!raw) {
-      return {
-        restoreSessionOnStartup: true,
-        themeId: DEFAULT_THEME_ID,
-        responseStyle: 'standard',
-        showDebugNotesInTimeline: false,
-        showActivityUpdates: false,
-        showReasoningUpdates: false,
-        showOperationTrace: true,
-        diagnosticsMessageColors: { ...DEFAULT_DIAGNOSTICS_MESSAGE_COLORS },
-      }
-    }
+    if (!raw) return defaults
     const parsed = JSON.parse(raw) as Partial<ApplicationSettings>
     return {
       restoreSessionOnStartup:
@@ -1176,22 +1210,11 @@ function getInitialApplicationSettings(): ApplicationSettings {
           ? parsed.responseStyle
           : 'standard',
       showDebugNotesInTimeline: Boolean(parsed?.showDebugNotesInTimeline),
-      showActivityUpdates: Boolean(parsed?.showActivityUpdates),
-      showReasoningUpdates: Boolean(parsed?.showReasoningUpdates),
-      showOperationTrace: parsed?.showOperationTrace !== false,
-      diagnosticsMessageColors: parseDiagnosticsMessageColors(parsed?.diagnosticsMessageColors),
+      verboseDiagnostics: Boolean(parsed?.verboseDiagnostics),
+      showResponseDurationAfterPrompt: Boolean(parsed?.showResponseDurationAfterPrompt),
     }
   } catch {
-    return {
-      restoreSessionOnStartup: true,
-      themeId: DEFAULT_THEME_ID,
-      responseStyle: 'standard',
-      showDebugNotesInTimeline: false,
-      showActivityUpdates: false,
-      showReasoningUpdates: false,
-      showOperationTrace: true,
-      diagnosticsMessageColors: { ...DEFAULT_DIAGNOSTICS_MESSAGE_COLORS },
-    }
+    return defaults
   }
 }
 
@@ -1581,6 +1604,13 @@ function describeActivityEntry(evt: any): { label: string; detail?: string; kind
       kind: 'event',
     }
   }
+  if (evt.type === 'thinking') {
+    return {
+      label: 'Thinking',
+      detail: typeof evt.message === 'string' ? evt.message : undefined,
+      kind: 'event',
+    }
+  }
   if (evt.type === 'assistantCompleted') return { label: 'Turn complete', kind: 'event' }
   if (evt.type === 'rawNotification' && typeof evt.method === 'string') {
     const method = evt.method
@@ -1883,6 +1913,13 @@ export default function App() {
   const [showWorkspaceModal, setShowWorkspaceModal] = useState(false)
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false)
   const [workspacePickerPrompt, setWorkspacePickerPrompt] = useState<string | null>(null)
+  const [workspacePickerError, setWorkspacePickerError] = useState<string | null>(null)
+  const [workspacePickerOpening, setWorkspacePickerOpening] = useState<string | null>(null)
+  const [showSetupWizard, setShowSetupWizard] = useState(false)
+  const [setupWizardStep, setSetupWizardStep] = useState<'providers' | 'connect'>('providers')
+  const [setupWizardSelection, setSetupWizardSelection] = useState<Record<ConnectivityProvider, boolean>>(() => getDefaultSetupWizardSelection())
+  const [setupWizardStatus, setSetupWizardStatus] = useState<string | null>(null)
+  const [setupWizardFinishing, setSetupWizardFinishing] = useState(false)
   const [workspaceModalMode, setWorkspaceModalMode] = useState<'new' | 'edit'>('edit')
   const [workspaceForm, setWorkspaceForm] = useState<WorkspaceSettings>({
     path: getInitialWorkspaceRoot(),
@@ -1901,12 +1938,16 @@ export default function App() {
     chatHistoryPath: string
     appStatePath: string
     runtimeLogPath: string
+    diagnosticsConfigPath: string
   } | null>(null)
+  const [diagnosticsConfig, setDiagnosticsConfig] = useState<DiagnosticsConfig>({ ...DEFAULT_DIAGNOSTICS_CONFIG, colors: { ...DEFAULT_DIAGNOSTICS_CONFIG.colors } })
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
   const [diagnosticsActionStatus, setDiagnosticsActionStatus] = useState<string | null>(null)
   const [providerAuthByName, setProviderAuthByName] = useState<Partial<Record<string, ProviderAuthStatus>>>({})
   const [providerAuthLoadingByName, setProviderAuthLoadingByName] = useState<Record<string, boolean>>({})
   const [providerAuthActionByName, setProviderAuthActionByName] = useState<Record<string, string | null>>({})
+  const [providerApiKeyDraftByName, setProviderApiKeyDraftByName] = useState<Record<string, string>>({})
+  const [providerApiKeyStateByName, setProviderApiKeyStateByName] = useState<Record<string, boolean>>({})
   const [modelConfig, setModelConfig] = useState<ModelConfig>(() => getInitialModelConfig())
   const [modelCatalogRefreshStatus, setModelCatalogRefreshStatus] = useState<ModelCatalogRefreshStatus | null>(null)
   const [modelCatalogRefreshPending, setModelCatalogRefreshPending] = useState(false)
@@ -1942,6 +1983,7 @@ export default function App() {
   const [panelActivityById, setPanelActivityById] = useState<Record<string, PanelActivityState>>({})
   const [activityClock, setActivityClock] = useState(() => Date.now())
   const [panelDebugById, setPanelDebugById] = useState<Record<string, PanelDebugEntry[]>>({})
+  const [lastPromptDurationMsByPanel, setLastPromptDurationMsByPanel] = useState<Record<string, number>>({})
   const [settingsPopoverByPanel, setSettingsPopoverByPanel] = useState<Record<string, 'mode' | 'sandbox' | 'permission' | null>>({})
   const [codeBlockOpenById, setCodeBlockOpenById] = useState<Record<string, boolean>>({})
   const [timelineOpenByUnitId, setTimelineOpenByUnitId] = useState<Record<string, boolean>>({})
@@ -1985,6 +2027,7 @@ export default function App() {
   const lastFindInPageQueryRef = useRef('')
   const lastFindInFilesQueryRef = useRef('')
   const reconnectingRef = useRef(new Set<string>())
+  const activePromptStartedAtRef = useRef(new Map<string, number>())
   const needsContextOnNextCodexSendRef = useRef<Record<string, boolean>>({})
   const workspaceRootRef = useRef(workspaceRoot)
   const workspaceListRef = useRef(workspaceList)
@@ -2285,7 +2328,12 @@ export default function App() {
     void (async () => {
       try {
         const available = await api.getAvailableModels()
-        if (available.codex.length === 0 && available.claude.length === 0 && available.gemini.length === 0) return
+        if (
+          available.codex.length === 0 &&
+          available.claude.length === 0 &&
+          available.gemini.length === 0 &&
+          available.openrouter.length === 0
+        ) return
         setModelConfig((prev) => syncModelConfigWithCatalog(prev, available))
       } catch {
         // ignore - use built-in models only
@@ -2302,27 +2350,9 @@ export default function App() {
     if (!showAppSettingsModal || (appSettingsView !== 'connectivity' && appSettingsView !== 'diagnostics')) return
     setDiagnosticsError(null)
     void Promise.all(
-      resolvedProviderConfigs.map(async (config) => {
-        setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: true }))
-        try {
-          const status = (await api.getProviderAuthStatus({
-            id: config.id,
-            cliCommand: config.cliCommand,
-            cliPath: config.cliPath,
-            authCheckCommand: config.authCheckCommand,
-            loginCommand: config.loginCommand,
-          })) as ProviderAuthStatus
-          setProviderAuthByName((prev) => ({ ...prev, [config.id]: status }))
-          setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
-        } catch (err) {
-          setProviderAuthActionByName((prev) => ({
-            ...prev,
-            [config.id]: `Could not check ${config.displayName}: ${formatError(err)}`,
-          }))
-        } finally {
-          setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: false }))
-        }
-      }),
+      resolvedProviderConfigs
+        .filter((config) => config.id !== 'openrouter')
+        .map(async (config) => refreshProviderAuthStatus(config)),
     )
     void (async () => {
       try {
@@ -2332,6 +2362,12 @@ export default function App() {
       } catch (err) {
         setDiagnosticsError(formatError(err))
       }
+    })()
+    void (async () => {
+      try {
+        const config = await api.loadDiagnosticsConfig?.()
+        if (config) setDiagnosticsConfig(config)
+      } catch { /* use defaults */ }
     })()
   }, [api, appSettingsView, showAppSettingsModal, resolvedProviderConfigs])
 
@@ -2483,18 +2519,22 @@ export default function App() {
   ])
 
   useEffect(() => {
-    for (const p of panels) {
-      const viewport = messageViewportRefs.current.get(p.id)
-      if (!viewport) continue
-      const stickToBottom = stickToBottomByPanelRef.current.get(p.id) ?? true
-      if (!stickToBottom) continue
-      viewport.scrollTop = viewport.scrollHeight
-    }
-    for (const [codeBlockId, viewport] of codeBlockViewportRefs.current) {
-      const stickToBottom = stickToBottomByCodeBlockRef.current.get(codeBlockId) ?? true
-      if (!stickToBottom) continue
-      viewport.scrollTop = viewport.scrollHeight
-    }
+    // Defer scroll to next animation frame so layout (markdown, code blocks) is complete
+    const raf = requestAnimationFrame(() => {
+      for (const p of panels) {
+        const viewport = messageViewportRefs.current.get(p.id)
+        if (!viewport) continue
+        const stickToBottom = stickToBottomByPanelRef.current.get(p.id) ?? true
+        if (!stickToBottom) continue
+        viewport.scrollTop = viewport.scrollHeight
+      }
+      for (const [codeBlockId, viewport] of codeBlockViewportRefs.current) {
+        const stickToBottom = stickToBottomByCodeBlockRef.current.get(codeBlockId) ?? true
+        if (!stickToBottom) continue
+        viewport.scrollTop = viewport.scrollHeight
+      }
+    })
+    return () => cancelAnimationFrame(raf)
   }, [panels])
 
   useEffect(() => {
@@ -2679,12 +2719,69 @@ export default function App() {
   function openWorkspacePicker(prompt?: string | null) {
     const nextPrompt = typeof prompt === 'string' && prompt.trim() ? prompt.trim() : null
     setWorkspacePickerPrompt(nextPrompt)
+    setWorkspacePickerError(null)
+    setWorkspacePickerOpening(null)
     setShowWorkspacePicker(true)
   }
 
   function closeWorkspacePicker() {
     setShowWorkspacePicker(false)
     setWorkspacePickerPrompt(null)
+    setWorkspacePickerError(null)
+    setWorkspacePickerOpening(null)
+  }
+
+  function openSetupWizard() {
+    setSetupWizardStep('providers')
+    setSetupWizardSelection(getDefaultSetupWizardSelection())
+    setSetupWizardStatus(null)
+    setShowSetupWizard(true)
+  }
+
+  async function runSetupConnectivityChecks(selected: ConnectivityProvider[]) {
+    const statuses = await Promise.all(
+      selected.map(async (providerId) => {
+        const config = resolvedProviderConfigs.find((p) => p.id === providerId)
+        if (!config) return null
+        return refreshProviderAuthStatus(config)
+      }),
+    )
+    return statuses
+  }
+
+  async function finishSetupWizard() {
+    const selected = CONNECTIVITY_PROVIDERS.filter((id) => setupWizardSelection[id])
+    if (selected.length === 0) {
+      setSetupWizardStatus('Select at least one provider to continue.')
+      return
+    }
+    setSetupWizardFinishing(true)
+    setSetupWizardStatus('Checking selected providers...')
+    try {
+      const statuses = await runSetupConnectivityChecks(selected)
+      const connected = statuses.some((s) => Boolean(s?.authenticated))
+      if (!connected) {
+        setSetupWizardStatus('No selected provider is connected yet. Complete login/API key setup for at least one provider.')
+        return
+      }
+      setProviderRegistry((prev) => ({
+        ...prev,
+        overrides: {
+          ...prev.overrides,
+          ...Object.fromEntries(
+            CONNECTIVITY_PROVIDERS.map((id) => [id, { ...(prev.overrides[id] ?? {}), enabled: setupWizardSelection[id] }]),
+          ),
+        },
+      }))
+      localStorage.setItem(SETUP_WIZARD_DONE_STORAGE_KEY, '1')
+      setShowSetupWizard(false)
+      setSetupWizardStatus(null)
+      if (!workspaceRootRef.current?.trim()) {
+        openWorkspacePicker('Select or create a workspace to continue.')
+      }
+    } finally {
+      setSetupWizardFinishing(false)
+    }
   }
 
   async function applyWorkspaceRoot(
@@ -2750,34 +2847,57 @@ export default function App() {
     if (!next) return
     const current = workspaceRootRef.current?.trim() ?? ''
     if (normalizeWorkspacePathForCompare(next) === normalizeWorkspacePathForCompare(current)) return
+    const fromPicker = source === 'picker'
+    if (fromPicker) setWorkspacePickerError(null)
     if (!current) {
       void (async () => {
-        const openedRoot = await applyWorkspaceRoot(next, { showFailureAlert: true, rebindPanels: false })
+        const openedRoot = await applyWorkspaceRoot(next, {
+          showFailureAlert: !fromPicker,
+          rebindPanels: false,
+          onFailure: fromPicker
+            ? (f) => {
+                const msg =
+                  f.kind === 'request-error'
+                    ? f.message
+                    : formatWorkspaceClaimFailure(next, f.result)
+                setWorkspacePickerError(msg)
+              }
+            : undefined,
+        })
         if (!openedRoot) return
         applyWorkspaceSnapshot(openedRoot)
-        if (source === 'picker') closeWorkspacePicker()
+        if (fromPicker) closeWorkspacePicker()
         if (source === 'workspace-create') setShowWorkspaceModal(false)
       })()
       return
     }
-    if (source === 'picker') closeWorkspacePicker()
+    if (fromPicker) {
+      void doWorkspaceSwitch(next, source)
+      return
+    }
     setPendingWorkspaceSwitch({ targetRoot: next, source })
   }
 
-  async function confirmWorkspaceSwitch() {
-    const pending = pendingWorkspaceSwitch
-    if (!pending) return
-    setPendingWorkspaceSwitch(null)
-
+  async function doWorkspaceSwitch(targetRoot: string, source: 'menu' | 'picker' | 'dropdown' | 'workspace-create') {
     const currentWorkspace = workspaceRootRef.current?.trim()
     const panelIds = [...new Set(panelsRef.current.map((panel) => panel.id))]
     if (currentWorkspace) {
       workspaceSnapshotsRef.current[currentWorkspace] = buildWorkspaceSnapshot(currentWorkspace)
     }
-
-    const openedRoot = await applyWorkspaceRoot(pending.targetRoot, { showFailureAlert: true, rebindPanels: false })
+    const fromPicker = source === 'picker'
+    const openedRoot = await applyWorkspaceRoot(targetRoot, {
+      showFailureAlert: !fromPicker,
+      rebindPanels: false,
+      onFailure: fromPicker
+        ? (f) => {
+            const msg = f.kind === 'request-error' ? f.message : formatWorkspaceClaimFailure(targetRoot, f.result)
+            setWorkspacePickerError(msg)
+          }
+        : undefined,
+    })
     if (!openedRoot) return
 
+    if (fromPicker) closeWorkspacePicker()
     await Promise.all(panelIds.map((id) => api.disconnect(id).catch(() => {})))
 
     setPanels([])
@@ -2788,8 +2908,14 @@ export default function App() {
     setSelectedWorkspaceFile(null)
     setExpandedDirectories({})
     applyWorkspaceSnapshot(openedRoot)
-    if (pending.source === 'picker') closeWorkspacePicker()
-    if (pending.source === 'workspace-create') setShowWorkspaceModal(false)
+    if (source === 'workspace-create') setShowWorkspaceModal(false)
+  }
+
+  async function confirmWorkspaceSwitch() {
+    const pending = pendingWorkspaceSwitch
+    if (!pending) return
+    setPendingWorkspaceSwitch(null)
+    await doWorkspaceSwitch(pending.targetRoot, pending.source)
   }
 
   useEffect(() => {
@@ -2799,7 +2925,21 @@ export default function App() {
     const bootstrapWorkspace = async () => {
       const preferredRoot = workspaceRootRef.current?.trim()
       if (!preferredRoot) {
-        openWorkspacePicker('Select a workspace folder to get started.')
+        if (getInitialSetupWizardDone()) {
+          openWorkspacePicker('Select a workspace folder to get started.')
+          return
+        }
+        const chatHistory = await api.loadChatHistory?.()
+        const appState = await api.loadAppState?.()
+        const hasPriorUse =
+          (Array.isArray(chatHistory) && chatHistory.length > 0) ||
+          (appState != null && typeof appState === 'object')
+        if (hasPriorUse) {
+          localStorage.setItem(SETUP_WIZARD_DONE_STORAGE_KEY, '1')
+          openWorkspacePicker('Select a workspace folder to get started.')
+        } else {
+          openSetupWizard()
+        }
         return
       }
 
@@ -3303,6 +3443,12 @@ export default function App() {
   useEffect(() => {
     const unsubEvent = api.onEvent(({ agentWindowId, evt }: any) => {
       if (!agentWindowId) agentWindowId = 'default'
+      if (evt?.type === 'thinking') {
+        appendPanelDebug(agentWindowId, 'event:thinking', evt.message ?? '')
+        markPanelActivity(agentWindowId, evt)
+        return
+      }
+
       markPanelActivity(agentWindowId, evt)
 
       if (evt?.type === 'status') {
@@ -3315,15 +3461,23 @@ export default function App() {
                   ...w,
                   status: evt.message ?? evt.status,
                   connected: evt.status === 'ready',
-                  streaming: evt.status === 'closed' ? false : w.streaming,
+                    streaming: evt.status === 'closed' || evt.status === 'error' ? false : w.streaming,
                   messages:
                     evt.status === 'error' && typeof evt.message === 'string'
-                      ? withLimitWarningMessage(w.messages, evt.message)
+                      ? (() => {
+                          const withLimit = withLimitWarningMessage(w.messages, evt.message)
+                          const generic = `Provider error: ${evt.message.trim()}`
+                          const hasGeneric = withLimit.slice(-8).some((m) => m.role === 'system' && m.content === generic)
+                          return hasGeneric
+                            ? withLimit
+                            : [...withLimit, { id: newId(), role: 'system' as const, content: generic, format: 'text' as const, createdAt: Date.now() }]
+                        })()
                       : w.messages,
                 },
           ),
         )
-        if (evt.status === 'closed') {
+        if (evt.status === 'closed' || evt.status === 'error') {
+          activePromptStartedAtRef.current.delete(agentWindowId)
           queueMicrotask(() => kickQueuedMessage(agentWindowId))
         }
         return
@@ -3338,6 +3492,7 @@ export default function App() {
         appendPanelDebug(agentWindowId, 'event:assistantCompleted', 'Assistant turn completed')
         flushWindowDelta(agentWindowId)
         let snapshotForHistory: AgentPanelState | null = null
+        let shouldKeepPromptTimer = false
         setPanels((prev) =>
           prev.map((w) => {
             if (w.id !== agentWindowId) return w
@@ -3355,6 +3510,7 @@ export default function App() {
               if (count < MAX_AUTO_CONTINUE && w.pendingInputs.length === 0) {
                 autoContinueCountRef.current.set(agentWindowId, count + 1)
                 pendingInputs = [...w.pendingInputs, AUTO_CONTINUE_PROMPT]
+                shouldKeepPromptTimer = true
               }
             } else {
               autoContinueCountRef.current.delete(agentWindowId)
@@ -3364,6 +3520,14 @@ export default function App() {
             return updated
           }),
         )
+        if (!shouldKeepPromptTimer) {
+          const startedAt = activePromptStartedAtRef.current.get(agentWindowId)
+          if (typeof startedAt === 'number') {
+            const elapsedMs = Math.max(0, Date.now() - startedAt)
+            setLastPromptDurationMsByPanel((prev) => ({ ...prev, [agentWindowId]: elapsedMs }))
+          }
+          activePromptStartedAtRef.current.delete(agentWindowId)
+        }
         if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
         queueMicrotask(() => kickQueuedMessage(agentWindowId))
       }
@@ -3510,11 +3674,28 @@ export default function App() {
   }
 
   function getKnownContextTokensForModel(model: string, provider: ModelProvider): number | null {
-    if (provider !== 'codex') return null
     const normalized = model.trim().toLowerCase()
-    if (!normalized.startsWith('gpt-')) return null
-    if (normalized.startsWith('gpt-5')) return DEFAULT_GPT_CONTEXT_TOKENS
-    return DEFAULT_GPT_CONTEXT_TOKENS
+
+    if (provider === 'gemini') {
+      if (normalized.includes('pro')) return 2_097_152
+      if (normalized.includes('flash')) return 1_048_576
+      return 1_048_576
+    }
+
+    if (provider === 'claude') {
+      return 200_000
+    }
+
+    if (provider === 'codex') {
+      return DEFAULT_GPT_CONTEXT_TOKENS
+    }
+
+    if (provider === 'openrouter') {
+      // Common minimum for modern models
+      return 128_000
+    }
+
+    return null
   }
 
   function estimatePanelContextUsage(panel: AgentPanelState): {
@@ -3629,13 +3810,23 @@ export default function App() {
 
   async function ensureProviderReady(provider: ModelProvider, reason: string) {
     const config = resolvedProviderConfigs.find((c) => c.id === provider) ?? DEFAULT_BUILTIN_PROVIDER_CONFIGS[provider as ConnectivityProvider]
-    const status = (await api.getProviderAuthStatus({
-      id: config.id,
-      cliCommand: config.cliCommand,
-      cliPath: config.cliPath,
-      authCheckCommand: config.authCheckCommand,
-      loginCommand: config.loginCommand,
-    })) as ProviderAuthStatus
+    const status = (await api.getProviderAuthStatus(
+      config.type === 'cli'
+        ? {
+            id: config.id,
+            type: 'cli',
+            cliCommand: config.cliCommand,
+            cliPath: config.cliPath,
+            authCheckCommand: config.authCheckCommand,
+            loginCommand: config.loginCommand,
+          }
+        : {
+            id: config.id,
+            type: 'api',
+            apiBaseUrl: config.apiBaseUrl,
+            loginUrl: config.loginUrl,
+          },
+    )) as ProviderAuthStatus
     if (!status.installed) {
       throw new Error(`${config.displayName} CLI is not installed. ${status.detail}`.trim())
     }
@@ -3645,42 +3836,115 @@ export default function App() {
     )
   }
 
-  async function refreshProviderAuthStatus(config: ProviderConfig) {
+  async function refreshProviderAuthStatus(config: ProviderConfig): Promise<ProviderAuthStatus | null> {
     setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: true }))
     try {
-      const status = (await api.getProviderAuthStatus({
-        id: config.id,
-        cliCommand: config.cliCommand,
-        cliPath: config.cliPath,
-        authCheckCommand: config.authCheckCommand,
-        loginCommand: config.loginCommand,
-      })) as ProviderAuthStatus
+      const status = (await api.getProviderAuthStatus(
+        config.type === 'cli'
+          ? {
+              id: config.id,
+              type: 'cli',
+              cliCommand: config.cliCommand,
+              cliPath: config.cliPath,
+              authCheckCommand: config.authCheckCommand,
+              loginCommand: config.loginCommand,
+            }
+          : {
+              id: config.id,
+              type: 'api',
+              apiBaseUrl: config.apiBaseUrl,
+              loginUrl: config.loginUrl,
+            },
+      )) as ProviderAuthStatus
       setProviderAuthByName((prev) => ({ ...prev, [config.id]: status }))
       setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
+      if (config.type === 'api') await refreshProviderApiKeyState(config.id)
+      return status
     } catch (err) {
       setProviderAuthActionByName((prev) => ({
         ...prev,
         [config.id]: `Could not check ${config.displayName}: ${formatError(err)}`,
       }))
+      return null
     } finally {
       setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: false }))
     }
   }
 
   async function refreshAllProviderAuthStatuses() {
-    await Promise.all(resolvedProviderConfigs.map((config) => refreshProviderAuthStatus(config)))
+    await Promise.all(
+      resolvedProviderConfigs
+        .filter((config) => config.id !== 'openrouter')
+        .map((config) => refreshProviderAuthStatus(config)),
+    )
+  }
+
+  async function refreshProviderApiKeyState(providerId: string) {
+    if (!api.getProviderApiKeyState) return
+    try {
+      const state = await api.getProviderApiKeyState(providerId)
+      setProviderApiKeyStateByName((prev) => ({ ...prev, [providerId]: Boolean(state?.hasKey) }))
+    } catch {
+      setProviderApiKeyStateByName((prev) => ({ ...prev, [providerId]: false }))
+    }
+  }
+
+  async function saveProviderApiKey(providerId: string, explicitValue?: string) {
+    if (!api.setProviderApiKey) return
+    const next = typeof explicitValue === 'string' ? explicitValue : providerApiKeyDraftByName[providerId] ?? ''
+    try {
+      const result = await api.setProviderApiKey(providerId, next)
+      setProviderApiKeyStateByName((prev) => ({ ...prev, [providerId]: Boolean(result?.hasKey) }))
+      setProviderApiKeyDraftByName((prev) => ({ ...prev, [providerId]: '' }))
+      setProviderAuthActionByName((prev) => ({ ...prev, [providerId]: result?.hasKey ? 'API key saved.' : 'API key cleared.' }))
+      const cfg = resolvedProviderConfigs.find((p) => p.id === providerId)
+      if (cfg) await refreshProviderAuthStatus(cfg)
+    } catch (err) {
+      setProviderAuthActionByName((prev) => ({ ...prev, [providerId]: `Could not save API key: ${formatError(err)}` }))
+    }
+  }
+
+  async function clearProviderApiKey(providerId: string) {
+    setProviderApiKeyDraftByName((prev) => ({ ...prev, [providerId]: '' }))
+    await saveProviderApiKey(providerId, '')
+  }
+
+  async function importProviderApiKeyFromEnv(providerId: string) {
+    if (!api.importProviderApiKeyFromEnv) return
+    try {
+      const result = await api.importProviderApiKeyFromEnv(providerId)
+      setProviderApiKeyStateByName((prev) => ({ ...prev, [providerId]: Boolean(result?.hasKey) }))
+      setProviderAuthActionByName((prev) => ({
+        ...prev,
+        [providerId]: result?.detail || (result?.ok ? 'Imported API key from environment.' : 'Could not import API key from environment.'),
+      }))
+      const cfg = resolvedProviderConfigs.find((p) => p.id === providerId)
+      if (cfg) await refreshProviderAuthStatus(cfg)
+    } catch (err) {
+      setProviderAuthActionByName((prev) => ({ ...prev, [providerId]: `Could not import API key: ${formatError(err)}` }))
+    }
   }
 
   async function startProviderLoginFlow(config: ProviderConfig) {
     setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
     try {
-      const result = await api.startProviderLogin({
-        id: config.id,
-        cliCommand: config.cliCommand,
-        cliPath: config.cliPath,
-        authCheckCommand: config.authCheckCommand,
-        loginCommand: config.loginCommand,
-      })
+      const result = await api.startProviderLogin(
+        config.type === 'cli'
+          ? {
+              id: config.id,
+              type: 'cli',
+              cliCommand: config.cliCommand,
+              cliPath: config.cliPath,
+              authCheckCommand: config.authCheckCommand,
+              loginCommand: config.loginCommand,
+            }
+          : {
+              id: config.id,
+              type: 'api',
+              apiBaseUrl: config.apiBaseUrl,
+              loginUrl: config.loginUrl,
+            },
+      )
       setProviderAuthActionByName((prev) => ({
         ...prev,
         [config.id]:
@@ -3697,6 +3961,7 @@ export default function App() {
   }
 
   async function startProviderUpgradeFlow(config: ProviderConfig) {
+    if (config.type !== 'cli') return
     if (!config.upgradeCommand && !config.upgradePackage) return
     setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
     try {
@@ -4645,6 +4910,10 @@ export default function App() {
     })()
 
     try {
+      // Measure total elapsed time for a user prompt, including auth/connect delays.
+      if (text.trim() !== AUTO_CONTINUE_PROMPT || !activePromptStartedAtRef.current.has(winId)) {
+        activePromptStartedAtRef.current.set(winId, Date.now())
+      }
       appendPanelDebug(winId, 'send', `Received user message (${text.length} chars)`)
       setPanels((prev) =>
         prev.map((x) =>
@@ -4709,6 +4978,7 @@ export default function App() {
       }
       appendPanelDebug(winId, 'turn/start', 'Turn started')
     } catch (e: any) {
+      activePromptStartedAtRef.current.delete(winId)
       const errMsg = formatConnectionError(e, provider)
       appendPanelDebug(winId, 'error', errMsg)
       setPanels((prev) =>
@@ -4832,6 +5102,13 @@ export default function App() {
   async function closePanel(panelId: string) {
     const panel = panelsRef.current.find((w) => w.id === panelId)
     if (panel) upsertPanelToHistory(panel)
+    activePromptStartedAtRef.current.delete(panelId)
+    setLastPromptDurationMsByPanel((prev) => {
+      if (!(panelId in prev)) return prev
+      const next = { ...prev }
+      delete next[panelId]
+      return next
+    })
     await api.disconnect(panelId).catch(() => {})
     setPanels((prev) => prev.filter((w) => w.id !== panelId))
   }
@@ -5023,7 +5300,7 @@ export default function App() {
             <div className="inline-flex items-center gap-1.5">
               <button
                 type="button"
-                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                 onClick={() => refreshWorkspaceTree()}
                 title="Refresh workspace folder"
                 aria-label="Refresh workspace folder"
@@ -5035,7 +5312,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                 onClick={expandAllDirectories}
                 title="Expand all"
                 aria-label="Expand all"
@@ -5047,7 +5324,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                 onClick={collapseAllDirectories}
                 title="Collapse all"
                 aria-label="Collapse all"
@@ -5371,6 +5648,25 @@ export default function App() {
         .dark .theme-preset .dark\\:text-neutral-300 { color: color-mix(in srgb, #ffffff 82%, var(--theme-dark-900)) !important; }
         .dark .theme-preset .dark\\:text-neutral-200,
         .dark .theme-preset .dark\\:text-neutral-100 { color: color-mix(in srgb, #ffffff 90%, var(--theme-dark-900)) !important; }
+        .theme-preset .hover\\:bg-blue-50:hover { background-color: var(--theme-accent-soft) !important; }
+        .dark .theme-preset .dark\\:hover\\:bg-blue-900\\/40:hover,
+        .dark .theme-preset .dark\\:hover\\:bg-blue-900\\/20:hover { background-color: var(--theme-accent-soft-dark) !important; }
+        .theme-preset .hover\\:bg-blue-100:hover { background-color: var(--theme-accent-soft) !important; }
+        .theme-preset .focus-visible\\:ring-blue-400\\/60:focus-visible,
+        .theme-preset .focus\\:ring-blue-100:focus,
+        .theme-preset .ring-blue-100 { box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme-accent-500) 25%, white) !important; }
+        .theme-preset .focus\\:border-blue-400:focus { border-color: var(--theme-accent-600) !important; }
+        .dark .theme-preset .dark\\:focus\\:ring-blue-900\\/40:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme-accent-500) 35%, black) !important; }
+        .dark .theme-preset .dark\\:focus\\:border-blue-700:focus { border-color: var(--theme-accent-600) !important; }
+        .theme-preset .border-blue-400,
+        .theme-preset .dark\\:border-blue-600 { border-color: var(--theme-accent-600) !important; }
+        .dark .theme-preset .dark\\:hover\\:bg-neutral-700:hover { background-color: color-mix(in srgb, var(--theme-dark-900) 74%, white) !important; }
+        .dark .theme-preset .dark\\:hover\\:bg-neutral-800:hover { background-color: color-mix(in srgb, var(--theme-dark-900) 84%, white) !important; }
+        .theme-preset .hover\\:border-blue-200:hover,
+        .theme-preset .dark\\:hover\\:border-blue-900\\/60:hover { border-color: color-mix(in srgb, var(--theme-accent-500) 40%, white) !important; }
+        .dark .theme-preset .dark\\:hover\\:border-blue-900\\/60:hover { border-color: color-mix(in srgb, var(--theme-accent-500) 50%, black) !important; }
+        .theme-preset .hover\\:text-blue-700:hover { color: var(--theme-accent-700) !important; }
+        .dark .theme-preset .dark\\:hover\\:text-blue-300:hover { color: var(--theme-accent-text) !important; }
 
         .theme-preset * {
           scrollbar-width: thin;
@@ -5596,14 +5892,23 @@ export default function App() {
         </span>
         <span>{panels.length} agent{panels.length !== 1 ? 's' : ''}</span>
         {(() => {
-          const withUsage = panels.filter((p) => getRateLimitPercent(p.usage) !== null)
+          const withUsage = panels
+            .map((p) => {
+              const rateLimit = getRateLimitPercent(p.usage)
+              if (rateLimit !== null) {
+                return { pct: rateLimit, label: formatRateLimitLabel(p.usage) }
+              }
+                  const context = estimatePanelContextUsage(p)
+                  if (context) {
+                    return { pct: context.usedPercent, label: `${context.usedPercent.toFixed(1)}% context` }
+                  }
+              return null
+            })
+            .filter((x): x is { pct: number; label: string | null } => x !== null)
+
           if (withUsage.length === 0) return null
-          const worst = withUsage.reduce((a, p) => {
-            const pct = getRateLimitPercent(p.usage) ?? 0
-            return pct > (getRateLimitPercent(a.usage) ?? 0) ? p : a
-          })
-          const label = formatRateLimitLabel(worst.usage)
-          return label ? <span>Usage: {label}</span> : null
+          const worst = withUsage.reduce((a, b) => (b.pct > a.pct ? b : a))
+          return worst.label ? <span>Usage: {worst.label}</span> : null
         })()}
       </footer>
 
@@ -5623,7 +5928,7 @@ export default function App() {
               <div className="shrink-0 flex items-center gap-2">
                 <button
                   type="button"
-                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 disabled:opacity-50"
+                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50"
                   disabled={filePreview.loading || Boolean(filePreview.error) || filePreview.binary}
                   onClick={() => {
                     void openEditorForRelativePath(filePreview.relativePath)
@@ -5634,7 +5939,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 disabled:opacity-50"
+                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50"
                   disabled={filePreview.loading}
                   onClick={() => openFilePreview(filePreview.relativePath)}
                 >
@@ -5779,7 +6084,7 @@ export default function App() {
                 <div className="flex items-center gap-2 mb-4">
                   <button
                     type="button"
-                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                     onClick={async () => {
                       setModelCatalogRefreshPending(true)
                       setModelCatalogRefreshStatus(null)
@@ -5841,6 +6146,7 @@ export default function App() {
                       <option value="codex">Codex (ChatGPT)</option>
                       <option value="claude">Claude (CLI subscription)</option>
                       <option value="gemini">Gemini (CLI subscription)</option>
+                      <option value="openrouter">OpenRouter (API)</option>
                     </select>
                     <span className="text-neutral-600 dark:text-neutral-400">Enabled</span>
                     <label className="flex items-center gap-2">
@@ -5867,7 +6173,7 @@ export default function App() {
                       Save
                     </button>
                     <button
-                      className="px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                      className="px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                       onClick={() => setEditingModel(null)}
                     >
                       Cancel
@@ -5890,7 +6196,7 @@ export default function App() {
                         </div>
                         <div className="flex gap-1">
                           <button
-                            className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                            className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                             onClick={() => {
                               setModelForm({ ...m })
                               setEditingModel(m)
@@ -5913,7 +6219,7 @@ export default function App() {
                     ))}
                   </div>
                   <button
-                    className="mt-4 px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                    className="mt-4 px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                     onClick={() => {
                       setModelForm({
                         id: '',
@@ -5950,6 +6256,23 @@ export default function App() {
                 </label>
               </section>
 
+              <section className="space-y-2">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Chat</div>
+                <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(applicationSettings.showResponseDurationAfterPrompt)}
+                    onChange={(e) =>
+                      setApplicationSettings((prev) => ({
+                        ...prev,
+                        showResponseDurationAfterPrompt: e.target.checked,
+                      }))
+                    }
+                  />
+                  Display response duration in seconds after each prompt completes
+                </label>
+              </section>
+
               <section className="space-y-3">
                 <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Appearance</div>
                 <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3">
@@ -5982,39 +6305,29 @@ export default function App() {
 
               {appSettingsView === 'connectivity' && (
                 <>
-              <section className="space-y-3">
+              <section className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">CLI Connectivity</div>
+                  <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Provider Connectivity</div>
                   <button
                     type="button"
-                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                     onClick={() => void refreshAllProviderAuthStatuses()}
                   >
                     Re-check all
                   </button>
                 </div>
                 <div className="text-xs text-neutral-600 dark:text-neutral-400">
-                  Barnaby uses your locally installed CLI sessions. These checks run automatically when this dialog opens and do not enable providers;
-                  they only read local install/login state.
+                  Barnaby supports both local CLI providers and API providers. These checks run when opened (OpenRouter is excluded to avoid rate limits). Use Re-check on a provider to validate it.
                 </div>
-                <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-2 bg-white/60 dark:bg-neutral-950/40">
-                  <div className="text-xs font-medium text-neutral-700 dark:text-neutral-300 uppercase tracking-wide">
-                    Provider coverage
-                  </div>
-                  <div className="text-xs text-neutral-600 dark:text-neutral-400">
-                    CODEX: full support (connectivity checks + model routing in panels).
-                  </div>
-                  <div className="text-xs text-neutral-600 dark:text-neutral-400">
-                    CLAUDE: full support (connectivity checks + model routing in panels).
-                  </div>
-                  <div className="text-xs text-neutral-600 dark:text-neutral-400">
-                    GEMINI: full support (connectivity checks + model routing in panels).
-                  </div>
-                  <div className="text-xs text-neutral-600 dark:text-neutral-400">
-                    Other CLIs: possible if they support non-interactive prompt execution, but adapters are not implemented in this build.
-                  </div>
-                </div>
-                <div className="space-y-2">
+                <ul className="list-none space-y-1.5 text-xs text-neutral-600 dark:text-neutral-400 border border-neutral-200 dark:border-neutral-800 rounded-lg p-3 bg-white/60 dark:bg-neutral-950/40">
+                  <li className="font-medium text-neutral-700 dark:text-neutral-300 uppercase tracking-wide pb-1">Provider coverage</li>
+                  <li>CODEX — full support (connectivity checks + model routing in panels).</li>
+                  <li>CLAUDE — full support (connectivity checks + model routing in panels).</li>
+                  <li>GEMINI — full support (connectivity checks + model routing in panels).</li>
+                  <li>OPENROUTER — full support (API key; check manually to avoid rate limits).</li>
+                  <li>Other providers — possible if they support CLI or API adapters (not implemented).</li>
+                </ul>
+                <div className="flex flex-col gap-4">
                   {resolvedProviderConfigs.map((config) => {
                     const status = providerAuthByName[config.id]
                     const loading = providerAuthLoadingByName[config.id]
@@ -6080,9 +6393,9 @@ export default function App() {
                             <div className="flex gap-1">
                               <button
                                 type="button"
-                                className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                                className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                                 onClick={() => {
-                                  setEditingProvider(config)
+                                  setEditingProvider(config as CustomProviderConfig)
                                   setShowProviderSetupModal(true)
                                 }}
                               >
@@ -6125,22 +6438,79 @@ export default function App() {
                                   : config.displayName
                               }
                             />
-                            <span className="text-neutral-500 dark:text-neutral-400">CLI path</span>
-                            <input
-                              type="text"
-                              className={`${UI_INPUT_CLASS} text-sm font-mono`}
-                              value={override?.cliPath ?? ''}
-                              onChange={(e) =>
-                                setProviderRegistry((prev: ProviderRegistry) => ({
-                                  ...prev,
-                                  overrides: {
-                                    ...prev.overrides,
-                                    [config.id]: { ...prev.overrides[config.id], cliPath: e.target.value || undefined },
-                                  },
-                                }))
-                              }
-                              placeholder="Use system PATH"
-                            />
+                            {config.type === 'cli' ? (
+                              <>
+                                <span className="text-neutral-500 dark:text-neutral-400">CLI path</span>
+                                <input
+                                  type="text"
+                                  className={`${UI_INPUT_CLASS} text-sm font-mono`}
+                                  value={override?.cliPath ?? ''}
+                                  onChange={(e) =>
+                                    setProviderRegistry((prev: ProviderRegistry) => ({
+                                      ...prev,
+                                      overrides: {
+                                        ...prev.overrides,
+                                        [config.id]: { ...prev.overrides[config.id], cliPath: e.target.value || undefined },
+                                      },
+                                    }))
+                                  }
+                                  placeholder="Use system PATH"
+                                />
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-neutral-500 dark:text-neutral-400">API base URL</span>
+                                <input
+                                  type="text"
+                                  className={`${UI_INPUT_CLASS} text-sm font-mono`}
+                                  value={override?.apiBaseUrl ?? ''}
+                                  onChange={(e) =>
+                                    setProviderRegistry((prev: ProviderRegistry) => ({
+                                      ...prev,
+                                      overrides: {
+                                        ...prev.overrides,
+                                        [config.id]: { ...prev.overrides[config.id], apiBaseUrl: e.target.value || undefined },
+                                      },
+                                    }))
+                                  }
+                                  placeholder={config.apiBaseUrl}
+                                />
+                                <span className="text-neutral-500 dark:text-neutral-400">API key</span>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="password"
+                                    className={`${UI_INPUT_CLASS} text-sm font-mono w-full`}
+                                    value={providerApiKeyDraftByName[config.id] ?? ''}
+                                    onChange={(e) =>
+                                      setProviderApiKeyDraftByName((prev) => ({ ...prev, [config.id]: e.target.value }))
+                                    }
+                                    placeholder={providerApiKeyStateByName[config.id] ? 'Key saved (enter to replace)' : 'sk-or-v1-...'}
+                                  />
+                                  <button
+                                    type="button"
+                                    className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                    onClick={() => void saveProviderApiKey(config.id)}
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                    onClick={() => void importProviderApiKeyFromEnv(config.id)}
+                                    title="Import OPENROUTER_API_KEY from environment"
+                                  >
+                                    Import Env
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                    onClick={() => void clearProviderApiKey(config.id)}
+                                  >
+                                    Clear
+                                  </button>
+                                </div>
+                              </>
+                            )}
                           </div>
                         )}
                         <div className="text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap break-words">
@@ -6153,7 +6523,7 @@ export default function App() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <button
                               type="button"
-                              className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                              className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                               disabled={loading}
                               onClick={() => void refreshProviderAuthStatus(config)}
                             >
@@ -6161,16 +6531,16 @@ export default function App() {
                             </button>
                             <button
                               type="button"
-                              className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                              className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                               disabled={loading}
                               onClick={() => void startProviderLoginFlow(config)}
                             >
-                              {status?.authenticated ? 'Re-authenticate' : 'Open login'}
+                              {config.type === 'api' ? 'Open keys page' : status?.authenticated ? 'Re-authenticate' : 'Open login'}
                             </button>
-                            {(config.upgradeCommand || config.upgradePackage) && (
+                            {config.type === 'cli' && (config.upgradeCommand || config.upgradePackage) && (
                               <button
                                 type="button"
-                                className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                                className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                                 disabled={loading}
                                 onClick={() => void startProviderUpgradeFlow(config)}
                                 title={
@@ -6191,7 +6561,7 @@ export default function App() {
                 </div>
                 <button
                   type="button"
-                  className="mt-2 px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                  className="mt-2 px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                   onClick={() => {
                     setEditingProvider({
                       id: '',
@@ -6279,6 +6649,20 @@ export default function App() {
                   <label className="flex items-center gap-2">
                     <input
                       type="checkbox"
+                      checked={Boolean(applicationSettings.verboseDiagnostics)}
+                      onChange={(e) =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          verboseDiagnostics: e.target.checked,
+                        }))
+                      }
+                    />
+                    Verbose diagnostics
+                    <span className="text-xs text-neutral-500 dark:text-neutral-400">(show all activity, reasoning, and operation events)</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
                       checked={Boolean(applicationSettings.showDebugNotesInTimeline)}
                       onChange={(e) =>
                         setApplicationSettings((prev) => ({
@@ -6287,87 +6671,15 @@ export default function App() {
                         }))
                       }
                     />
-                    <span style={{ color: applicationSettings.diagnosticsMessageColors.debugNote }}>
-                      Inject debug notes into chat timeline
-                    </span>
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(applicationSettings.showActivityUpdates)}
-                      onChange={(e) =>
-                        setApplicationSettings((prev) => ({
-                          ...prev,
-                          showActivityUpdates: e.target.checked,
-                        }))
-                      }
-                    />
-                    <span style={{ color: applicationSettings.diagnosticsMessageColors.activityUpdate }}>
-                      Show activity updates in chat timeline
-                    </span>
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(applicationSettings.showReasoningUpdates)}
-                      onChange={(e) =>
-                        setApplicationSettings((prev) => ({
-                          ...prev,
-                          showReasoningUpdates: e.target.checked,
-                        }))
-                      }
-                    />
-                    <span style={{ color: applicationSettings.diagnosticsMessageColors.reasoningUpdate }}>
-                      Show reasoning updates in chat timeline
-                    </span>
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(applicationSettings.showOperationTrace)}
-                      onChange={(e) =>
-                        setApplicationSettings((prev) => ({
-                          ...prev,
-                          showOperationTrace: e.target.checked,
-                        }))
-                      }
-                    />
-                    <span style={{ color: applicationSettings.diagnosticsMessageColors.operationTrace }}>
-                      Show operation trace in chat timeline
-                    </span>
+                    Inject debug notes into chat timeline
                   </label>
                 </div>
                 <div className="rounded-lg border border-neutral-200 bg-neutral-50/70 p-3 dark:border-neutral-700 dark:bg-neutral-900/50">
-                  <div className="text-xs font-medium text-neutral-700 dark:text-neutral-300">Message colors</div>
-                  <div className="mt-2 space-y-2">
-                    {DIAGNOSTICS_MESSAGE_COLOR_FIELDS.map((field) => {
-                      const value = applicationSettings.diagnosticsMessageColors[field.key]
-                      return (
-                        <label key={field.key} className="flex items-center justify-between gap-3 text-xs">
-                          <span className="text-neutral-700 dark:text-neutral-300">{field.label}</span>
-                          <span className="inline-flex items-center gap-2">
-                            <input
-                              type="color"
-                              value={value}
-                              onChange={(e) =>
-                                setApplicationSettings((prev) => ({
-                                  ...prev,
-                                  diagnosticsMessageColors: {
-                                    ...prev.diagnosticsMessageColors,
-                                    [field.key]: e.target.value,
-                                  },
-                                }))
-                              }
-                              className="h-7 w-10 cursor-pointer rounded border border-neutral-300 bg-white p-0.5 dark:border-neutral-600 dark:bg-neutral-800"
-                              title={`${field.label} color`}
-                            />
-                            <code className="w-16 text-right font-mono text-[11px] text-neutral-600 dark:text-neutral-400">
-                              {value}
-                            </code>
-                          </span>
-                        </label>
-                      )
-                    })}
+                  <div className="text-xs text-neutral-600 dark:text-neutral-400">
+                    Advanced: edit <code className="font-mono text-[11px]">diagnostics.json</code> for message colors and per-category toggles.
+                    {diagnosticsInfo?.diagnosticsConfigPath && (
+                      <div className="mt-1 font-mono text-[11px] text-neutral-500 dark:text-neutral-500 break-all">{diagnosticsInfo.diagnosticsConfigPath}</div>
+                    )}
                   </div>
                 </div>
               </section>
@@ -6380,7 +6692,7 @@ export default function App() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                     onClick={() => {
                       setDiagnosticsActionStatus(null)
                       void (async () => {
@@ -6434,6 +6746,7 @@ export default function App() {
                     <div><span className="font-semibold">runtime log</span>: {diagnosticsInfo.runtimeLogPath}</div>
                     <div><span className="font-semibold">app state</span>: {diagnosticsInfo.appStatePath}</div>
                     <div><span className="font-semibold">chat history</span>: {diagnosticsInfo.chatHistoryPath}</div>
+                    <div><span className="font-semibold">diagnostics config</span>: {diagnosticsInfo.diagnosticsConfigPath}</div>
                   </div>
                 )}
               </section>
@@ -6574,6 +6887,175 @@ export default function App() {
         </div>
       )}
 
+      {showSetupWizard && (
+        <div className={MODAL_BACKDROP_CLASS}>
+          <div className={`w-full max-w-2xl ${MODAL_CARD_CLASS}`}>
+            <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+              <div className="font-medium">Welcome Setup</div>
+              <button
+                className={UI_CLOSE_ICON_BUTTON_CLASS}
+                onClick={() => {
+                  setShowSetupWizard(false)
+                  openWorkspacePicker('Select a workspace folder to get started.')
+                }}
+                title="Skip setup"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="text-sm text-neutral-700 dark:text-neutral-300">
+                {setupWizardStep === 'providers'
+                  ? 'Choose which providers you want to use. You can change this later in Settings.'
+                  : 'Set up connectivity for the selected providers. Finish is enabled once at least one provider is connected.'}
+              </div>
+              {setupWizardStep === 'providers' ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    { id: 'codex', label: 'Codex' },
+                    { id: 'claude', label: 'Claude' },
+                    { id: 'gemini', label: 'Gemini' },
+                    { id: 'openrouter', label: 'OpenRouter (Free Models)' },
+                  ] as Array<{ id: ConnectivityProvider; label: string }>).map((item) => (
+                    <label key={item.id} className="flex items-center gap-2 rounded border border-neutral-200 dark:border-neutral-800 px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={setupWizardSelection[item.id]}
+                        onChange={(e) =>
+                          setSetupWizardSelection((prev) => ({
+                            ...prev,
+                            [item.id]: e.target.checked,
+                          }))
+                        }
+                      />
+                      <span className="text-sm text-neutral-800 dark:text-neutral-200">{item.label}</span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[50vh] overflow-auto">
+                  {CONNECTIVITY_PROVIDERS.filter((id) => setupWizardSelection[id]).map((providerId) => {
+                    const config = resolvedProviderConfigs.find((c) => c.id === providerId)
+                    if (!config) return null
+                    const status = providerAuthByName[providerId]
+                    const loading = providerAuthLoadingByName[providerId]
+                    const statusText = !status
+                      ? 'Unknown'
+                      : !status.installed
+                        ? 'Not installed'
+                        : status.authenticated
+                          ? 'Connected'
+                          : 'Setup required'
+                    return (
+                      <div key={providerId} className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="font-medium text-sm text-neutral-800 dark:text-neutral-200">
+                            {providerId === 'openrouter' ? 'OpenRouter (Free Models)' : config.displayName}
+                          </div>
+                          <div className="text-xs text-neutral-600 dark:text-neutral-400">{statusText}</div>
+                        </div>
+                        {config.type === 'api' && (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="password"
+                              className={`${UI_INPUT_CLASS} text-sm font-mono flex-1`}
+                              value={providerApiKeyDraftByName[providerId] ?? ''}
+                              onChange={(e) =>
+                                setProviderApiKeyDraftByName((prev) => ({ ...prev, [providerId]: e.target.value }))
+                              }
+                              placeholder={providerApiKeyStateByName[providerId] ? 'Key saved (enter to replace)' : 'sk-or-v1-...'}
+                            />
+                            <button className={UI_BUTTON_SECONDARY_CLASS} onClick={() => void saveProviderApiKey(providerId)}>Save</button>
+                            <button className={UI_BUTTON_SECONDARY_CLASS} onClick={() => void importProviderApiKeyFromEnv(providerId)}>Import Env</button>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            className={UI_BUTTON_SECONDARY_CLASS}
+                            disabled={loading}
+                            onClick={() => void refreshProviderAuthStatus(config)}
+                          >
+                            {loading ? 'Checking...' : 'Re-check'}
+                          </button>
+                          <button
+                            className={UI_BUTTON_SECONDARY_CLASS}
+                            disabled={loading}
+                            onClick={() => void startProviderLoginFlow(config)}
+                          >
+                            {config.type === 'api' ? 'Open keys page' : status?.authenticated ? 'Re-authenticate' : 'Open login'}
+                          </button>
+                        </div>
+                        <div className="text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap">{status?.detail || 'No status yet.'}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {setupWizardStatus && (
+                <div className="text-xs rounded border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-700/60 dark:bg-amber-900/20 dark:text-amber-100">
+                  {setupWizardStatus}
+                </div>
+              )}
+            </div>
+            <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+              <button
+                type="button"
+                className={UI_BUTTON_SECONDARY_CLASS}
+                onClick={() => {
+                  setShowSetupWizard(false)
+                  localStorage.setItem(SETUP_WIZARD_DONE_STORAGE_KEY, '1')
+                  openWorkspacePicker('Select a workspace folder to get started.')
+                }}
+              >
+                Skip for now
+              </button>
+              <div className="flex items-center gap-2">
+                {setupWizardStep === 'connect' && (
+                  <button
+                    type="button"
+                    className={UI_BUTTON_SECONDARY_CLASS}
+                    onClick={() => setSetupWizardStep('providers')}
+                    disabled={setupWizardFinishing}
+                  >
+                    Back
+                  </button>
+                )}
+                {setupWizardStep === 'providers' ? (
+                  <button
+                    type="button"
+                    className={UI_BUTTON_PRIMARY_CLASS}
+                    onClick={() => {
+                      const selected = CONNECTIVITY_PROVIDERS.filter((id) => setupWizardSelection[id])
+                      if (selected.length === 0) {
+                        setSetupWizardStatus('Select at least one provider to continue.')
+                        return
+                      }
+                      setSetupWizardStatus(null)
+                      setSetupWizardStep('connect')
+                      void runSetupConnectivityChecks(selected)
+                    }}
+                  >
+                    Continue
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className={UI_BUTTON_PRIMARY_CLASS}
+                    onClick={() => void finishSetupWizard()}
+                    disabled={setupWizardFinishing}
+                  >
+                    {setupWizardFinishing ? 'Finishing...' : 'Finish setup'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {pendingWorkspaceSwitch && (
         <div className={MODAL_BACKDROP_CLASS}>
           <div className={`w-full max-w-lg ${MODAL_CARD_CLASS}`}>
@@ -6620,9 +7102,9 @@ export default function App() {
 
       {showWorkspacePicker && (
         <div className={MODAL_BACKDROP_CLASS}>
-          <div className={`w-full max-w-xl ${MODAL_CARD_CLASS}`}>
-            <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
-              <div className="font-medium">Open workspace</div>
+          <div className={`w-full max-w-xl max-h-[90vh] flex flex-col ${MODAL_CARD_CLASS}`}>
+            <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0 bg-white dark:bg-neutral-950">
+              <div className="font-medium text-neutral-900 dark:text-neutral-100">Open workspace</div>
               <button
                 className={UI_CLOSE_ICON_BUTTON_CLASS}
                 onClick={closeWorkspacePicker}
@@ -6634,10 +7116,15 @@ export default function App() {
                 </svg>
               </button>
             </div>
-            <div className="p-4 max-h-[60vh] overflow-auto">
+            <div className="p-4 min-h-0 flex-1 overflow-auto">
               {workspacePickerPrompt && (
                 <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700/60 dark:bg-amber-900/20 dark:text-amber-100">
                   {workspacePickerPrompt}
+                </div>
+              )}
+              {workspacePickerError && (
+                <div className="mb-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900 dark:border-red-700/60 dark:bg-red-900/20 dark:text-red-100 whitespace-pre-wrap">
+                  {workspacePickerError}
                 </div>
               )}
               <div className="space-y-1">
@@ -6645,10 +7132,10 @@ export default function App() {
                   <button
                     key={p}
                     type="button"
-                    className={`w-full text-left px-3 py-2 rounded text-sm font-mono truncate ${
+                    className={`w-full text-left px-3 py-2 rounded text-sm font-mono truncate border ${
                       p === workspaceRoot
-                        ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-900 dark:text-blue-100'
-                        : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                        ? 'border-neutral-300 bg-neutral-100 text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100'
+                        : 'border-transparent text-neutral-800 hover:border-neutral-300 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:border-neutral-700 dark:hover:bg-neutral-900'
                     }`}
                     onClick={() => {
                       requestWorkspaceSwitch(p, 'picker')
@@ -6660,7 +7147,7 @@ export default function App() {
               </div>
               <button
                 type="button"
-                className="mt-3 w-full px-3 py-2 rounded border border-dashed border-neutral-300 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-900 text-sm text-neutral-600 dark:text-neutral-400"
+                className="mt-3 w-full rounded-md border border-dashed border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                 onClick={async () => {
                   const selected = await api.openFolderDialog?.()
                   if (!selected) return
@@ -6834,7 +7321,7 @@ export default function App() {
               </div>
               <div className="flex gap-2">
                 <button
-                  className="px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                  className="px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                   onClick={() => setShowWorkspaceModal(false)}
                 >
                   Cancel
@@ -6888,15 +7375,27 @@ export default function App() {
     const activityTitle = activity
       ? `Activity: ${activityLabel}\nLast event: ${activity.lastEventLabel}\n${secondsAgo}s ago\nEvents seen: ${activity.totalEvents}\nTimeline units: ${timelineUnits.length}`
       : `Activity: idle\nNo events seen yet for this panel.\nTimeline units: ${timelineUnits.length}`
-    const showActivityUpdates = Boolean(applicationSettings.showActivityUpdates)
-    const showReasoningUpdates = Boolean(applicationSettings.showReasoningUpdates)
-    const showOperationTrace = applicationSettings.showOperationTrace !== false
-    const diagnosticsMessageColors = applicationSettings.diagnosticsMessageColors
-    const debugNoteColor = diagnosticsMessageColors.debugNote
-    const activityUpdateColor = diagnosticsMessageColors.activityUpdate
-    const reasoningUpdateColor = diagnosticsMessageColors.reasoningUpdate
-    const operationTraceColor = diagnosticsMessageColors.operationTrace
-    const timelineMessageColor = diagnosticsMessageColors.timelineMessage
+    const activePromptStartedAt = activePromptStartedAtRef.current.get(w.id)
+    const livePromptDurationMs =
+      typeof activePromptStartedAt === 'number'
+        ? Math.max(0, activityClock - activePromptStartedAt)
+        : null
+    const lastPromptDurationMs = lastPromptDurationMsByPanel[w.id]
+    const responseDurationLabel =
+      (isRunning || isQueued) && typeof livePromptDurationMs === 'number'
+        ? `${(livePromptDurationMs / 1000).toFixed(1).replace(/\.0$/, '')}s`
+        : applicationSettings.showResponseDurationAfterPrompt && !isRunning && !isQueued && typeof lastPromptDurationMs === 'number'
+          ? `${(lastPromptDurationMs / 1000).toFixed(1).replace(/\.0$/, '')}s`
+          : null
+    const verbose = Boolean(applicationSettings.verboseDiagnostics)
+    const showActivityUpdates = verbose || diagnosticsConfig.showActivityUpdates
+    const showReasoningUpdates = verbose || diagnosticsConfig.showReasoningUpdates
+    const showOperationTrace = verbose || diagnosticsConfig.showOperationTrace
+    const debugNoteColor = diagnosticsConfig.colors.debugNotes
+    const activityUpdateColor = diagnosticsConfig.colors.activityUpdates
+    const reasoningUpdateColor = diagnosticsConfig.colors.reasoningUpdates
+    const operationTraceColor = diagnosticsConfig.colors.operationTrace
+    const timelineMessageColor = diagnosticsConfig.colors.thinkingProgress
     const settingsPopover = settingsPopoverByPanel[w.id] ?? null
     const interactionMode = parseInteractionMode(w.interactionMode)
     const contextUsage = estimatePanelContextUsage(w)
@@ -7138,7 +7637,7 @@ export default function App() {
                   <div className="mb-2 flex justify-end">
                     <button
                       type="button"
-                      className="text-[11px] px-2 py-1 rounded border border-neutral-300 bg-white/80 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+                      className="text-[11px] px-2 py-1 rounded border border-neutral-300 bg-white/80 text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                       onClick={() =>
                         setTimelinePinnedCodeByUnitId((prev) => ({
                           ...prev,
@@ -7201,12 +7700,18 @@ export default function App() {
                                 const isOpen = codeBlockOpenById[codeBlockId] ?? openByDefault
                                 return (
                                   <details
-                                    open={isOpen}
+                                    ref={(el) => {
+                                      if (!el || el.dataset.barnabyInit === '1') return
+                                      el.open = isOpen
+                                      el.dataset.barnabyInit = '1'
+                                    }}
                                     onToggle={(e) => {
                                       const next = e.currentTarget.open
-                                      setCodeBlockOpenById((prev) =>
-                                        prev[codeBlockId] === next ? prev : { ...prev, [codeBlockId]: next },
-                                      )
+                                      queueMicrotask(() => {
+                                        setCodeBlockOpenById((prev) =>
+                                          prev[codeBlockId] === next ? prev : { ...prev, [codeBlockId]: next },
+                                        )
+                                      })
                                     }}
                                     className="group my-2 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-950/25"
                                   >
@@ -7333,12 +7838,18 @@ export default function App() {
                           const isOpen = codeBlockOpenById[codeBlockId] ?? openByDefault
                           return (
                             <details
-                              open={isOpen}
+                              ref={(el) => {
+                                if (!el || el.dataset.barnabyInit === '1') return
+                                el.open = isOpen
+                                el.dataset.barnabyInit = '1'
+                              }}
                               onToggle={(e) => {
                                 const next = e.currentTarget.open
-                                setCodeBlockOpenById((prev) =>
-                                  prev[codeBlockId] === next ? prev : { ...prev, [codeBlockId]: next },
-                                )
+                                queueMicrotask(() => {
+                                  setCodeBlockOpenById((prev) =>
+                                    prev[codeBlockId] === next ? prev : { ...prev, [codeBlockId]: next },
+                                  )
+                                })
                               }}
                               className="group my-2 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-950/25"
                             >
@@ -7517,7 +8028,7 @@ export default function App() {
                 isBusy
                   ? hasInput
                     ? 'border-neutral-400 bg-neutral-200 text-neutral-700 hover:bg-neutral-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-600'
-                    : 'border-neutral-300 bg-neutral-200 text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400'
+                    : 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/60'
                   : !hasInput && isFinalComplete
                     ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
                   : hasInput
@@ -7574,11 +8085,16 @@ export default function App() {
                 {activityLabel}
               </span>
               <span className="break-words [overflow-wrap:anywhere]">{w.status}</span>
+              {responseDurationLabel && (
+                <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400" title="Response duration">
+                  t+{responseDurationLabel}
+                </span>
+              )}
               {contextUsage && contextUsagePercent !== null && (
                 <span
                   className="inline-flex items-center gap-2"
                   title={`${contextUsagePercent.toFixed(1)}% used
-Estimated GPT context usage
+Estimated context usage
 Model window: ${contextUsage.modelContextTokens.toLocaleString()} tokens
 Reserved output: ${contextUsage.outputReserveTokens.toLocaleString()} tokens
 Safe input budget: ${contextUsage.safeInputBudgetTokens.toLocaleString()} tokens
@@ -7595,7 +8111,9 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
               {(() => {
                 const pct = getRateLimitPercent(w.usage)
                 const label = formatRateLimitLabel(w.usage)
-                if (pct === null || !label) return null
+                if (pct === null || !label) {
+                  return null
+                }
                 return (
                   <span className="inline-flex items-center gap-2">
                     <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">

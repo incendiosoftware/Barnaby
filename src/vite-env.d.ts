@@ -22,7 +22,7 @@ type GitStatusEntry = {
   renamedFrom?: string
 }
 
-type ProviderName = 'codex' | 'claude' | 'gemini'
+type ProviderName = 'codex' | 'claude' | 'gemini' | 'openrouter'
 type ProviderAuthStatus = {
   provider: string
   installed: boolean
@@ -32,12 +32,15 @@ type ProviderAuthStatus = {
 }
 type ProviderConfigForAuth = {
   id: string
-  cliCommand: string
+  type?: 'cli' | 'api'
+  cliCommand?: string
   cliPath?: string
   authCheckCommand?: string
   loginCommand?: string
   upgradeCommand?: string
   upgradePackage?: string
+  apiBaseUrl?: string
+  loginUrl?: string
 }
 
 type WorkspaceLockOwner = {
@@ -72,7 +75,7 @@ interface Window {
         permissionMode?: 'verify-first' | 'proceed-always'
         approvalPolicy?: 'on-request' | 'never'
         sandbox?: 'read-only' | 'workspace-write'
-        provider?: 'codex' | 'claude' | 'gemini'
+        provider?: 'codex' | 'claude' | 'gemini' | 'openrouter'
         modelConfig?: Record<string, string>
         initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
       },
@@ -107,6 +110,20 @@ interface Window {
       chatHistoryPath: string
       appStatePath: string
       runtimeLogPath: string
+      diagnosticsConfigPath: string
+    }>
+    loadDiagnosticsConfig(): Promise<{
+      showActivityUpdates: boolean
+      showReasoningUpdates: boolean
+      showOperationTrace: boolean
+      showThinkingProgress: boolean
+      colors: {
+        debugNotes: string
+        activityUpdates: string
+        reasoningUpdates: string
+        operationTrace: string
+        thinkingProgress: string
+      }
     }>
     openRuntimeLog(): Promise<{
       ok: boolean
@@ -170,12 +187,16 @@ interface Window {
     getProviderAuthStatus(config: ProviderConfigForAuth): Promise<ProviderAuthStatus>
     startProviderLogin(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }>
     upgradeProviderCli(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }>
+    setProviderApiKey(providerId: string, apiKey: string): Promise<{ ok: boolean; hasKey: boolean }>
+    getProviderApiKeyState(providerId: string): Promise<{ hasKey: boolean }>
+    importProviderApiKeyFromEnv(providerId: string): Promise<{ ok: boolean; hasKey: boolean; imported: boolean; detail: string }>
     resetApplicationData(): Promise<void>
     getGeminiAvailableModels(): Promise<{ id: string; displayName: string }[]>
     getAvailableModels(): Promise<{
       codex: { id: string; displayName: string }[]
       claude: { id: string; displayName: string }[]
       gemini: { id: string; displayName: string }[]
+      openrouter: { id: string; displayName: string }[]
     }>
     onEvent(cb: (payload: { agentWindowId: string; evt: any }) => void): () => void
     onMenu(cb: (payload: { action: string; path?: string }) => void): () => void

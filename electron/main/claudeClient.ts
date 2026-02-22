@@ -22,6 +22,7 @@ export type ClaudeClientEvent =
   | { type: 'assistantDelta'; delta: string }
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
+  | { type: 'thinking'; message: string }
 
 const INITIAL_HISTORY_MAX_MESSAGES = 24
 

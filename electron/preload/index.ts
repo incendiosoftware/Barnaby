@@ -11,7 +11,7 @@ export type FireHarnessCodexEvent =
 export type CodexConnectOptions = {
   cwd: string
   model: string
-  provider?: 'codex' | 'claude' | 'gemini'
+  provider?: 'codex' | 'claude' | 'gemini' | 'openrouter'
   permissionMode?: 'verify-first' | 'proceed-always'
   approvalPolicy?: 'on-request' | 'never'
   sandbox?: 'read-only' | 'workspace-write'
@@ -30,7 +30,7 @@ type WorkspaceTreeOptions = {
   includeNodeModules?: boolean
 }
 
-type ProviderName = 'codex' | 'claude' | 'gemini'
+type ProviderName = 'codex' | 'claude' | 'gemini' | 'openrouter'
 type ProviderAuthStatus = {
   provider: string
   installed: boolean
@@ -40,12 +40,15 @@ type ProviderAuthStatus = {
 }
 type ProviderConfigForAuth = {
   id: string
-  cliCommand: string
+  type?: 'cli' | 'api'
+  cliCommand?: string
   cliPath?: string
   authCheckCommand?: string
   loginCommand?: string
   upgradeCommand?: string
   upgradePackage?: string
+  apiBaseUrl?: string
+  loginUrl?: string
 }
 
 type WorkspaceLockOwner = {
@@ -126,6 +129,22 @@ const api = {
       chatHistoryPath: string
       appStatePath: string
       runtimeLogPath: string
+      diagnosticsConfigPath: string
+    }>
+  },
+  loadDiagnosticsConfig() {
+    return ipcRenderer.invoke('agentorchestrator:loadDiagnosticsConfig') as Promise<{
+      showActivityUpdates: boolean
+      showReasoningUpdates: boolean
+      showOperationTrace: boolean
+      showThinkingProgress: boolean
+      colors: {
+        debugNotes: string
+        activityUpdates: string
+        reasoningUpdates: string
+        operationTrace: string
+        thinkingProgress: string
+      }
     }>
   },
   openRuntimeLog() {
@@ -244,6 +263,20 @@ const api = {
   upgradeProviderCli(config: ProviderConfigForAuth) {
     return ipcRenderer.invoke('agentorchestrator:upgradeProviderCli', config) as Promise<{ started: boolean; detail: string }>
   },
+  setProviderApiKey(providerId: string, apiKey: string) {
+    return ipcRenderer.invoke('agentorchestrator:setProviderApiKey', providerId, apiKey) as Promise<{ ok: boolean; hasKey: boolean }>
+  },
+  getProviderApiKeyState(providerId: string) {
+    return ipcRenderer.invoke('agentorchestrator:getProviderApiKeyState', providerId) as Promise<{ hasKey: boolean }>
+  },
+  importProviderApiKeyFromEnv(providerId: string) {
+    return ipcRenderer.invoke('agentorchestrator:importProviderApiKeyFromEnv', providerId) as Promise<{
+      ok: boolean
+      hasKey: boolean
+      imported: boolean
+      detail: string
+    }>
+  },
   resetApplicationData() {
     return ipcRenderer.invoke('agentorchestrator:resetApplicationData') as Promise<void>
   },
@@ -255,6 +288,7 @@ const api = {
       codex: { id: string; displayName: string }[]
       claude: { id: string; displayName: string }[]
       gemini: { id: string; displayName: string }[]
+      openrouter: { id: string; displayName: string }[]
     }>
   },
   onEvent(cb: (payload: { agentWindowId: string; evt: FireHarnessCodexEvent }) => void) {

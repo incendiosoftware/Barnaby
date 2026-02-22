@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import { CodexAppServerClient, type CodexConnectOptions, type FireHarnessCodexEvent } from './codexAppServerClient'
 import { GeminiClient, type GeminiClientEvent } from './geminiClient'
 import { ClaudeClient, type ClaudeClientEvent } from './claudeClient'
+import { OpenRouterClient, type OpenRouterClientEvent } from './openRouterClient'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
 const WORKSPACE_LOCK_DIRNAME = '.barnaby'
@@ -20,6 +21,7 @@ const CHAT_HISTORY_STORAGE_KEY = 'agentorchestrator.chatHistory'
 const APP_STORAGE_DIRNAME = '.storage'
 const CHAT_HISTORY_FILENAME = 'chat-history.json'
 const APP_STATE_FILENAME = 'app-state.json'
+const PROVIDER_SECRETS_FILENAME = 'provider-secrets.json'
 const RUNTIME_LOG_FILENAME = 'runtime.log'
 const MAX_PERSISTED_CHAT_HISTORY_ENTRIES = 200
 const MAX_EXPLORER_NODES = 2500
@@ -99,21 +101,24 @@ type WorkspaceLockAcquireResult =
     }
 
 type ConnectOptions = CodexConnectOptions & {
-  provider?: 'codex' | 'claude' | 'gemini'
+  provider?: 'codex' | 'claude' | 'gemini' | 'openrouter'
   modelConfig?: Record<string, string>
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 type ContextMenuKind = 'input-selection' | 'chat-selection'
 
-type ProviderName = 'codex' | 'claude' | 'gemini'
+type ProviderName = 'codex' | 'claude' | 'gemini' | 'openrouter'
 type ProviderConfigForAuth = {
   id: string
-  cliCommand: string
+  type?: 'cli' | 'api'
+  cliCommand?: string
   cliPath?: string
   authCheckCommand?: string
   loginCommand?: string
   upgradeCommand?: string
   upgradePackage?: string
+  apiBaseUrl?: string
+  loginUrl?: string
 }
 type ProviderAuthStatus = {
   provider: string
@@ -150,8 +155,8 @@ type PersistedChatHistoryEntry = {
   messages: PersistedChatMessage[]
 }
 
-type AgentClient = CodexAppServerClient | ClaudeClient | GeminiClient
-type AgentEvent = FireHarnessCodexEvent | ClaudeClientEvent | GeminiClientEvent
+type AgentClient = CodexAppServerClient | ClaudeClient | GeminiClient | OpenRouterClient
+type AgentEvent = FireHarnessCodexEvent | ClaudeClientEvent | GeminiClientEvent | OpenRouterClientEvent
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -232,7 +237,16 @@ function closeSplashWindow() {
 }
 
 function splashFallbackHtmlDataUrl(splashImagePath: string) {
-  const splashImageUrl = pathToFileURL(splashImagePath).toString()
+  let splashImageUrl = ''
+  try {
+    if (fs.existsSync(splashImagePath)) {
+      const splashImageBase64 = fs.readFileSync(splashImagePath).toString('base64')
+      splashImageUrl = `data:image/png;base64,${splashImageBase64}`
+    }
+  } catch (err) {
+    appendRuntimeLog('splash-image-base64-failed', { splashImagePath, error: errorMessage(err) }, 'warn')
+  }
+
   const version = app.getVersion()
   const html = `<!doctype html>
 <html lang="en">
@@ -275,7 +289,7 @@ function splashFallbackHtmlDataUrl(splashImagePath: string) {
 </head>
 <body>
   <div class="root">
-    <img src="${splashImageUrl}" alt="Barnaby splash" />
+    ${splashImageUrl ? `<img src="${splashImageUrl}" alt="Barnaby splash" />` : ''}
   </div>
   <div class="version">${String(version).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
 </body>
@@ -531,6 +545,109 @@ function writePersistedAppState(state: unknown) {
   }
 }
 
+function getProviderSecretsPath() {
+  return path.join(getAppStorageDirPath(), PROVIDER_SECRETS_FILENAME)
+}
+
+function readProviderSecrets(): Record<string, { apiKey?: string }> {
+  const secretsPath = getProviderSecretsPath()
+  if (!fs.existsSync(secretsPath)) return {}
+  try {
+    const raw = fs.readFileSync(secretsPath, 'utf8')
+    if (!raw.trim()) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return parsed as Record<string, { apiKey?: string }>
+  } catch (err) {
+    appendRuntimeLog('read-provider-secrets-failed', errorMessage(err), 'warn')
+    return {}
+  }
+}
+
+function writeProviderSecrets(next: Record<string, { apiKey?: string }>) {
+  const secretsPath = getProviderSecretsPath()
+  fs.mkdirSync(path.dirname(secretsPath), { recursive: true })
+  fs.writeFileSync(secretsPath, JSON.stringify(next, null, 2), 'utf8')
+}
+
+function getProviderApiKey(providerId: string): string {
+  const secrets = readProviderSecrets()
+  return (secrets[providerId]?.apiKey ?? '').trim()
+}
+
+function setProviderApiKey(providerId: string, apiKey: string) {
+  const secrets = readProviderSecrets()
+  const key = apiKey.trim()
+  if (!key) {
+    delete secrets[providerId]
+  } else {
+    secrets[providerId] = { ...(secrets[providerId] ?? {}), apiKey: key }
+  }
+  writeProviderSecrets(secrets)
+  return { ok: true, hasKey: key.length > 0 }
+}
+
+function importProviderApiKeyFromEnv(providerId: string) {
+  const envVarByProvider: Record<string, string> = {
+    openrouter: 'OPENROUTER_API_KEY',
+  }
+  const envVar = envVarByProvider[providerId]
+  if (!envVar) {
+    return { ok: false as const, hasKey: false, imported: false, detail: `No environment mapping for provider "${providerId}".` }
+  }
+  const value = (process.env[envVar] ?? '').trim()
+  if (!value) {
+    return { ok: false as const, hasKey: false, imported: false, detail: `${envVar} is not set in this process environment.` }
+  }
+  const saved = setProviderApiKey(providerId, value)
+  return { ok: true as const, hasKey: saved.hasKey, imported: true as const, detail: `Imported API key from ${envVar}.` }
+}
+
+function getDiagnosticsConfigPath(): string {
+  return path.join(getAppStorageDirPath(), 'diagnostics.json')
+}
+
+const DEFAULT_DIAGNOSTICS_CONFIG = {
+  showActivityUpdates: false,
+  showReasoningUpdates: false,
+  showOperationTrace: true,
+  showThinkingProgress: true,
+  colors: {
+    debugNotes: '#b91c1c',
+    activityUpdates: '#b45309',
+    reasoningUpdates: '#047857',
+    operationTrace: '#1e3a8a',
+    thinkingProgress: '#737373',
+  },
+}
+
+function loadDiagnosticsConfig(): typeof DEFAULT_DIAGNOSTICS_CONFIG {
+  try {
+    const configPath = getDiagnosticsConfigPath()
+    if (!fs.existsSync(configPath)) {
+      fs.mkdirSync(path.dirname(configPath), { recursive: true })
+      fs.writeFileSync(configPath, JSON.stringify(DEFAULT_DIAGNOSTICS_CONFIG, null, 2), 'utf8')
+      return { ...DEFAULT_DIAGNOSTICS_CONFIG, colors: { ...DEFAULT_DIAGNOSTICS_CONFIG.colors } }
+    }
+    const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    return {
+      showActivityUpdates: typeof raw?.showActivityUpdates === 'boolean' ? raw.showActivityUpdates : DEFAULT_DIAGNOSTICS_CONFIG.showActivityUpdates,
+      showReasoningUpdates: typeof raw?.showReasoningUpdates === 'boolean' ? raw.showReasoningUpdates : DEFAULT_DIAGNOSTICS_CONFIG.showReasoningUpdates,
+      showOperationTrace: typeof raw?.showOperationTrace === 'boolean' ? raw.showOperationTrace : DEFAULT_DIAGNOSTICS_CONFIG.showOperationTrace,
+      showThinkingProgress: typeof raw?.showThinkingProgress === 'boolean' ? raw.showThinkingProgress : DEFAULT_DIAGNOSTICS_CONFIG.showThinkingProgress,
+      colors: {
+        debugNotes: typeof raw?.colors?.debugNotes === 'string' ? raw.colors.debugNotes : DEFAULT_DIAGNOSTICS_CONFIG.colors.debugNotes,
+        activityUpdates: typeof raw?.colors?.activityUpdates === 'string' ? raw.colors.activityUpdates : DEFAULT_DIAGNOSTICS_CONFIG.colors.activityUpdates,
+        reasoningUpdates: typeof raw?.colors?.reasoningUpdates === 'string' ? raw.colors.reasoningUpdates : DEFAULT_DIAGNOSTICS_CONFIG.colors.reasoningUpdates,
+        operationTrace: typeof raw?.colors?.operationTrace === 'string' ? raw.colors.operationTrace : DEFAULT_DIAGNOSTICS_CONFIG.colors.operationTrace,
+        thinkingProgress: typeof raw?.colors?.thinkingProgress === 'string' ? raw.colors.thinkingProgress : DEFAULT_DIAGNOSTICS_CONFIG.colors.thinkingProgress,
+      },
+    }
+  } catch {
+    return { ...DEFAULT_DIAGNOSTICS_CONFIG, colors: { ...DEFAULT_DIAGNOSTICS_CONFIG.colors } }
+  }
+}
+
 function getDiagnosticsInfo() {
   return {
     userDataPath: app.getPath('userData'),
@@ -538,6 +655,7 @@ function getDiagnosticsInfo() {
     chatHistoryPath: getChatHistoryFilePath(),
     appStatePath: getAppStateFilePath(),
     runtimeLogPath: getRuntimeLogFilePath(),
+    diagnosticsConfigPath: getDiagnosticsConfigPath(),
   }
 }
 
@@ -1317,7 +1435,57 @@ async function isCliInstalled(executable: string): Promise<boolean> {
 }
 
 async function getProviderAuthStatus(config: ProviderConfigForAuth): Promise<ProviderAuthStatus> {
-  const executable = config.cliPath ?? config.cliCommand
+  const providerType = config.type ?? (config.id === 'openrouter' ? 'api' : 'cli')
+  if (providerType === 'api') {
+    const apiKey = getProviderApiKey(config.id)
+    const base = (config.apiBaseUrl ?? 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
+    if (!apiKey) {
+      return {
+        provider: config.id,
+        installed: true,
+        authenticated: false,
+        detail: 'API key not configured. Add your key in Settings -> Connectivity.',
+        checkedAt: Date.now(),
+      }
+    }
+    try {
+      const res = await fetch(`${base}/models`, {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'HTTP-Referer': 'https://barnaby.build',
+          'X-Title': 'Barnaby',
+        },
+        signal: AbortSignal.timeout(10000),
+      })
+      if (res.ok) {
+        return {
+          provider: config.id,
+          installed: true,
+          authenticated: true,
+          detail: 'API key is valid.',
+          checkedAt: Date.now(),
+        }
+      }
+      const body = await res.text().catch(() => '')
+      return {
+        provider: config.id,
+        installed: true,
+        authenticated: false,
+        detail: `API check failed (${res.status}). ${body.slice(0, 200)}`.trim(),
+        checkedAt: Date.now(),
+      }
+    } catch (err) {
+      return {
+        provider: config.id,
+        installed: true,
+        authenticated: false,
+        detail: errorMessage(err) || 'API check failed.',
+        checkedAt: Date.now(),
+      }
+    }
+  }
+
+  const executable = config.cliPath ?? config.cliCommand ?? ''
   const authArgs = (config.authCheckCommand ?? '--version').trim().split(/\s+/).filter(Boolean)
   const isCodexStyle = config.id === 'codex'
 
@@ -1352,7 +1520,17 @@ async function getProviderAuthStatus(config: ProviderConfigForAuth): Promise<Pro
 }
 
 async function launchProviderLogin(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }> {
+  const providerType = config.type ?? (config.id === 'openrouter' ? 'api' : 'cli')
+  if (providerType === 'api') {
+    const target = config.loginUrl || 'https://openrouter.ai/keys'
+    await shell.openExternal(target)
+    return { started: true, detail: `Opened ${config.id} key management page.` }
+  }
+
   const command = config.loginCommand ?? config.cliCommand
+  if (!command) {
+    return { started: false, detail: `No login command configured for ${config.id}.` }
+  }
 
   if (process.platform === 'win32') {
     await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'start', '', 'cmd', '/k', command], {
@@ -1420,6 +1598,7 @@ type ModelsByProvider = {
   codex: { id: string; displayName: string }[]
   claude: { id: string; displayName: string }[]
   gemini: { id: string; displayName: string }[]
+  openrouter: { id: string; displayName: string }[]
 }
 
 async function fetchModelsCatalog(): Promise<ModelsByProvider | null> {
@@ -1431,6 +1610,7 @@ async function fetchModelsCatalog(): Promise<ModelsByProvider | null> {
         codex?: { models?: { id: string; displayName: string }[] }
         claude?: { models?: { id: string; displayName: string }[] }
         gemini?: { models?: { id: string; displayName: string }[] }
+        openrouter?: { models?: { id: string; displayName: string }[] }
       }
     }
     const providers = data?.providers
@@ -1441,6 +1621,7 @@ async function fetchModelsCatalog(): Promise<ModelsByProvider | null> {
       codex: valid(providers.codex?.models),
       claude: valid(providers.claude?.models),
       gemini: valid(providers.gemini?.models),
+      openrouter: valid(providers.openrouter?.models),
     }
   } catch {
     return null
@@ -1536,6 +1717,7 @@ async function getAvailableModels(): Promise<ModelsByProvider> {
   let codex = catalog?.codex ?? []
   let claude = catalog?.claude ?? []
   let gemini = catalog?.gemini ?? []
+  let openrouter = catalog?.openrouter ?? []
 
   if (codex.length === 0) {
     codex = await queryCodexModelsViaExec().catch(() => [])
@@ -1548,14 +1730,42 @@ async function getAvailableModels(): Promise<ModelsByProvider> {
     const geminiFromCli = await getGeminiAvailableModels().catch(() => [])
     if (geminiFromCli.length > 0) gemini = geminiFromCli
   }
+  if (openrouter.length === 0) {
+    openrouter = await fetchOpenRouterModels().catch(() => [])
+  }
+  if (openrouter.length === 0) {
+    openrouter = [{ id: 'openrouter/auto', displayName: 'OpenRouter Auto' }]
+  }
 
-  return { codex, claude, gemini }
+  return { codex, claude, gemini, openrouter }
+}
+
+async function fetchOpenRouterModels(): Promise<{ id: string; displayName: string }[]> {
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(10000) })
+    if (!res.ok) return []
+    const data = (await res.json()) as {
+      data?: Array<{ id?: string; name?: string; pricing?: { prompt?: string; completion?: string } }>
+    }
+    const models = Array.isArray(data?.data) ? data.data : []
+    const free = models
+      .filter((m) => typeof m?.id === 'string')
+      .map((m) => ({
+        id: String(m.id),
+        displayName: typeof m?.name === 'string' && m.name.trim() ? m.name : String(m.id),
+        isFree:
+          String(m?.id).includes(':free') ||
+          (m?.pricing?.prompt === '0' && m?.pricing?.completion === '0'),
+      }))
+    const picked = free.filter((m) => m.isFree).slice(0, 24)
+    if (picked.length > 0) return picked.map(({ id, displayName }) => ({ id, displayName }))
+    return free.slice(0, 24).map(({ id, displayName }) => ({ id, displayName }))
+  } catch {
+    return []
+  }
 }
 
 async function getGeminiAvailableModels(): Promise<{ id: string; displayName: string }[]> {
-  const available = await getAvailableModels()
-  if (available.gemini.length > 0) return available.gemini
-
   const timeoutMs = 45_000
   return new Promise((resolve, reject) => {
     const args = ['-o', 'json', '-p', GEMINI_MODELS_PROMPT]
@@ -1699,6 +1909,22 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
       cwd: options.cwd,
       model: options.model,
       permissionMode: options.permissionMode,
+      initialHistory: options.initialHistory,
+    }) as { threadId: string }
+    agentClients.set(agentWindowId, client)
+    return { client, result }
+  }
+
+  if (provider === 'openrouter') {
+    const client = new OpenRouterClient()
+    client.on('event', (evt: OpenRouterClientEvent) => forwardEvent(agentWindowId, evt))
+    const apiKey = getProviderApiKey('openrouter')
+    if (!apiKey) throw new Error('OpenRouter API key is missing. Open Settings -> Connectivity and add it.')
+    const result = await client.connect({
+      cwd: options.cwd,
+      model: options.model,
+      apiKey,
+      baseUrl: options.modelConfig?.openrouterBaseUrl,
       initialHistory: options.initialHistory,
     }) as { threadId: string }
     agentClients.set(agentWindowId, client)
@@ -1943,6 +2169,10 @@ ipcMain.handle('agentorchestrator:getDiagnosticsInfo', async () => {
   return getDiagnosticsInfo()
 })
 
+ipcMain.handle('agentorchestrator:loadDiagnosticsConfig', async () => {
+  return loadDiagnosticsConfig()
+})
+
 ipcMain.handle('agentorchestrator:openRuntimeLog', async () => {
   return openRuntimeLogFile()
 })
@@ -2086,6 +2316,19 @@ ipcMain.handle('agentorchestrator:upgradeProviderCli', async (_evt, config: Prov
   return launchProviderUpgrade(config)
 })
 
+ipcMain.handle('agentorchestrator:setProviderApiKey', async (_evt, providerId: string, apiKey: string) => {
+  return setProviderApiKey(providerId, apiKey)
+})
+
+ipcMain.handle('agentorchestrator:getProviderApiKeyState', async (_evt, providerId: string) => {
+  const hasKey = getProviderApiKey(providerId).length > 0
+  return { hasKey }
+})
+
+ipcMain.handle('agentorchestrator:importProviderApiKeyFromEnv', async (_evt, providerId: string) => {
+  return importProviderApiKeyFromEnv(providerId)
+})
+
 ipcMain.handle('agentorchestrator:resetApplicationData', async () => {
   try {
     const userData = app.getPath('userData')
@@ -2093,9 +2336,11 @@ ipcMain.handle('agentorchestrator:resetApplicationData', async () => {
     const storageDir = path.join(userData, APP_STORAGE_DIRNAME)
     const appStatePath = path.join(storageDir, APP_STATE_FILENAME)
     const chatHistoryPath = path.join(storageDir, CHAT_HISTORY_FILENAME)
+    const providerSecretsPath = path.join(storageDir, PROVIDER_SECRETS_FILENAME)
 
     if (fs.existsSync(appStatePath)) fs.unlinkSync(appStatePath)
     if (fs.existsSync(chatHistoryPath)) fs.unlinkSync(chatHistoryPath)
+    if (fs.existsSync(providerSecretsPath)) fs.unlinkSync(providerSecretsPath)
   } catch (err) {
     console.error('Failed to reset application data:', err)
   }
@@ -2163,7 +2408,16 @@ function createAboutWindow() {
   if (!publicRoot) return
 
   const splashImagePath = path.join(publicRoot, 'splash.png')
-  const splashImageUrl = pathToFileURL(splashImagePath).toString()
+  let splashImageUrl = ''
+  try {
+    if (fs.existsSync(splashImagePath)) {
+      const splashImageBase64 = fs.readFileSync(splashImagePath).toString('base64')
+      splashImageUrl = `data:image/png;base64,${splashImageBase64}`
+    }
+  } catch (err) {
+    appendRuntimeLog('about-splash-base64-failed', { splashImagePath, error: errorMessage(err) }, 'warn')
+  }
+
   const version = app.getVersion()
   const appName = 'Barnaby'
   const description = 'Barnaby is an autonomous agent desktop for developers. It orchestrates parallel agent loops directly through your local CLI subscriptions.'
@@ -2214,12 +2468,13 @@ function createAboutWindow() {
       width: 320px;
       margin-bottom: 24px;
     }
-    .splash-container img {
-      width: 100%;
-      height: auto;
-      object-fit: contain;
-    }
-    h1 {
+                .splash-container img { 
+                    width: 100%; 
+                    height: auto; 
+                    object-fit: contain; 
+                    max-width: 300px;
+                    max-height: 300px;
+                }    h1 {
       margin: 0 0 4px 0;
       font-size: 24px;
       font-weight: 700;
@@ -2287,6 +2542,7 @@ function createAboutWindow() {
     fullscreenable: false,
     title: `About ${appName}`,
     autoHideMenuBar: true,
+    backgroundColor: theme.bg,
     parent: win ?? undefined,
     modal: !!win,
     show: false,

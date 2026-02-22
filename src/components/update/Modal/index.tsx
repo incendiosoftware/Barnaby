@@ -45,8 +45,20 @@ const ModalTemplate: React.FC<React.PropsWithChildren<{
           <div className='content__body'>{children}</div>
           {typeof footer !== 'undefined' ? (
             <div className='content__footer'>
-              <button onClick={onCancel}>{cancelText}</button>
-              <button onClick={onOk}>{okText}</button>
+              <button
+                type="button"
+                className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                onClick={onCancel}
+              >
+                {cancelText}
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-blue-300 bg-blue-500 px-3 py-1.5 text-sm text-white hover:bg-blue-600 dark:border-blue-700 dark:bg-blue-600 dark:hover:bg-blue-500"
+                onClick={onOk}
+              >
+                {okText}
+              </button>
             </div>
           ) : footer}
         </div>

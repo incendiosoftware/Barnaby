@@ -32,7 +32,7 @@ export type FireHarnessCodexEvent =
 export type CodexConnectOptions = {
   cwd: string
   model: string
-  provider?: 'codex' | 'claude' | 'gemini'
+  provider?: 'codex' | 'claude' | 'gemini' | 'openrouter'
   permissionMode?: 'verify-first' | 'proceed-always'
   approvalPolicy?: 'on-request' | 'never'
   sandbox?: 'read-only' | 'workspace-write'

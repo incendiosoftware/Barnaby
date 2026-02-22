@@ -169,7 +169,8 @@ export class GeminiClient extends EventEmitter {
         let resolved = false
         let stdoutBuffer = ''
 
-        const GEMINI_NOISE = /quota|retrying after|rate.?limit|capacity.*exhausted|reset after|YOLO mode|Loaded cached credentials|All tool calls will be|No capacity available/i
+        const GEMINI_NOISE = /quota|retrying after|rate.?limit|capacity.*exhausted|reset after|YOLO mode|Loaded cached credentials|All tool calls will be/i
+        const GEMINI_RETRYABLE = /status 429|Retrying with backoff|Attempt \d+ failed(?!.*Max attempts)|No capacity available/i
 
         proc.stdout.on('data', (chunk: string) => {
           if (!chunk) return
@@ -189,8 +190,10 @@ export class GeminiClient extends EventEmitter {
 
               const short = trimmed.length > 300 ? trimmed.slice(0, 300) + '...' : trimmed
 
-              if (/Max attempts reached|failed.*No capacity|capacity.*failed/i.test(trimmed)) {
+              if (/Max attempts reached/i.test(trimmed)) {
                 this.emitEvent({ type: 'status', status: 'error', message: short })
+              } else if (GEMINI_RETRYABLE.test(trimmed)) {
+                this.emitEvent({ type: 'thinking', message: 'Rate limited — CLI is retrying...' })
               } else {
                 this.emitEvent({ type: 'thinking', message: short })
               }
@@ -230,7 +233,12 @@ export class GeminiClient extends EventEmitter {
                 const errMsg = typeof raw === 'string'
                   ? (raw.length > 300 ? raw.slice(0, 300) + '...' : raw)
                   : 'Gemini error'
-                if (!GEMINI_NOISE.test(errMsg)) {
+                if (GEMINI_NOISE.test(errMsg)) break
+
+                const isRetryable = /status 429|Retrying with backoff|Attempt \d+ failed/i.test(errMsg)
+                if (isRetryable) {
+                  this.emitEvent({ type: 'thinking', message: `Rate limited — CLI is retrying...` })
+                } else {
                   this.emitEvent({ type: 'status', status: 'error', message: errMsg })
                 }
               }

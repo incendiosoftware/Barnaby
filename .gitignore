@@ -33,3 +33,4 @@ yarn.lock
 /playwright/.cache/
 .barnaby/active-token.json
 .agentorchestrator.json
+openrouter-chat-logs/

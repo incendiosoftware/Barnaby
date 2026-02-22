@@ -797,8 +797,8 @@ const FONT_SCALE_STEP = 0.05
 const INPUT_MAX_HEIGHT_PX = 220
 const DEFAULT_EXPLORER_PREFS: ExplorerPrefs = { showHiddenFiles: false, showNodeModules: false }
 const CONNECT_TIMEOUT_MS = 30000
-const TURN_START_TIMEOUT_MS = 120000
-const STALL_WATCHDOG_MS = 180000
+const TURN_START_TIMEOUT_MS = 300000
+const STALL_WATCHDOG_MS = 360000
 const COLLAPSIBLE_CODE_MIN_LINES = 14
 const MAX_CHAT_HISTORY_ENTRIES = 80
 const DEFAULT_GPT_CONTEXT_TOKENS = 200_000
@@ -3453,17 +3453,19 @@ export default function App() {
 
       if (evt?.type === 'status') {
         appendPanelDebug(agentWindowId, 'event:status', `${evt.status}${evt.message ? ` - ${evt.message}` : ''}`)
+        const isRetryableError = evt.status === 'error' && typeof evt.message === 'string' &&
+          /status 429|Retrying with backoff|Attempt \d+ failed(?!.*Max attempts)|Rate limited/i.test(evt.message)
         setPanels((prev) =>
           prev.map((w) =>
             w.id !== agentWindowId
               ? w
               : {
                   ...w,
-                  status: evt.message ?? evt.status,
+                  status: isRetryableError ? 'Rate limited — retrying...' : (evt.message ?? evt.status),
                   connected: evt.status === 'ready',
-                    streaming: evt.status === 'closed' || evt.status === 'error' ? false : w.streaming,
+                  streaming: isRetryableError ? w.streaming : (evt.status === 'closed' || evt.status === 'error' ? false : w.streaming),
                   messages:
-                    evt.status === 'error' && typeof evt.message === 'string'
+                    evt.status === 'error' && typeof evt.message === 'string' && !isRetryableError
                       ? (() => {
                           const withLimit = withLimitWarningMessage(w.messages, evt.message)
                           const generic = `Provider error: ${evt.message.trim()}`
@@ -3476,7 +3478,7 @@ export default function App() {
                 },
           ),
         )
-        if (evt.status === 'closed' || evt.status === 'error') {
+        if ((evt.status === 'closed' || evt.status === 'error') && !isRetryableError) {
           activePromptStartedAtRef.current.delete(agentWindowId)
           queueMicrotask(() => kickQueuedMessage(agentWindowId))
         }
@@ -7959,6 +7961,13 @@ export default function App() {
                         loading="lazy"
                       />
                     ))}
+                  </div>
+                )}
+                {m.role === 'assistant' && unit.status === 'completed' && (
+                  <div className="mt-1.5 flex justify-end">
+                    <div className="px-1.5 py-0.5 text-[10px] font-mono text-neutral-400 dark:text-neutral-500 opacity-60">
+                      {((unit.updatedAt - unit.createdAt) / 1000).toFixed(1)}s
+                    </div>
                   </div>
                 )}
               </div>

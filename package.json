@@ -1,7 +1,7 @@
 {
   "name": "barnaby",
   "productName": "Barnaby",
-  "version": "0.0.107",
+  "version": "0.0.114",
   "main": "dist-electron/main/index.js",
   "description": "Barnaby: local agent loops without API keys.",
   "author": "stuart",
@@ -13,8 +13,12 @@
     }
   },
   "type": "module",
+  "engines": {
+    "node": ">=20 <25"
+  },
   "scripts": {
     "bump:version": "node scripts/bump-version.mjs",
+    "predev": "node -e \"const major = Number(process.versions.node.split('.')[0]); if (major < 20 || major >= 26) { console.error('\\nUnsupported Node.js version ' + process.version + '.\\nUse Node >=20 and <26 (recommended: Node 22 LTS).\\n'); process.exit(1); }\"",
     "dev": "vite",
     "dev:clean": "node scripts/dev-clean.mjs && npm run dev",
     "build:dist:raw": "tsc && vite build",

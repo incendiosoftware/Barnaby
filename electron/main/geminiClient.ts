@@ -14,7 +14,6 @@ function getGeminiSpawnEnv(): NodeJS.ProcessEnv {
   return env
 }
 
-import { generateWorkspaceTreeText } from './fileTree'
 import { resolveAtFileReferences } from './atFileResolver'
 
 export type GeminiClientEvent =
@@ -143,10 +142,12 @@ export class GeminiClient extends EventEmitter {
     const startTurn = (modelId: string): Promise<void> =>
       new Promise((resolve, reject) => {
         const args = ['-m', modelId, '--yolo', '--output-format', 'stream-json']
+        const spawnEnv = getGeminiSpawnEnv()
+        spawnEnv.GEMINI_SANDBOX = 'false'
         const spawnOpts = {
           cwd: this.cwd,
           stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
-          env: getGeminiSpawnEnv(),
+          env: spawnEnv,
         }
         const proc =
           process.platform === 'win32'
@@ -202,25 +203,48 @@ export class GeminiClient extends EventEmitter {
 
             switch (evt.type) {
               case 'message':
-                if (evt.role === 'assistant' && typeof evt.content === 'string') {
+                if ((evt.role === 'assistant' || evt.role === 'model') && typeof evt.content === 'string') {
                   this.emitEvent({ type: 'assistantDelta', delta: evt.content })
                   assistantText += evt.content
+                  if (evt.delta) {
+                    const snippet = evt.content.trim()
+                    if (snippet.length > 0 && snippet.length < 200) {
+                      this.emitEvent({ type: 'thinking', message: snippet })
+                    }
+                  }
                 }
                 break
-              case 'tool_use': {
-                const desc = `Using ${evt.tool_name ?? 'tool'}` +
-                  (evt.parameters?.file_path ? `: ${evt.parameters.file_path}` :
-                   evt.parameters?.command ? `: ${evt.parameters.command}` :
-                   evt.parameters?.dir_path ? `: ${evt.parameters.dir_path}` :
-                   evt.parameters?.pattern ? `: ${evt.parameters.pattern}` : '')
+              case 'tool_use':
+              case 'toolUse':
+              case 'functionCall': {
+                const toolName = evt.tool_name ?? evt.name ?? evt.toolName ?? 'tool'
+                const params = evt.parameters ?? evt.args ?? evt.input ?? {}
+                const detail = params.file_path ?? params.command ?? params.dir_path ??
+                  params.pattern ?? params.query ?? params.path ?? params.url ?? ''
+                const desc = `Using ${toolName}${detail ? `: ${detail}` : ''}`
                 this.emitEvent({ type: 'thinking', message: desc })
                 break
               }
-              case 'tool_result': {
+              case 'tool_result':
+              case 'toolResult':
+              case 'functionResponse': {
                 const status = evt.status === 'success' ? 'done' : (evt.status ?? 'done')
-                const output = typeof evt.output === 'string' ? evt.output : ''
-                const short = output.length > 120 ? output.slice(0, 120) + '...' : output
+                const output = typeof evt.output === 'string' ? evt.output
+                  : typeof evt.result === 'string' ? evt.result
+                  : typeof evt.response === 'string' ? evt.response : ''
+                const short = output.length > 160 ? output.slice(0, 160) + '...' : output
                 this.emitEvent({ type: 'thinking', message: short || status })
+                break
+              }
+              case 'thinking':
+              case 'thought': {
+                const text = typeof evt.content === 'string' ? evt.content
+                  : typeof evt.message === 'string' ? evt.message
+                  : typeof evt.text === 'string' ? evt.text : ''
+                if (text) {
+                  const short = text.length > 200 ? text.slice(0, 200) + '...' : text
+                  this.emitEvent({ type: 'thinking', message: short })
+                }
                 break
               }
               case 'result':
@@ -241,9 +265,17 @@ export class GeminiClient extends EventEmitter {
                 } else {
                   this.emitEvent({ type: 'status', status: 'error', message: errMsg })
                 }
-              }
                 break
-              // 'init' and 'message' with role=user are silently ignored
+              }
+              case 'init':
+                break
+              default: {
+                const msg = evt.message ?? evt.content ?? evt.text ?? ''
+                if (typeof msg === 'string' && msg.trim()) {
+                  const short = msg.length > 200 ? msg.slice(0, 200) + '...' : msg
+                  this.emitEvent({ type: 'thinking', message: `[${evt.type}] ${short}` })
+                }
+              }
             }
           }
         })
@@ -339,15 +371,12 @@ export class GeminiClient extends EventEmitter {
   }
 
   private buildGeminiPrompt(userMessage: string): string {
-    const tree = generateWorkspaceTreeText(this.cwd)
-    const context = `Workspace: ${this.cwd}\n\n${tree}`
-
     const lastAssistant = [...this.history].reverse().find((m) => m.role === 'assistant')
     const continuationHint = lastAssistant
-      ? `\n\nFor context, your previous response was:\n${lastAssistant.text.slice(0, 2000)}\n\n`
+      ? `\n\nFor context, your previous response was:\n${lastAssistant.text.slice(0, 1200)}\n\n`
       : ''
 
-    return `${context}${continuationHint}\n\n${userMessage}`
+    return `${continuationHint}${userMessage}`
   }
 
   private async assertGeminiCliAvailable() {

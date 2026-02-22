@@ -1,10 +1,12 @@
 # Barnaby
 
-Barnaby is a desktop AI agent orchestrator that connects to your existing CLI subscriptions (Codex, Claude, Gemini) and delivers better orchestration and windowed agents than Cursor.
+Barnaby is a open source desktop AI agent orchestrator that connects to your existing CLI subscriptions (Codex, Claude, Gemini) as well as API integeration to a sophisticated agentic development environment with focus on workflow, orchestration and co-ordinated agent work. It circumvents expense API calls by wrapping premium subscriptions, as well as providing access to many other free models with OpenRouter. The low code and easy to use multi-window enviornment provdes a relief from constrained Visual Code fork based user interfaces.
 
-- Uses your Codex, Claude, and Gemini CLI logins — no API keys in Barnaby
+- Uses your Codex, Claude, and Gemini CLI logins — no API keys required in Barnaby
+- Optional API interfaces when and where required
 - Multiple agent panels with split layouts (horizontal, vertical, grid)
 - Workspace-oriented UI with per-workspace model defaults and state
+- Sophisticated Agent Orchestrator 
 
 Latest Binary Release
 [Download Barnaby v0.0.85](https://github.com/incendiosoftware/Barnaby/releases/tag/v0.0.85)
@@ -16,11 +18,7 @@ Email: incendiosoftware@gmail.com
 
 ## Screenshots
 
-### Dark
-
 ![Barnaby dark screenshot](docs/screenshots/barnaby-dark.png)
-
-### Light
 
 ![Barnaby light screenshot](docs/screenshots/barnaby-light.png)
 

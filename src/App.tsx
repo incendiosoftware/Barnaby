@@ -579,18 +579,34 @@ function syncModelConfigWithCatalog(
     gemini: [...(available.gemini ?? []), ...defaultModelsByProvider.gemini],
     openrouter: [...(available.openrouter ?? []), ...defaultModelsByProvider.openrouter],
   }
-  const kept = prev.interfaces.filter((m) => {
-    if (!enabledProviders.has(m.provider)) return false
-    return true
-  })
-  const existingIds = new Set(kept.map((m) => m.id))
-  const nextInterfaces = [...kept]
+  const keptById = new Map<string, ModelInterface>()
+  for (const model of prev.interfaces) {
+    if (!enabledProviders.has(model.provider)) continue
+    const id = String(model.id ?? '').trim()
+    if (!id) continue
+    const normalized: ModelInterface = {
+      ...model,
+      id,
+      // Show raw model IDs to avoid ambiguous friendly aliases.
+      displayName: id,
+    }
+    const existing = keptById.get(id)
+    if (!existing) {
+      keptById.set(id, normalized)
+      continue
+    }
+    // If duplicates exist, keep whichever entry is enabled.
+    if (!existing.enabled && normalized.enabled) keptById.set(id, normalized)
+  }
+  const nextInterfaces = [...keptById.values()]
+  const existingIds = new Set(nextInterfaces.map((m) => m.id))
   for (const provider of CONNECTIVITY_PROVIDERS) {
     if (!enabledProviders.has(provider)) continue
     for (const model of catalogModelsByProvider[provider]) {
-      if (existingIds.has(model.id)) continue
-      nextInterfaces.push({ id: model.id, displayName: model.displayName, provider, enabled: true })
-      existingIds.add(model.id)
+      const id = String(model.id ?? '').trim()
+      if (!id || existingIds.has(id)) continue
+      nextInterfaces.push({ id, displayName: id, provider, enabled: true })
+      existingIds.add(id)
     }
   }
   return { interfaces: nextInterfaces }
@@ -2134,8 +2150,18 @@ export default function App() {
     )
   }, [chatHistory, workspaceRoot])
   function getModelOptions(includeCurrent?: string): string[] {
-    const base = [...modelList]
-    if (includeCurrent && !base.includes(includeCurrent)) base.push(includeCurrent)
+    const seen = new Set<string>()
+    const base: string[] = []
+    for (const id of modelList) {
+      const value = String(id ?? '').trim()
+      if (!value || seen.has(value)) continue
+      seen.add(value)
+      base.push(value)
+    }
+    if (includeCurrent) {
+      const value = String(includeCurrent).trim()
+      if (value && !seen.has(value)) base.push(value)
+    }
     return base
   }
 
@@ -6569,7 +6595,7 @@ export default function App() {
                   const mi = modelConfig.interfaces.find((m) => m.id === id)
                   return (
                     <option key={id} value={id}>
-                      {mi?.displayName ?? id}
+                      {id}
                     </option>
                   )
                 })}
@@ -7547,7 +7573,7 @@ export default function App() {
                             className="flex items-center justify-between px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-900"
                           >
                             <div>
-                              <span className="font-medium">{m.displayName || m.id}</span>
+                              <span className="font-medium">{m.id}</span>
                               <span className="text-xs text-neutral-500 dark:text-neutral-400 ml-2">
                                 {grp.label} {!m.enabled && '(disabled)'}
                               </span>
@@ -8811,7 +8837,7 @@ export default function App() {
                     const mi = modelConfig.interfaces.find((m) => m.id === id)
                     return (
                       <option key={id} value={id}>
-                        {mi?.displayName ?? id}
+                        {id}
                       </option>
                     )
                   })}
@@ -9594,14 +9620,31 @@ export default function App() {
                 {m.attachments && m.attachments.length > 0 && (
                   <div className={`${m.content ? 'mt-2' : ''} flex flex-wrap gap-2`}>
                     {m.attachments.map((attachment) => (
-                      <img
-                        key={attachment.id}
-                        src={toLocalFileUrl(attachment.path)}
-                        alt={attachment.label || 'Image attachment'}
-                        title={attachment.path}
-                        className="h-20 w-20 rounded-md border border-blue-200/80 object-cover bg-blue-50 dark:border-blue-900/70 dark:bg-blue-950/20"
-                        loading="lazy"
-                      />
+                      (() => {
+                        const src = toLocalFileUrl(attachment.path)
+                        const blocksLocalFileUrl = src.startsWith('file://') && /^https?:$/i.test(window.location.protocol)
+                        if (blocksLocalFileUrl) {
+                          return (
+                            <span
+                              key={attachment.id}
+                              className="inline-flex max-w-[220px] items-center rounded-md border border-blue-200/80 bg-blue-50 px-2 py-1 text-[11px] text-blue-900 dark:border-blue-900/70 dark:bg-blue-950/20 dark:text-blue-200"
+                              title={attachment.path}
+                            >
+                              {attachment.label || 'Local image'}
+                            </span>
+                          )
+                        }
+                        return (
+                          <img
+                            key={attachment.id}
+                            src={src}
+                            alt={attachment.label || 'Image attachment'}
+                            title={attachment.path}
+                            className="h-20 w-20 rounded-md border border-blue-200/80 object-cover bg-blue-50 dark:border-blue-900/70 dark:bg-blue-950/20"
+                            loading="lazy"
+                          />
+                        )
+                      })()
                     ))}
                   </div>
                 )}
@@ -9932,7 +9975,7 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                       const mi = modelConfig.interfaces.find((m) => m.id === id)
                       return (
                         <option key={id} value={id}>
-                          {mi?.displayName ?? id}
+                          {id}
                         </option>
                       )
                     })}

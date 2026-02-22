@@ -1,19 +1,18 @@
 # Barnaby
 
-Barnaby is a open source desktop AI agent orchestrator that connects to your existing CLI subscriptions (Codex, Claude, Gemini) as well as API integeration to a sophisticated agentic development environment with focus on workflow, orchestration and co-ordinated agent work. It circumvents expense API calls by wrapping premium subscriptions, as well as providing access to many other free models with OpenRouter. The low code and easy to use multi-window enviornment provdes a relief from constrained Visual Code fork based user interfaces.
+Barnaby is a desktop AI agent orchestrator for **agentic coordination** — connecting Codex, Claude, Gemini CLIs and OpenRouter APIs to deliver windowed agents, workspace-aware context, and a polished UI experience.
 
-- Uses your Codex, Claude, and Gemini CLI logins — no API keys required in Barnaby
-- Optional API interfaces when and where required
-- Multiple agent panels with split layouts (horizontal, vertical, grid)
-- Workspace-oriented UI with per-workspace model defaults and state
-- Sophisticated Agent Orchestrator 
+- **Agentic coordination**: Run multiple agents in parallel, compare models side-by-side, keep separate conversations per panel
+- **CLI providers**: Codex, Claude, Gemini — use your existing CLI logins, no API keys in Barnaby
+- **API provider**: OpenRouter — free-tier and paid models via API key (ideal when CLI quotas are exhausted)
+- **UI experience**: Split layouts (horizontal, vertical, grid), workspace window, dark/light themes, zoom, activity timeline
 
-Latest Binary Release
-[Download Barnaby v0.0.85](https://github.com/incendiosoftware/Barnaby/releases/tag/v0.0.85)
-  
-https://barnaby.build  
-Stuart Mackereth  
-Incendio Trading Limited  
+Latest Binary Release  
+[Download Barnaby v0.0.98](https://github.com/incendiosoftware/Barnaby/releases/tag/v0.0.98)
+
+Website: https://barnaby.build  
+Written By: Stuart Mackereth  
+Company: Incendio Trading Limited  
 Email: incendiosoftware@gmail.com  
 
 ## Screenshots
@@ -26,42 +25,47 @@ Email: incendiosoftware@gmail.com
 
 Barnaby provides:
 
-- Multiple agent panels with split layouts (horizontal, vertical, grid)
-- Workspace selection and per-workspace defaults
-- Model setup and provider routing (Codex, Claude, and Gemini)
-- Connectivity checks for Codex, Claude, and Gemini CLIs
-- Streaming chat with markdown rendering
-- Queue-aware sending and auto-scroll in chat windows
-- Menu actions for workspace management (new/open/recent/close/exit)
+- **Multiple agent panels** with split layouts (horizontal, vertical, grid)
+- **Workspace window** with agent orchestrator, file explorer, Git status, and workspace settings
+- **Workspace selection** and per-workspace model defaults
+- **Provider routing** for Codex, Claude, Gemini (CLI) and OpenRouter (API)
+- **Connectivity checks** for each provider
+- **Streaming chat** with markdown, code blocks, and collapsible activity timeline
+- **Queue-aware sending** and auto-scroll
+- **View menu**: layout, workspace window toggle, zoom, fullscreen
 
 ## Why Barnaby
 
-Barnaby uses local CLI sessions (Codex, Claude, Gemini). You sign in to each provider’s CLI; Barnaby orchestrates them.
+Barnaby unifies **CLI-based** providers (Codex, Claude, Gemini) and **API-based** OpenRouter so you can orchestrate agents without vendor lock-in.
 
-- **Orchestration**: Run multiple agents side-by-side, switch workspaces, keep separate conversations per panel
-- **Windowed agents**: Split layouts (horizontal, vertical, grid) so you can compare models or keep contexts separate
-- **No API keys in Barnaby**: You use your provider subscriptions via their CLI; Barnaby does not handle keys or billing
+- **Agentic coordination**: Multiple agents side-by-side, workspace-aware context, parallel conversations
+- **Windowed agents**: Split layouts so you can compare models or keep contexts separate
+- **CLI providers**: Use your provider subscriptions via their CLI; Barnaby does not handle keys or billing
+- **OpenRouter**: API key in Barnaby settings; access free-tier and paid models when CLI quotas are exhausted
 
-Compared to Cursor’s single chat: Barnaby gives you parallel windowed agents and workspace-aware orchestration.
+Compared to single-chat tools: Barnaby gives you parallel windowed agents and workspace-aware orchestration.
 
 ## Prerequisites
 
 - Node.js 18+ recommended
 - npm
-- Codex CLI installed and authenticated (available in `PATH`)
-- Claude CLI installed (available in `PATH`)
-- Gemini CLI installed and authenticated (available in `PATH`)
+- **CLI providers** (optional): Codex, Claude, and/or Gemini CLI installed and authenticated
+- **API provider** (optional): OpenRouter API key from https://openrouter.ai/keys
 
 ## Provider Coverage
 
-- CODEX: full support (connectivity checks + model routing in panels)
-- CLAUDE: full support (connectivity checks + model routing in panels)
-- GEMINI: full support (connectivity checks + model routing in panels)
-- Other CLIs: can be added when they provide a stable non-interactive CLI flow (`--print`/`--prompt` style) and an adapter is implemented
+| Provider   | Type | Setup                                      |
+|------------|------|--------------------------------------------|
+| Codex      | CLI  | Install CLI, sign in via terminal          |
+| Claude     | CLI  | Install CLI, sign in via terminal          |
+| Gemini     | CLI  | Install CLI, sign in with Google          |
+| OpenRouter | API  | API key in Barnaby connectivity settings  |
 
-## CLI Setup (Codex + Claude + Gemini)
+OpenRouter offers free-tier models (e.g. Llama, Mistral) and paid models; useful when CLI quotas are exhausted.
 
-Barnaby connects to local CLI sessions, so the required CLIs must be installed, signed in, and resolvable from your terminal.
+## CLI Setup (Codex, Claude, Gemini)
+
+For CLI providers, required CLIs must be installed, signed in, and resolvable from your terminal.
 
 1. Install each CLI from its official docs.
 2. Open a new terminal after install.
@@ -73,18 +77,14 @@ claude --version
 gemini --version
 ```
 
-On Windows, you can also confirm command resolution with:
+4. Authenticate each CLI (follow the provider's login flow).
+5. Sanity-check outside Barnaby by running one simple prompt in each CLI you plan to use.
 
-```powershell
-where codex
-where claude
-where gemini
-```
+## OpenRouter Setup
 
-4. Authenticate each CLI (follow the provider's login flow). If your CLI supports an explicit auth command, use that; otherwise run the CLI once and complete the sign-in prompts.
-5. Sanity-check outside Barnaby by running one simple prompt/command in each CLI you plan to use.
-
-If either command is not found, restart the terminal (or OS) so `PATH` updates apply.
+1. Get an API key from https://openrouter.ai/keys
+2. In Barnaby: open connectivity settings, select OpenRouter, enter your API key
+3. Choose a model (e.g. free-tier Llama 3.3 70B) and connect
 
 ## Development
 
@@ -107,29 +107,29 @@ npm run dev
 
 ## GitHub Release Automation
 
-- Trigger release workflow manually after push: `gh workflow run release.yml -f releasable=true --ref main`.
-- Manual release in UI: run GitHub workflow `Release` with `releasable=true`.
-- Release notes source file: `RELEASE_NOTES_<version>.md` (generate with `npm run release:notes`).
+- Trigger release workflow manually: `gh workflow run release.yml -f releasable=true --ref main`
+- Release notes source: `RELEASE_NOTES_<version>.md` (generate with `npm run release:notes`)
+- The release workflow updates the latest release link in this README automatically
 
 ## Project Structure
 
 ```text
 docs/            Documentation (AGENTS.md, BACKLOG.md, STATUS_LOG.md)
-electron/        Electron main and preload
-src/             React renderer UI
-public/          Static assets
-release/         Packaged outputs
+electron/       Electron main and preload
+src/            React renderer UI
+public/         Static assets
+release/        Packaged outputs
 ```
 
 ## Notes
 
-- Workspace root should be the repository root unless you intentionally want broader file scope.
-- If Codex fails with `codex app-server closed`, run `codex app-server` manually in terminal to inspect the underlying error.
+- Workspace root should be the repository root unless you want broader file scope.
+- If Codex fails with `codex app-server closed`, run `codex app-server` manually in terminal to inspect.
 
 ## Manual Test Checklist
 
-- Multi-instance behavior: open two Barnaby executables at once and confirm both launch successfully.
-- Workspace lock behavior: in instance A open workspace `X`, then in instance B try to open the same workspace `X`; confirm instance B is blocked with an in-use message.
-- Different workspace behavior: with instance A on workspace `X`, open workspace `Y` in instance B; confirm this is allowed.
-- Lock release behavior: close instance A and confirm instance B can then open workspace `X`.
-- Crash-stale-lock recovery: force-close instance A (simulate crash), wait for stale timeout, then confirm another instance can claim/open workspace `X`.
+- Multi-instance: open two Barnaby executables and confirm both launch
+- Workspace lock: instance A opens workspace X; instance B tries X → blocked with in-use message
+- Different workspaces: instance A on X, instance B on Y → allowed
+- Lock release: close A, confirm B can open X
+- Crash-stale-lock: force-close A, wait for stale timeout, confirm another instance can claim X

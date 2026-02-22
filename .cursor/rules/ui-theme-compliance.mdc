@@ -1,0 +1,24 @@
+---
+description: UI components must comply with theme (light/dark) before completing work
+alwaysApply: true
+---
+
+# Theme Compliance Checklist
+
+**Before completing any UI work:** Verify that all added or modified buttons and UI elements correctly support light and dark themes.
+
+## Required Checks
+
+- Buttons, icons, borders, backgrounds: use theme-aware classes (e.g. `dark:bg-neutral-800`, `dark:text-neutral-200`).
+- Toggle/active states: ensure both light and dark variants are readable and visually distinct.
+- If `theme-preset` is enabled, verify “accent” states still look correct (the app overrides many `blue-*` utilities to theme vars).
+- Never hardcode colors that break in one theme (e.g. `bg-white` without `dark:bg-neutral-950`).
+- Prefer existing shared class constants (e.g. `UI_ICON_BUTTON_CLASS`, `UI_BUTTON_PRIMARY_CLASS`, `UI_CLOSE_ICON_BUTTON_CLASS`) over one-off button styling.
+
+## Pattern
+
+Use Tailwind's `dark:` prefix for all color-related utilities. Match existing patterns in the codebase (e.g. `border-neutral-300 dark:border-neutral-600`, `text-blue-800 dark:text-blue-100`).
+
+## Gate
+
+Do not mark UI changes complete until theme compliance has been verified.

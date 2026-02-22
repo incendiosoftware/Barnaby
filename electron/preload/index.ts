@@ -1,4 +1,4 @@
-import { ipcRenderer, contextBridge, type IpcRendererEvent } from 'electron'
+import { ipcRenderer, contextBridge, webFrame, type IpcRendererEvent } from 'electron'
 
 export type FireHarnessCodexEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
@@ -15,6 +15,11 @@ export type CodexConnectOptions = {
   permissionMode?: 'verify-first' | 'proceed-always'
   approvalPolicy?: 'on-request' | 'never'
   sandbox?: 'read-only' | 'workspace-write'
+  allowedCommandPrefixes?: string[]
+  allowedAutoReadPrefixes?: string[]
+  allowedAutoWritePrefixes?: string[]
+  deniedAutoReadPrefixes?: string[]
+  deniedAutoWritePrefixes?: string[]
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
@@ -139,11 +144,20 @@ const api = {
       showOperationTrace: boolean
       showThinkingProgress: boolean
       colors: {
-        debugNotes: string
-        activityUpdates: string
-        reasoningUpdates: string
-        operationTrace: string
-        thinkingProgress: string
+        light: {
+          debugNotes: string
+          activityUpdates: string
+          reasoningUpdates: string
+          operationTrace: string
+          thinkingProgress: string
+        }
+        dark: {
+          debugNotes: string
+          activityUpdates: string
+          reasoningUpdates: string
+          operationTrace: string
+          thinkingProgress: string
+        }
       }
     }>
   },
@@ -151,6 +165,30 @@ const api = {
     return ipcRenderer.invoke('agentorchestrator:openRuntimeLog') as Promise<{
       ok: boolean
       path: string
+      error?: string
+    }>
+  },
+  openDiagnosticsPath(target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig') {
+    return ipcRenderer.invoke('agentorchestrator:openDiagnosticsPath', target) as Promise<{
+      ok: boolean
+      path: string
+      error?: string
+    }>
+  },
+  readDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig') {
+    return ipcRenderer.invoke('agentorchestrator:readDiagnosticsFile', target) as Promise<{
+      ok: boolean
+      path: string
+      content?: string
+      writable?: boolean
+      error?: string
+    }>
+  },
+  writeDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig', content: string) {
+    return ipcRenderer.invoke('agentorchestrator:writeDiagnosticsFile', target, content) as Promise<{
+      ok: boolean
+      path: string
+      size?: number
       error?: string
     }>
   },
@@ -168,6 +206,34 @@ const api = {
   },
   openFolderDialog() {
     return ipcRenderer.invoke('agentorchestrator:openFolderDialog') as Promise<string | null>
+  },
+  openTerminalInWorkspace(workspaceRoot: string) {
+    return ipcRenderer.invoke('agentorchestrator:openTerminalInWorkspace', workspaceRoot) as Promise<{
+      ok: boolean
+      error?: string
+    }>
+  },
+  terminalSpawn(cwd: string) {
+    return ipcRenderer.invoke('agentorchestrator:terminalSpawn', cwd) as Promise<{ ok: boolean; error?: string }>
+  },
+  terminalWrite(data: string) {
+    ipcRenderer.send('agentorchestrator:terminalWrite', data)
+  },
+  terminalResize(cols: number, rows: number) {
+    ipcRenderer.invoke('agentorchestrator:terminalResize', cols, rows)
+  },
+  terminalDestroy() {
+    return ipcRenderer.invoke('agentorchestrator:terminalDestroy') as Promise<void>
+  },
+  onTerminalData(cb: (data: string) => void) {
+    const listener = (_evt: IpcRendererEvent, data: string) => cb(data)
+    ipcRenderer.on('agentorchestrator:terminalData', listener)
+    return () => ipcRenderer.off('agentorchestrator:terminalData', listener)
+  },
+  onTerminalExit(cb: () => void) {
+    const listener = () => cb()
+    ipcRenderer.on('agentorchestrator:terminalExit', listener)
+    return () => ipcRenderer.off('agentorchestrator:terminalExit', listener)
   },
   writeWorkspaceConfig(folderPath: string) {
     return ipcRenderer.invoke('agentorchestrator:writeWorkspaceConfig', folderPath) as Promise<boolean>
@@ -242,6 +308,21 @@ const api = {
       error?: string
     }>
   },
+  gitCommit(workspaceRoot: string, selectedPaths?: string[]) {
+    return ipcRenderer.invoke('agentorchestrator:gitCommit', workspaceRoot, selectedPaths) as Promise<{ ok: boolean; error?: string }>
+  },
+  gitPush(workspaceRoot: string, selectedPaths?: string[]) {
+    return ipcRenderer.invoke('agentorchestrator:gitPush', workspaceRoot, selectedPaths) as Promise<{ ok: boolean; error?: string }>
+  },
+  gitDeploy(workspaceRoot: string, selectedPaths?: string[]) {
+    return ipcRenderer.invoke('agentorchestrator:gitDeploy', workspaceRoot, selectedPaths) as Promise<{ ok: boolean; error?: string }>
+  },
+  gitBuild(workspaceRoot: string, selectedPaths?: string[]) {
+    return ipcRenderer.invoke('agentorchestrator:gitBuild', workspaceRoot, selectedPaths) as Promise<{ ok: boolean; error?: string }>
+  },
+  gitRelease(workspaceRoot: string, selectedPaths?: string[]) {
+    return ipcRenderer.invoke('agentorchestrator:gitRelease', workspaceRoot, selectedPaths) as Promise<{ ok: boolean; error?: string }>
+  },
   setRecentWorkspaces(list: string[]) {
     ipcRenderer.send('agentorchestrator:setRecentWorkspaces', list)
   },
@@ -300,6 +381,20 @@ const api = {
     const listener = (_event: IpcRendererEvent, payload: { action: string; path?: string }) => cb(payload)
     ipcRenderer.on('agentorchestrator:menu', listener)
     return () => ipcRenderer.off('agentorchestrator:menu', listener)
+  },
+  zoomIn() {
+    const level = webFrame.getZoomLevel()
+    webFrame.setZoomLevel(level + 1)
+  },
+  zoomOut() {
+    const level = webFrame.getZoomLevel()
+    webFrame.setZoomLevel(level - 1)
+  },
+  resetZoom() {
+    webFrame.setZoomLevel(0)
+  },
+  getZoomLevel() {
+    return webFrame.getZoomLevel()
   },
 } as const
 

@@ -5,10 +5,23 @@ import fs from 'node:fs'
 import os from 'node:os'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+
+function getNodePty(): typeof import('node-pty') | null {
+  try {
+    return require('node-pty') as typeof import('node-pty')
+  } catch {
+    return null
+  }
+}
+
 import { CodexAppServerClient, type CodexConnectOptions, type FireHarnessCodexEvent } from './codexAppServerClient'
 import { GeminiClient, type GeminiClientEvent } from './geminiClient'
 import { ClaudeClient, type ClaudeClientEvent } from './claudeClient'
 import { OpenRouterClient, type OpenRouterClientEvent } from './openRouterClient'
+import { OpenAIClient, type OpenAIClientEvent } from './openaiClient'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
 const WORKSPACE_LOCK_DIRNAME = '.barnaby'
@@ -155,8 +168,8 @@ type PersistedChatHistoryEntry = {
   messages: PersistedChatMessage[]
 }
 
-type AgentClient = CodexAppServerClient | ClaudeClient | GeminiClient | OpenRouterClient
-type AgentEvent = FireHarnessCodexEvent | ClaudeClientEvent | GeminiClientEvent | OpenRouterClientEvent
+type AgentClient = CodexAppServerClient | ClaudeClient | GeminiClient | OpenRouterClient | OpenAIClient
+type AgentEvent = FireHarnessCodexEvent | ClaudeClientEvent | GeminiClientEvent | OpenRouterClientEvent | OpenAIClientEvent
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -200,6 +213,7 @@ let mainWindowRevealed = false
 
 const agentClients = new Map<string, AgentClient>()
 const workspaceLockInstanceId = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+let terminalPtyProcess: import('node-pty').IPty | null = null
 const ownedWorkspaceLocks = new Map<string, { lockFilePath: string; acquiredAt: number }>()
 let workspaceLockHeartbeatTimer: ReturnType<typeof setInterval> | null = null
 
@@ -590,6 +604,7 @@ function setProviderApiKey(providerId: string, apiKey: string) {
 function importProviderApiKeyFromEnv(providerId: string) {
   const envVarByProvider: Record<string, string> = {
     openrouter: 'OPENROUTER_API_KEY',
+    codex: 'OPENAI_API_KEY',
   }
   const envVar = envVarByProvider[providerId]
   if (!envVar) {
@@ -613,11 +628,20 @@ const DEFAULT_DIAGNOSTICS_CONFIG = {
   showOperationTrace: true,
   showThinkingProgress: true,
   colors: {
-    debugNotes: '#b91c1c',
-    activityUpdates: '#b45309',
-    reasoningUpdates: '#047857',
-    operationTrace: '#1e3a8a',
-    thinkingProgress: '#737373',
+    light: {
+      debugNotes: '#b91c1c',
+      activityUpdates: '#b45309',
+      reasoningUpdates: '#047857',
+      operationTrace: '#1e3a8a',
+      thinkingProgress: '#737373',
+    },
+    dark: {
+      debugNotes: '#fca5a5',
+      activityUpdates: '#fcd34d',
+      reasoningUpdates: '#6ee7b7',
+      operationTrace: '#93c5fd',
+      thinkingProgress: '#a3a3a3',
+    },
   },
 }
 
@@ -630,17 +654,25 @@ function loadDiagnosticsConfig(): typeof DEFAULT_DIAGNOSTICS_CONFIG {
       return { ...DEFAULT_DIAGNOSTICS_CONFIG, colors: { ...DEFAULT_DIAGNOSTICS_CONFIG.colors } }
     }
     const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    const legacyColors = raw?.colors && typeof raw.colors === 'object' ? raw.colors : null
+    const parseColorSet = (setRaw: any, fallback: (typeof DEFAULT_DIAGNOSTICS_CONFIG.colors)['light']) => ({
+      debugNotes: typeof setRaw?.debugNotes === 'string' ? setRaw.debugNotes : fallback.debugNotes,
+      activityUpdates: typeof setRaw?.activityUpdates === 'string' ? setRaw.activityUpdates : fallback.activityUpdates,
+      reasoningUpdates: typeof setRaw?.reasoningUpdates === 'string' ? setRaw.reasoningUpdates : fallback.reasoningUpdates,
+      operationTrace: typeof setRaw?.operationTrace === 'string' ? setRaw.operationTrace : fallback.operationTrace,
+      thinkingProgress: typeof setRaw?.thinkingProgress === 'string' ? setRaw.thinkingProgress : fallback.thinkingProgress,
+    })
+    const lightColors = parseColorSet(legacyColors?.light ?? legacyColors, DEFAULT_DIAGNOSTICS_CONFIG.colors.light)
+    const darkColors = parseColorSet(legacyColors?.dark ?? legacyColors, DEFAULT_DIAGNOSTICS_CONFIG.colors.dark)
+
     return {
       showActivityUpdates: typeof raw?.showActivityUpdates === 'boolean' ? raw.showActivityUpdates : DEFAULT_DIAGNOSTICS_CONFIG.showActivityUpdates,
       showReasoningUpdates: typeof raw?.showReasoningUpdates === 'boolean' ? raw.showReasoningUpdates : DEFAULT_DIAGNOSTICS_CONFIG.showReasoningUpdates,
       showOperationTrace: typeof raw?.showOperationTrace === 'boolean' ? raw.showOperationTrace : DEFAULT_DIAGNOSTICS_CONFIG.showOperationTrace,
       showThinkingProgress: typeof raw?.showThinkingProgress === 'boolean' ? raw.showThinkingProgress : DEFAULT_DIAGNOSTICS_CONFIG.showThinkingProgress,
       colors: {
-        debugNotes: typeof raw?.colors?.debugNotes === 'string' ? raw.colors.debugNotes : DEFAULT_DIAGNOSTICS_CONFIG.colors.debugNotes,
-        activityUpdates: typeof raw?.colors?.activityUpdates === 'string' ? raw.colors.activityUpdates : DEFAULT_DIAGNOSTICS_CONFIG.colors.activityUpdates,
-        reasoningUpdates: typeof raw?.colors?.reasoningUpdates === 'string' ? raw.colors.reasoningUpdates : DEFAULT_DIAGNOSTICS_CONFIG.colors.reasoningUpdates,
-        operationTrace: typeof raw?.colors?.operationTrace === 'string' ? raw.colors.operationTrace : DEFAULT_DIAGNOSTICS_CONFIG.colors.operationTrace,
-        thinkingProgress: typeof raw?.colors?.thinkingProgress === 'string' ? raw.colors.thinkingProgress : DEFAULT_DIAGNOSTICS_CONFIG.colors.thinkingProgress,
+        light: lightColors,
+        dark: darkColors,
       },
     }
   } catch {
@@ -659,7 +691,8 @@ function getDiagnosticsInfo() {
   }
 }
 
-type DiagnosticsPathTarget = 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog'
+type DiagnosticsPathTarget = 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig'
+type DiagnosticsFileTarget = 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig'
 
 function resolveDiagnosticsPathTarget(target: DiagnosticsPathTarget) {
   const info = getDiagnosticsInfo()
@@ -674,6 +707,8 @@ function resolveDiagnosticsPathTarget(target: DiagnosticsPathTarget) {
       return { path: info.appStatePath, kind: 'file' as const }
     case 'runtimeLog':
       return { path: info.runtimeLogPath, kind: 'file' as const }
+    case 'diagnosticsConfig':
+      return { path: info.diagnosticsConfigPath, kind: 'file' as const }
   }
 }
 
@@ -684,7 +719,8 @@ async function openDiagnosticsPath(rawTarget: unknown) {
     target !== 'storage' &&
     target !== 'chatHistory' &&
     target !== 'appState' &&
-    target !== 'runtimeLog'
+    target !== 'runtimeLog' &&
+    target !== 'diagnosticsConfig'
   ) {
     return {
       ok: false as const,
@@ -705,7 +741,7 @@ async function openDiagnosticsPath(rawTarget: unknown) {
   try {
     if (resolved.kind === 'directory') {
       fs.mkdirSync(resolved.path, { recursive: true })
-    } else if (target === 'runtimeLog') {
+    } else if (target === 'runtimeLog' || target === 'diagnosticsConfig') {
       fs.mkdirSync(path.dirname(resolved.path), { recursive: true })
       if (!fs.existsSync(resolved.path)) {
         fs.writeFileSync(resolved.path, '', 'utf8')
@@ -724,6 +760,64 @@ async function openDiagnosticsPath(rawTarget: unknown) {
     ok: !result,
     path: resolved.path,
     error: result || undefined,
+  }
+}
+
+function isDiagnosticsFileTarget(target: unknown): target is DiagnosticsFileTarget {
+  return target === 'chatHistory' || target === 'appState' || target === 'runtimeLog' || target === 'diagnosticsConfig'
+}
+
+function ensureDiagnosticsFileExists(target: DiagnosticsFileTarget, absolutePath: string) {
+  fs.mkdirSync(path.dirname(absolutePath), { recursive: true })
+  if (!fs.existsSync(absolutePath)) {
+    const initial =
+      target === 'diagnosticsConfig'
+        ? JSON.stringify(DEFAULT_DIAGNOSTICS_CONFIG, null, 2)
+        : ''
+    fs.writeFileSync(absolutePath, initial, 'utf8')
+  }
+}
+
+async function readDiagnosticsFile(rawTarget: unknown) {
+  if (!isDiagnosticsFileTarget(rawTarget)) {
+    return { ok: false as const, path: '', error: 'Unknown diagnostics file target.' }
+  }
+  const resolved = resolveDiagnosticsPathTarget(rawTarget)
+  if (!resolved || resolved.kind !== 'file') {
+    return { ok: false as const, path: '', error: 'Diagnostics target is not a file.' }
+  }
+  try {
+    ensureDiagnosticsFileExists(rawTarget, resolved.path)
+    const content = fs.readFileSync(resolved.path, 'utf8')
+    return {
+      ok: true as const,
+      path: resolved.path,
+      content,
+      writable: rawTarget === 'diagnosticsConfig',
+    }
+  } catch (err) {
+    return { ok: false as const, path: resolved.path, error: errorMessage(err) }
+  }
+}
+
+async function writeDiagnosticsFile(rawTarget: unknown, rawContent: unknown) {
+  if (!isDiagnosticsFileTarget(rawTarget)) {
+    return { ok: false as const, path: '', error: 'Unknown diagnostics file target.' }
+  }
+  if (rawTarget !== 'diagnosticsConfig') {
+    return { ok: false as const, path: '', error: 'Only diagnostics config is writable from the editor.' }
+  }
+  const resolved = resolveDiagnosticsPathTarget(rawTarget)
+  if (!resolved || resolved.kind !== 'file') {
+    return { ok: false as const, path: '', error: 'Diagnostics target is not a file.' }
+  }
+  const content = typeof rawContent === 'string' ? rawContent : ''
+  try {
+    ensureDiagnosticsFileExists(rawTarget, resolved.path)
+    fs.writeFileSync(resolved.path, content, 'utf8')
+    return { ok: true as const, path: resolved.path, size: Buffer.byteLength(content, 'utf8') }
+  } catch (err) {
+    return { ok: false as const, path: resolved.path, error: errorMessage(err) }
   }
 }
 
@@ -1591,54 +1685,11 @@ async function launchProviderUpgrade(config: ProviderConfigForAuth): Promise<{ s
 const GEMINI_MODELS_PROMPT =
   'Output a JSON array of model IDs you support. Use names like gemini-2.5-flash, gemini-2.5-pro, gemini-3-pro-preview. Output only the JSON array, no markdown or other text.'
 
-const MODELS_CATALOG_URL = 'https://barnaby.build/models-catalog.json'
-const GEMINI_MODELS_LEGACY_URL = 'https://barnaby.build/gemini-models.json'
-
 type ModelsByProvider = {
   codex: { id: string; displayName: string }[]
   claude: { id: string; displayName: string }[]
   gemini: { id: string; displayName: string }[]
   openrouter: { id: string; displayName: string }[]
-}
-
-async function fetchModelsCatalog(): Promise<ModelsByProvider | null> {
-  try {
-    const res = await fetch(MODELS_CATALOG_URL, { signal: AbortSignal.timeout(5000) })
-    if (!res.ok) return null
-    const data = (await res.json()) as {
-      providers?: {
-        codex?: { models?: { id: string; displayName: string }[] }
-        claude?: { models?: { id: string; displayName: string }[] }
-        gemini?: { models?: { id: string; displayName: string }[] }
-        openrouter?: { models?: { id: string; displayName: string }[] }
-      }
-    }
-    const providers = data?.providers
-    if (!providers || typeof providers !== 'object') return null
-    const valid = (arr: unknown) =>
-      Array.isArray(arr) ? arr.filter((m): m is { id: string; displayName: string } => m?.id && typeof (m as { id?: string }).id === 'string') : []
-    return {
-      codex: valid(providers.codex?.models),
-      claude: valid(providers.claude?.models),
-      gemini: valid(providers.gemini?.models),
-      openrouter: valid(providers.openrouter?.models),
-    }
-  } catch {
-    return null
-  }
-}
-
-async function fetchGeminiModelsLegacy(): Promise<{ id: string; displayName: string }[] | null> {
-  try {
-    const res = await fetch(GEMINI_MODELS_LEGACY_URL, { signal: AbortSignal.timeout(5000) })
-    if (!res.ok) return null
-    const data = (await res.json()) as { models?: { id: string; displayName: string }[] }
-    const models = data?.models
-    if (!Array.isArray(models)) return null
-    return models.filter((m) => m?.id && typeof m.id === 'string')
-  } catch {
-    return null
-  }
 }
 
 const CODEX_MODELS_PROMPT =
@@ -1675,14 +1726,6 @@ async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: str
     proc.on('exit', (code, signal) => {
       clearTimeout(timer)
       try {
-        const displayNames: Record<string, string> = {
-          'gpt-5.3-codex': 'GPT 5.3 (Codex)',
-          'gpt-5.3-codex-spark': 'GPT 5.3 Codex Spark',
-          'gpt-5.2-codex': 'GPT 5.2 (Codex)',
-          'gpt-5.1-codex-max': 'GPT 5.1 Codex Max',
-          'gpt-5.2': 'GPT 5.2',
-          'gpt-5.1-codex-mini': 'GPT 5.1 Codex Mini',
-        }
         for (const line of stdout.split('\n')) {
           const trimmed = line.trim()
           if (!trimmed.startsWith('{"type":"item.completed"')) continue
@@ -1699,7 +1742,7 @@ async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: str
             .filter((id): id is string => typeof id === 'string' && id.length > 0)
             .map((id) => ({
               id,
-              displayName: displayNames[id] ?? id.replace(/^gpt-/, 'GPT ').replace(/-/g, ' '),
+              displayName: id,
             }))
           resolve(result)
           return
@@ -1713,30 +1756,26 @@ async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: str
 }
 
 async function getAvailableModels(): Promise<ModelsByProvider> {
-  const catalog = await fetchModelsCatalog()
-  let codex = catalog?.codex ?? []
-  let claude = catalog?.claude ?? []
-  let gemini = catalog?.gemini ?? []
-  let openrouter = catalog?.openrouter ?? []
-
+  let codex = await queryCodexModelsViaExec().catch(() => [])
+  let claude: { id: string; displayName: string }[] = [
+    { id: 'sonnet', displayName: 'sonnet' },
+    { id: 'opus', displayName: 'opus' },
+    { id: 'haiku', displayName: 'haiku' },
+  ]
+  let gemini = await getGeminiAvailableModels().catch(() => [])
+  let openrouter = await fetchOpenRouterModels().catch(() => [])
+  if (openrouter.length === 0) openrouter = [{ id: 'openrouter/auto', displayName: 'openrouter/auto' }]
   if (codex.length === 0) {
-    codex = await queryCodexModelsViaExec().catch(() => [])
+    codex = [
+      { id: 'gpt-5.3-codex', displayName: 'gpt-5.3-codex' },
+      { id: 'gpt-5.2-codex', displayName: 'gpt-5.2-codex' },
+      { id: 'gpt-5.1-codex', displayName: 'gpt-5.1-codex' },
+      { id: 'gpt-4o', displayName: 'gpt-4o' },
+      { id: 'gpt-4o-mini', displayName: 'gpt-4o-mini' },
+      { id: 'gpt-4-turbo', displayName: 'gpt-4-turbo' },
+    ]
   }
-  if (gemini.length === 0) {
-    const geminiLegacy = await fetchGeminiModelsLegacy()
-    if (geminiLegacy && geminiLegacy.length > 0) gemini = geminiLegacy
-  }
-  if (gemini.length === 0) {
-    const geminiFromCli = await getGeminiAvailableModels().catch(() => [])
-    if (geminiFromCli.length > 0) gemini = geminiFromCli
-  }
-  if (openrouter.length === 0) {
-    openrouter = await fetchOpenRouterModels().catch(() => [])
-  }
-  if (openrouter.length === 0) {
-    openrouter = [{ id: 'openrouter/auto', displayName: 'OpenRouter Auto' }]
-  }
-
+  if (gemini.length === 0) gemini = [{ id: 'gemini-2.5-flash', displayName: 'gemini-2.5-flash' }, { id: 'gemini-2.5-pro', displayName: 'gemini-2.5-pro' }]
   return { codex, claude, gemini, openrouter }
 }
 
@@ -1752,7 +1791,7 @@ async function fetchOpenRouterModels(): Promise<{ id: string; displayName: strin
       .filter((m) => typeof m?.id === 'string')
       .map((m) => ({
         id: String(m.id),
-        displayName: typeof m?.name === 'string' && m.name.trim() ? m.name : String(m.id),
+        displayName: String(m.id),
         isFree:
           String(m?.id).includes(':free') ||
           (m?.pricing?.prompt === '0' && m?.pricing?.completion === '0'),
@@ -1815,21 +1854,11 @@ async function getGeminiAvailableModels(): Promise<{ id: string; displayName: st
           resolve([])
           return
         }
-        const displayNames: Record<string, string> = {
-          'gemini-2.5-flash': 'Gemini 2.5 Flash',
-          'gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
-          'gemini-2.5-pro': 'Gemini 2.5 Pro',
-          'gemini-3-pro-preview': 'Gemini 3 Pro (Preview)',
-          'gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
-          'gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
-          flash: 'Gemini Flash',
-          pro: 'Gemini Pro',
-        }
         const result = ids
           .filter((id): id is string => typeof id === 'string' && id.length > 0)
           .map((id) => ({
             id: id.replace(/^models\//, ''),
-            displayName: displayNames[id] ?? id.replace(/^gemini-/, 'Gemini ').replace(/-/g, ' '),
+            displayName: id.replace(/^models\//, ''),
           }))
         resolve(result)
       } catch {
@@ -1837,6 +1866,193 @@ async function getGeminiAvailableModels(): Promise<{ id: string; displayName: st
       }
     })
   })
+}
+
+function buildCommitMessageFromEntries(entries: GitStatusEntry[]): { subject: string; body: string } {
+  const modified: string[] = []
+  const added: string[] = []
+  const deleted: string[] = []
+  const renamed: Array<{ from: string; to: string }> = []
+  for (const e of entries) {
+    if (e.untracked) {
+      added.push(e.relativePath)
+    } else if (e.renamedFrom) {
+      renamed.push({ from: e.renamedFrom, to: e.relativePath })
+    } else if (e.indexStatus === 'D' || e.workingTreeStatus === 'D') {
+      deleted.push(e.relativePath)
+    } else if (e.indexStatus === 'A' || e.indexStatus === '?') {
+      added.push(e.relativePath)
+    } else {
+      modified.push(e.relativePath)
+    }
+  }
+  const total = modified.length + added.length + deleted.length + renamed.length
+  const subjectParts: string[] = []
+  if (modified.length) subjectParts.push(`${modified.length} modified`)
+  if (added.length) subjectParts.push(`${added.length} added`)
+  if (deleted.length) subjectParts.push(`${deleted.length} deleted`)
+  if (renamed.length) subjectParts.push(`${renamed.length} renamed`)
+  const subject = total > 0 ? `Commit workspace changes (${subjectParts.join(', ')})` : 'Commit workspace changes'
+
+  const lines: string[] = []
+  if (modified.length) {
+    lines.push('Modified:', ...modified.map((p) => `  - ${p}`), '')
+  }
+  if (added.length) {
+    lines.push('Added:', ...added.map((p) => `  - ${p}`), '')
+  }
+  if (deleted.length) {
+    lines.push('Deleted:', ...deleted.map((p) => `  - ${p}`), '')
+  }
+  if (renamed.length) {
+    lines.push('Renamed:', ...renamed.map((r) => `  - ${r.from} -> ${r.to}`), '')
+  }
+  const body = lines.join('\n').trim()
+  return { subject, body: body || 'No changes' }
+}
+
+async function runGitCommand(root: string, args: string[]): Promise<{ ok: boolean; stdout?: string; stderr?: string; error?: string }> {
+  try {
+    const { stdout, stderr } = await execFileAsync('git', ['-C', root, ...args], {
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+    })
+    return { ok: true, stdout: stdout?.trim(), stderr: stderr?.trim() }
+  } catch (err: unknown) {
+    const stderr = err && typeof err === 'object' && 'stderr' in err ? String((err as { stderr?: unknown }).stderr ?? '') : ''
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    return { ok: false, error: msg || stderr, stderr }
+  }
+}
+
+async function runShellCommand(root: string, cmd: string, args: string[]): Promise<{ ok: boolean; stdout?: string; stderr?: string; error?: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn(cmd, args, {
+      cwd: root,
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+    let stdout = ''
+    let stderr = ''
+    proc.stdout?.setEncoding('utf8')
+    proc.stdout?.on('data', (chunk: string) => { stdout += chunk })
+    proc.stderr?.setEncoding('utf8')
+    proc.stderr?.on('data', (chunk: string) => { stderr += chunk })
+    proc.on('error', (err) => resolve({ ok: false, error: err.message }))
+    proc.on('exit', (code) => {
+      if (code === 0) resolve({ ok: true, stdout, stderr })
+      else resolve({ ok: false, error: stderr || `Exit code ${code}`, stdout, stderr })
+    })
+  })
+}
+
+function normalizeSelectedGitPaths(selectedPaths?: string[]): string[] {
+  if (!Array.isArray(selectedPaths)) return []
+  const out: string[] = []
+  for (const value of selectedPaths) {
+    if (typeof value !== 'string') continue
+    const normalized = normalizeRelativePath(value).trim()
+    if (!normalized || normalized.startsWith('/')) continue
+    const cleaned = normalized.split('/').filter((segment) => segment && segment !== '.' && segment !== '..').join('/')
+    if (!cleaned) continue
+    if (!out.includes(cleaned)) out.push(cleaned)
+  }
+  return out
+}
+
+function buildCommitSelection(entries: GitStatusEntry[], selectedPaths: string[]) {
+  if (selectedPaths.length === 0) {
+    return {
+      selectedEntries: entries,
+      pathspecs: [] as string[],
+      hasSelection: false,
+    }
+  }
+  const entryByPath = new Map(entries.map((entry) => [entry.relativePath, entry] as const))
+  const selectedEntries: GitStatusEntry[] = []
+  for (const relativePath of selectedPaths) {
+    const entry = entryByPath.get(relativePath)
+    if (entry) selectedEntries.push(entry)
+  }
+  const pathspecs: string[] = []
+  for (const entry of selectedEntries) {
+    if (!pathspecs.includes(entry.relativePath)) pathspecs.push(entry.relativePath)
+    if (entry.renamedFrom && !pathspecs.includes(entry.renamedFrom)) pathspecs.push(entry.renamedFrom)
+  }
+  return {
+    selectedEntries,
+    pathspecs,
+    hasSelection: true,
+  }
+}
+
+function isNothingToCommitError(error?: string) {
+  if (!error) return false
+  const normalized = error.toLowerCase()
+  return normalized.includes('nothing to commit') || normalized.includes('no changes')
+}
+
+async function gitCommit(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }> {
+  const root = path.resolve(workspaceRoot)
+  const status = await getGitStatus(root)
+  if (!status.ok || status.clean) {
+    return { ok: false, error: status.clean ? 'Nothing to commit.' : (status.error ?? 'Cannot read git status.') }
+  }
+  const normalizedSelection = normalizeSelectedGitPaths(selectedPaths)
+  const selection = buildCommitSelection(status.entries, normalizedSelection)
+  if (selection.hasSelection && selection.selectedEntries.length === 0) {
+    return { ok: false, error: 'Selected files no longer have changes.' }
+  }
+  const commitEntries = selection.selectedEntries
+  const addArgs = selection.hasSelection ? ['add', '-A', '--', ...selection.pathspecs] : ['add', '-A']
+  const addResult = await runGitCommand(root, addArgs)
+  if (!addResult.ok) return { ok: false, error: addResult.error ?? 'git add failed' }
+  const message = buildCommitMessageFromEntries(commitEntries)
+  const commitArgs = message.body ? ['commit', '-m', message.subject, '-m', message.body] : ['commit', '-m', message.subject]
+  if (selection.hasSelection) commitArgs.push('--', ...selection.pathspecs)
+  const commitResult = await runGitCommand(root, commitArgs)
+  if (!commitResult.ok) return { ok: false, error: commitResult.error ?? 'git commit failed' }
+  return { ok: true }
+}
+
+async function gitPush(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }> {
+  const root = path.resolve(workspaceRoot)
+  const normalizedSelection = normalizeSelectedGitPaths(selectedPaths)
+  if (normalizedSelection.length > 0) {
+    const commitResult = await gitCommit(root, normalizedSelection)
+    if (!commitResult.ok && !isNothingToCommitError(commitResult.error)) {
+      return commitResult
+    }
+  }
+  const result = await runGitCommand(root, ['push'])
+  return { ok: result.ok, error: result.error }
+}
+
+async function gitDeploy(workspaceRoot: string, _selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }> {
+  const root = path.resolve(workspaceRoot)
+  const pkgPath = path.join(root, 'package.json')
+  if (!fs.existsSync(pkgPath)) return { ok: false, error: 'No package.json found.' }
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> }
+  if (!pkg?.scripts?.deploy) return { ok: false, error: 'No deploy script in package.json.' }
+  const result = await runShellCommand(root, 'npm', ['run', 'deploy'])
+  return { ok: result.ok, error: result.error }
+}
+
+async function gitBuild(workspaceRoot: string, _selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }> {
+  const root = path.resolve(workspaceRoot)
+  const pkgPath = path.join(root, 'package.json')
+  if (!fs.existsSync(pkgPath)) return { ok: false, error: 'No package.json found.' }
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> }
+  if (!pkg?.scripts?.build) return { ok: false, error: 'No build script in package.json.' }
+  const result = await runShellCommand(root, 'npm', ['run', 'build'])
+  return { ok: result.ok, error: result.error }
+}
+
+async function gitRelease(workspaceRoot: string, _selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }> {
+  const root = path.resolve(workspaceRoot)
+  const result = await runShellCommand(root, 'gh', ['workflow', 'run', 'release.yml', '-f', 'releasable=true', '--ref', 'main'])
+  return { ok: result.ok, error: result.error }
 }
 
 async function getGitStatus(workspaceRoot: string): Promise<GitStatusResult> {
@@ -1929,6 +2145,26 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
     }) as { threadId: string }
     agentClients.set(agentWindowId, client)
     return { client, result }
+  }
+
+  if (provider === 'codex') {
+    const openAiApiModels = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo']
+    const useApi = openAiApiModels.includes(options.model)
+    if (useApi) {
+      const client = new OpenAIClient()
+      client.on('event', (evt: OpenAIClientEvent) => forwardEvent(agentWindowId, evt))
+      const apiKey = getProviderApiKey('codex')
+      if (!apiKey) throw new Error('OpenAI API key is missing. Add it in Settings -> Connectivity (OpenAI card, API key).')
+      const result = await client.connect({
+        cwd: options.cwd,
+        model: options.model,
+        apiKey,
+        baseUrl: options.modelConfig?.openaiBaseUrl ?? 'https://api.openai.com/v1',
+        initialHistory: options.initialHistory,
+      }) as { threadId: string }
+      agentClients.set(agentWindowId, client)
+      return { client, result }
+    }
   }
 
   const client = new CodexAppServerClient()
@@ -2181,6 +2417,14 @@ ipcMain.handle('agentorchestrator:openDiagnosticsPath', async (_evt, target: unk
   return openDiagnosticsPath(target)
 })
 
+ipcMain.handle('agentorchestrator:readDiagnosticsFile', async (_evt, target: unknown) => {
+  return readDiagnosticsFile(target)
+})
+
+ipcMain.handle('agentorchestrator:writeDiagnosticsFile', async (_evt, target: unknown, content: unknown) => {
+  return writeDiagnosticsFile(target, content)
+})
+
 ipcMain.handle('agentorchestrator:openExternalUrl', async (_evt, rawUrl: string) => {
   const url = typeof rawUrl === 'string' ? rawUrl.trim() : ''
   if (!url) return { ok: false, error: 'URL is required.' }
@@ -2225,6 +2469,96 @@ ipcMain.handle('agentorchestrator:openFolderDialog', async () => {
   })
   if (result.canceled || result.filePaths.length === 0) return null
   return result.filePaths[0]
+})
+
+async function openTerminalInWorkspace(workspaceRoot: string): Promise<{ ok: boolean; error?: string }> {
+  const folder = path.resolve(workspaceRoot)
+  try {
+    if (process.platform === 'win32') {
+      const cmd = process.env.ComSpec ?? 'cmd.exe'
+      await execFileAsync(cmd, ['/d', '/s', '/c', 'start', '', 'cmd', '/k', `cd /d "${folder}"`], {
+        windowsHide: true,
+      })
+    } else if (process.platform === 'darwin') {
+      const escaped = folder.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+      await execFileAsync('osascript', [
+        '-e',
+        `tell application "Terminal" to do script "cd \\"${escaped}\\""`,
+      ])
+    } else {
+      const child = spawn('gnome-terminal', ['--working-directory', folder], { detached: true, stdio: 'ignore' })
+      child.on('error', () => {
+        spawn('xterm', ['-e', `cd "${folder}" && exec ${process.env.SHELL ?? 'bash'}`], {
+          detached: true,
+          stdio: 'ignore',
+        }).unref()
+      })
+      child.unref()
+    }
+    return { ok: true }
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+ipcMain.handle('agentorchestrator:openTerminalInWorkspace', async (_evt, workspaceRoot: string) => {
+  return openTerminalInWorkspace(workspaceRoot)
+})
+
+ipcMain.handle('agentorchestrator:terminalSpawn', async (_evt, cwd: string) => {
+  if (terminalPtyProcess) {
+    try {
+      terminalPtyProcess.kill()
+    } catch {
+      // ignore
+    }
+    terminalPtyProcess = null
+  }
+  const pty = getNodePty()
+  if (!pty) {
+    return { ok: false, error: 'Terminal unavailable: node-pty not loaded. Rebuild with: npx electron-rebuild' }
+  }
+  const shell = process.env[process.platform === 'win32' ? 'COMSPEC' : 'SHELL'] ?? (process.platform === 'win32' ? 'cmd.exe' : '/bin/bash')
+  const resolvedCwd = path.resolve(cwd || process.env.HOME || process.env.USERPROFILE || process.cwd())
+  try {
+    terminalPtyProcess = pty.spawn(shell, [], {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: resolvedCwd,
+      env: process.env as Record<string, string>,
+    })
+    terminalPtyProcess.onData((data: string) => {
+      win?.webContents.send('agentorchestrator:terminalData', data)
+    })
+    terminalPtyProcess.onExit(() => {
+      terminalPtyProcess = null
+      win?.webContents.send('agentorchestrator:terminalExit', {})
+    })
+    return { ok: true }
+  } catch (err: unknown) {
+    terminalPtyProcess = null
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+})
+
+ipcMain.on('agentorchestrator:terminalWrite', (_evt, data: string) => {
+  if (terminalPtyProcess) terminalPtyProcess.write(data)
+})
+
+ipcMain.handle('agentorchestrator:terminalResize', (_evt, cols: number, rows: number) => {
+  if (terminalPtyProcess) terminalPtyProcess.resize(cols, rows)
+})
+
+ipcMain.handle('agentorchestrator:terminalDestroy', () => {
+  if (terminalPtyProcess) {
+    try {
+      terminalPtyProcess.kill()
+    } catch {
+      // ignore
+    }
+    terminalPtyProcess = null
+  }
 })
 
 ipcMain.handle('agentorchestrator:writeWorkspaceConfig', async (_evt, folderPath: string) => {
@@ -2290,6 +2624,26 @@ ipcMain.handle('agentorchestrator:pickWorkspaceOpenPath', async (_evt, workspace
 
 ipcMain.handle('agentorchestrator:getGitStatus', async (_evt, workspaceRoot: string) => {
   return getGitStatus(workspaceRoot)
+})
+
+ipcMain.handle('agentorchestrator:gitCommit', async (_evt, workspaceRoot: string) => {
+  return gitCommit(workspaceRoot)
+})
+
+ipcMain.handle('agentorchestrator:gitPush', async (_evt, workspaceRoot: string) => {
+  return gitPush(workspaceRoot)
+})
+
+ipcMain.handle('agentorchestrator:gitDeploy', async (_evt, workspaceRoot: string) => {
+  return gitDeploy(workspaceRoot)
+})
+
+ipcMain.handle('agentorchestrator:gitBuild', async (_evt, workspaceRoot: string) => {
+  return gitBuild(workspaceRoot)
+})
+
+ipcMain.handle('agentorchestrator:gitRelease', async (_evt, workspaceRoot: string) => {
+  return gitRelease(workspaceRoot)
 })
 
 ipcMain.on('agentorchestrator:setRecentWorkspaces', (_evt, list: string[]) => {
@@ -2630,18 +2984,20 @@ function setAppMenu() {
         {
           label: 'Layout',
           submenu: [
-            { label: 'Split Vertical (V)', click: () => sendMenuAction('layoutVertical') },
-            { label: 'Split Horizontal (H)', click: () => sendMenuAction('layoutHorizontal') },
+            { label: 'Tile Vertical (V)', click: () => sendMenuAction('layoutVertical') },
+            { label: 'Tile Horizontal (H)', click: () => sendMenuAction('layoutHorizontal') },
             { label: 'Tile / Grid', click: () => sendMenuAction('layoutGrid') },
           ],
         },
+        { label: 'View Workspace Window', click: () => sendMenuAction('toggleWorkspaceWindow') },
+        { label: 'View Code Window', click: () => sendMenuAction('toggleCodeWindow') },
         { type: 'separator' },
         { role: 'reload' },
         { role: 'toggleDevTools' },
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
+        { label: 'Reset Zoom', click: () => sendMenuAction('resetZoom') },
+        { label: 'Zoom In', click: () => sendMenuAction('zoomIn') },
+        { label: 'Zoom Out', click: () => sendMenuAction('zoomOut') },
         { type: 'separator' },
         { role: 'togglefullscreen' },
       ],

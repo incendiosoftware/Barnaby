@@ -14,6 +14,7 @@ export default defineConfig(({ command }) => {
   const sourcemap = isServe || !!process.env.VSCODE_DEBUG
 
   return {
+    base: './',
     resolve: {
       alias: {
         '@': path.join(__dirname, 'src')
@@ -29,7 +30,27 @@ export default defineConfig(({ command }) => {
             if (process.env.VSCODE_DEBUG) {
               console.log(/* For `.vscode/.debug.script.mjs` */'[startup] Electron App')
             } else {
-              args.startup()
+              // On Windows, vite-plugin-electron uses `taskkill` to terminate the previous Electron process.
+              // In some environments this can fail (pid not found / operation not supported) and crash `vite`.
+              // When that happens, clear the stale handle and retry so `npm run dev` stays alive.
+              void (async () => {
+                try {
+                  await args.startup()
+                } catch (err) {
+                  const msg = String((err as any)?.message ?? err)
+                  if (process.platform === 'win32' && msg.toLowerCase().includes('taskkill')) {
+                    console.warn('[startup] Ignoring taskkill failure; retrying Electron startup.')
+                    ;(process as any).electronApp = undefined
+                    try {
+                      await args.startup()
+                    } catch (err2) {
+                      console.error('[startup] Electron startup failed after retry.', err2)
+                    }
+                    return
+                  }
+                  console.error('[startup] Electron startup failed.', err)
+                }
+              })()
             }
           },
           vite: {

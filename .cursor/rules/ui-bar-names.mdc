@@ -1,0 +1,21 @@
+---
+description: Named UI bars for future reference
+alwaysApply: false
+globs: src/App.tsx
+---
+
+# UI Bar Names
+
+Use these names when referring to specific bars in the layout:
+
+| Name | Data attribute | Location |
+|------|----------------|----------|
+| **appHeaderBar** | `data-app-header-bar="true"` | Main top bar with Workspace dropdown, History, layout toggles. Contains workspace visibility button (left of "Workspace") and code window toggle. |
+| **layoutToolbar** | `data-layout-toolbar="true"` | Right section of app header: Split H/V, Tile, Code window toggle. |
+| **workspaceTitleBar** | `data-workspace-title-bar="true"` | Workspace tile header with "Workspace Window" label. |
+| **workspaceDockTabBar** | `data-workspace-dock-tab-bar="true"` | Bar with orchestrator/explorer/git/settings tab icons (below workspace title bar). |
+
+## Toggle button states
+
+- **Depressed** (selected): `shadow-inner bg-neutral-200 border-neutral-400 dark:bg-neutral-700 dark:border-neutral-600`
+- **Raised** (unselected): default border/background from `UI_ICON_BUTTON_CLASS` / `UI_TOOLBAR_ICON_BUTTON_CLASS`

@@ -6,6 +6,7 @@ import { Group, Panel, Separator } from 'react-resizable-panels'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { buildTimelineForPanel } from './chat/timelineParser'
 import type { TimelineUnit } from './chat/timelineTypes'
+import { EmbeddedTerminal } from './components/Terminal'
 
 function detectLanguage(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() || ''
@@ -96,6 +97,11 @@ type WorkspaceSettings = {
   defaultModel: string
   permissionMode: PermissionMode
   sandbox: SandboxMode
+  allowedCommandPrefixes: string[]
+  allowedAutoReadPrefixes: string[]
+  allowedAutoWritePrefixes: string[]
+  deniedAutoReadPrefixes: string[]
+  deniedAutoWritePrefixes: string[]
   themeId: string
 }
 
@@ -130,15 +136,7 @@ type GitStatusState = {
   error?: string
 }
 
-type FilePreviewState = {
-  relativePath: string
-  size: number
-  truncated: boolean
-  binary: boolean
-  content: string
-  loading: boolean
-  error?: string
-}
+type GitOperation = 'commit' | 'push' | 'deploy' | 'build' | 'release'
 
 type EditorPanelState = {
   id: string
@@ -154,6 +152,9 @@ type EditorPanelState = {
   binary: boolean
   error?: string
   savedAt?: number
+  editMode?: boolean
+  diagnosticsTarget?: 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig'
+  diagnosticsReadOnly?: boolean
 }
 
 type ExplorerPrefs = {
@@ -186,7 +187,10 @@ type DiagnosticsConfig = {
   showReasoningUpdates: boolean
   showOperationTrace: boolean
   showThinkingProgress: boolean
-  colors: DiagnosticsMessageColors
+  colors: {
+    light: DiagnosticsMessageColors
+    dark: DiagnosticsMessageColors
+  }
 }
 
 type ApplicationSettings = {
@@ -196,6 +200,7 @@ type ApplicationSettings = {
   showDebugNotesInTimeline: boolean
   verboseDiagnostics: boolean
   showResponseDurationAfterPrompt: boolean
+  editorWordWrap: boolean
 }
 
 
@@ -211,6 +216,7 @@ type PersistedEditorPanelState = {
   binary?: unknown
   error?: unknown
   savedAt?: unknown
+  editMode?: unknown
 }
 
 type PersistedAgentPanelState = {
@@ -236,6 +242,7 @@ type PersistedAppState = {
   workspaceSnapshotsByRoot?: unknown
   layoutMode?: unknown
   showWorkspaceWindow?: unknown
+  showCodeWindow?: unknown
   dockTab?: unknown
   workspaceDockSide?: unknown
   activePanelId?: unknown
@@ -259,12 +266,14 @@ type ParsedAppState = {
   activePanelId: string | null
   focusedEditorId: string | null | undefined
   showWorkspaceWindow: boolean | undefined
+  showCodeWindow: boolean | undefined
   expandedDirectories: Record<string, boolean> | undefined
 }
 
 type WorkspaceUiSnapshot = {
   layoutMode: LayoutMode
   showWorkspaceWindow: boolean
+  showCodeWindow: boolean
   dockTab: 'orchestrator' | 'explorer' | 'git' | 'settings'
   workspaceDockSide: WorkspaceDockSide
   panels: AgentPanelState[]
@@ -362,9 +371,32 @@ type ProviderConfig = ProviderConfigCli | ProviderConfigApi
 
 type CustomProviderConfig = Omit<ProviderConfigCli, 'isBuiltIn'>
 
+type ConnectivityMode = 'cli' | 'api'
+
 type ProviderRegistry = {
-  overrides: Record<string, { displayName?: string; enabled?: boolean; cliPath?: string; apiBaseUrl?: string }>
+  overrides: Record<
+    string,
+    {
+      displayName?: string
+      enabled?: boolean
+      cliPath?: string
+      apiBaseUrl?: string
+      primary?: ConnectivityMode
+      fallbackEnabled?: boolean
+      fallback?: ConnectivityMode
+    }
+  >
   customProviders: CustomProviderConfig[]
+}
+
+const PROVIDERS_WITH_DUAL_MODE: ConnectivityProvider[] = ['gemini', 'claude', 'codex']
+const PROVIDERS_CLI_ONLY: ConnectivityProvider[] = []
+const PROVIDERS_API_ONLY: ConnectivityProvider[] = ['openrouter']
+
+const API_CONFIG_BY_PROVIDER: Record<string, { apiBaseUrl: string; loginUrl: string }> = {
+  codex: { apiBaseUrl: 'https://api.openai.com/v1', loginUrl: 'https://platform.openai.com/api-keys' },
+  claude: { apiBaseUrl: 'https://api.anthropic.com/v1', loginUrl: 'https://console.anthropic.com/' },
+  gemini: { apiBaseUrl: 'https://generativelanguage.googleapis.com/v1beta', loginUrl: 'https://aistudio.google.com/' },
 }
 
 type ProviderAuthStatus = {
@@ -407,10 +439,12 @@ type WorkspaceApplyFailure =
       result: WorkspaceLockAcquireResult
     }
 
+const CODEX_API_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo']
+
 const DEFAULT_MODEL_INTERFACES: ModelInterface[] = [
-  { id: 'gpt-5.3-codex', displayName: 'GPT 5.3 (Codex)', provider: 'codex', enabled: true },
-  { id: 'gpt-5.2-codex', displayName: 'GPT 5.2 (Codex)', provider: 'codex', enabled: true },
-  { id: 'gpt-5.1-codex', displayName: 'GPT 5.1 (Codex)', provider: 'codex', enabled: true },
+  { id: 'gpt-5.3-codex', displayName: 'GPT 5.3', provider: 'codex', enabled: true },
+  { id: 'gpt-5.2-codex', displayName: 'GPT 5.2', provider: 'codex', enabled: true },
+  { id: 'gpt-5.1-codex', displayName: 'GPT 5.1', provider: 'codex', enabled: true },
   { id: 'sonnet', displayName: 'Claude Sonnet', provider: 'claude', enabled: true },
   { id: 'opus', displayName: 'Claude Opus', provider: 'claude', enabled: true },
   { id: 'haiku', displayName: 'Claude Haiku', provider: 'claude', enabled: true },
@@ -419,9 +453,13 @@ const DEFAULT_MODEL_INTERFACES: ModelInterface[] = [
   { id: 'gemini-3-pro-preview', displayName: 'Gemini 3 Pro (Preview)', provider: 'gemini', enabled: true },
   { id: 'openrouter/auto', displayName: 'OpenRouter Auto', provider: 'openrouter', enabled: true },
   { id: 'meta-llama/llama-3.3-70b-instruct:free', displayName: 'Llama 3.3 70B (Free)', provider: 'openrouter', enabled: true },
+  { id: 'gpt-4o', displayName: 'GPT-4o', provider: 'codex', enabled: true },
+  { id: 'gpt-4o-mini', displayName: 'GPT-4o Mini', provider: 'codex', enabled: true },
+  { id: 'gpt-4-turbo', displayName: 'GPT-4 Turbo', provider: 'codex', enabled: true },
 ]
 
 const MAX_PANELS = 5
+const MAX_EDITOR_PANELS = 20
 const MAX_AUTO_CONTINUE = 3
 const MODAL_BACKDROP_CLASS = 'fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px] flex items-center justify-center p-4'
 const MODAL_CARD_CLASS = 'rounded-2xl border border-neutral-200/80 dark:border-neutral-800 bg-white/95 dark:bg-neutral-950 shadow-2xl'
@@ -430,6 +468,8 @@ const UI_BUTTON_PRIMARY_CLASS = 'px-3 py-1.5 text-sm rounded-md bg-blue-600 text
 const UI_ICON_BUTTON_CLASS = 'h-9 w-9 inline-flex items-center justify-center rounded-lg border border-neutral-300 bg-white hover:bg-neutral-50 shadow-sm text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
 const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700'
 const UI_TOOLBAR_ICON_BUTTON_CLASS = 'h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+const CODE_WINDOW_TOOLBAR_BUTTON = 'h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-700 dark:border-neutral-700/80 dark:bg-transparent dark:hover:bg-neutral-800/80 dark:text-neutral-300'
+const CODE_WINDOW_TOOLBAR_BUTTON_SM = 'h-7 w-9 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700/80 dark:bg-transparent dark:hover:bg-neutral-800/80 dark:text-neutral-300'
 const UI_INPUT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 placeholder:text-neutral-500 dark:placeholder:text-neutral-400'
 const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100'
 const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
@@ -439,24 +479,34 @@ const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'prefer
 const OPERATION_TRACE_VISIBLE_MS = 1200
 const OPERATION_TRACE_FADE_MS = 2600
 const OPERATION_TRACE_MIN_OPACITY = 0.4
+const PANEL_COMPLETION_NOTICE_MS = 7000
 const DEFAULT_DIAGNOSTICS_CONFIG: DiagnosticsConfig = {
   showActivityUpdates: false,
   showReasoningUpdates: false,
   showOperationTrace: true,
   showThinkingProgress: true,
   colors: {
-    debugNotes: '#b91c1c',
-    activityUpdates: '#b45309',
-    reasoningUpdates: '#047857',
-    operationTrace: '#1e3a8a',
-    thinkingProgress: '#737373',
+    light: {
+      debugNotes: '#b91c1c',
+      activityUpdates: '#b45309',
+      reasoningUpdates: '#047857',
+      operationTrace: '#1e3a8a',
+      thinkingProgress: '#737373',
+    },
+    dark: {
+      debugNotes: '#fca5a5',
+      activityUpdates: '#fcd34d',
+      reasoningUpdates: '#6ee7b7',
+      operationTrace: '#93c5fd',
+      thinkingProgress: '#a3a3a3',
+    },
   },
 }
 
 const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderConfig> = {
   codex: {
     id: 'codex',
-    displayName: 'Codex',
+    displayName: 'OpenAI',
     enabled: true,
     type: 'cli',
     cliCommand: 'codex',
@@ -501,26 +551,42 @@ const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderCon
   },
 }
 
-function syncModelConfigWithCatalog(prev: ModelConfig, available: AvailableCatalogModels): ModelConfig {
-  const catalogIdsByProvider: Record<ModelProvider, Set<string>> = {
-    codex: new Set(available.codex.map((m) => m.id)),
-    claude: new Set(available.claude.map((m) => m.id)),
-    gemini: new Set(available.gemini.map((m) => m.id)),
-    openrouter: new Set(available.openrouter.map((m) => m.id)),
+function syncModelConfigWithCatalog(
+  prev: ModelConfig,
+  available: AvailableCatalogModels,
+  providerRegistry: ProviderRegistry,
+): ModelConfig {
+  const enabledProviders = new Set<ModelProvider>(
+    resolveProviderConfigs(providerRegistry)
+      .filter(
+        (config): config is ProviderConfig & { id: ConnectivityProvider } =>
+          Boolean(config.enabled) && CONNECTIVITY_PROVIDERS.includes(config.id as ConnectivityProvider),
+      )
+      .map((config) => config.id as ModelProvider),
+  )
+  // Codex is the app's default model family; keep it available for stability
+  // even if setup/connectivity toggles were changed unexpectedly.
+  enabledProviders.add('codex')
+  const defaultModelsByProvider: Record<ModelProvider, { id: string; displayName: string }[]> = {
+    codex: DEFAULT_MODEL_INTERFACES.filter((m) => m.provider === 'codex').map(({ id, displayName }) => ({ id, displayName })),
+    claude: DEFAULT_MODEL_INTERFACES.filter((m) => m.provider === 'claude').map(({ id, displayName }) => ({ id, displayName })),
+    gemini: DEFAULT_MODEL_INTERFACES.filter((m) => m.provider === 'gemini').map(({ id, displayName }) => ({ id, displayName })),
+    openrouter: DEFAULT_MODEL_INTERFACES.filter((m) => m.provider === 'openrouter').map(({ id, displayName }) => ({ id, displayName })),
   }
   const catalogModelsByProvider: Record<ModelProvider, { id: string; displayName: string }[]> = {
-    codex: available.codex,
-    claude: available.claude,
-    gemini: available.gemini,
-    openrouter: available.openrouter,
+    codex: [...(available.codex ?? []), ...defaultModelsByProvider.codex],
+    claude: [...(available.claude ?? []), ...defaultModelsByProvider.claude],
+    gemini: [...(available.gemini ?? []), ...defaultModelsByProvider.gemini],
+    openrouter: [...(available.openrouter ?? []), ...defaultModelsByProvider.openrouter],
   }
   const kept = prev.interfaces.filter((m) => {
-    const catalogIds = catalogIdsByProvider[m.provider]
-    return catalogIds.size === 0 || catalogIds.has(m.id)
+    if (!enabledProviders.has(m.provider)) return false
+    return true
   })
   const existingIds = new Set(kept.map((m) => m.id))
   const nextInterfaces = [...kept]
   for (const provider of CONNECTIVITY_PROVIDERS) {
+    if (!enabledProviders.has(provider)) continue
     for (const model of catalogModelsByProvider[provider]) {
       if (existingIds.has(model.id)) continue
       nextInterfaces.push({ id: model.id, displayName: model.displayName, provider, enabled: true })
@@ -1000,10 +1066,10 @@ function getInitialSetupWizardDone() {
 
 function getDefaultSetupWizardSelection(): Record<ConnectivityProvider, boolean> {
   return {
-    codex: false,
+    codex: true,
     claude: false,
     gemini: false,
-    openrouter: true,
+    openrouter: false,
   }
 }
 
@@ -1193,6 +1259,7 @@ function getInitialApplicationSettings(): ApplicationSettings {
     showDebugNotesInTimeline: false,
     verboseDiagnostics: false,
     showResponseDurationAfterPrompt: false,
+    editorWordWrap: true,
   }
   try {
     const raw = globalThis.localStorage?.getItem(APP_SETTINGS_STORAGE_KEY)
@@ -1212,6 +1279,7 @@ function getInitialApplicationSettings(): ApplicationSettings {
       showDebugNotesInTimeline: Boolean(parsed?.showDebugNotesInTimeline),
       verboseDiagnostics: Boolean(parsed?.verboseDiagnostics),
       showResponseDurationAfterPrompt: Boolean(parsed?.showResponseDurationAfterPrompt),
+      editorWordWrap: typeof parsed?.editorWordWrap === 'boolean' ? parsed.editorWordWrap : true,
     }
   } catch {
     return defaults
@@ -1249,6 +1317,26 @@ function clampFontScale(value: unknown, fallback = 1) {
 
 function parseInteractionMode(value: unknown): AgentInteractionMode {
   return value === 'plan' || value === 'debug' || value === 'ask' ? value : 'agent'
+}
+
+function normalizeAllowedCommandPrefixes(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const value of raw) {
+    if (typeof value !== 'string') continue
+    const trimmed = value.trim()
+    if (!trimmed) continue
+    const key = trimmed.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    next.push(trimmed)
+  }
+  return next.slice(0, 64)
+}
+
+function parseAllowedCommandPrefixesInput(raw: string): string[] {
+  return normalizeAllowedCommandPrefixes(raw.split(/\r?\n/g))
 }
 
 function parsePersistedAgentPanel(raw: unknown, fallbackWorkspaceRoot: string): AgentPanelState | null {
@@ -1311,6 +1399,7 @@ function parsePersistedEditorPanel(raw: unknown, fallbackWorkspaceRoot: string):
     binary: Boolean(rec.binary),
     error: typeof rec.error === 'string' && rec.error ? rec.error : undefined,
     savedAt: typeof rec.savedAt === 'number' && Number.isFinite(rec.savedAt) ? rec.savedAt : undefined,
+    editMode: Boolean(rec.editMode),
   }
 }
 
@@ -1349,6 +1438,7 @@ function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: string): Pa
             ? snapshot.layoutMode
             : 'vertical',
         showWorkspaceWindow: typeof snapshot.showWorkspaceWindow === 'boolean' ? snapshot.showWorkspaceWindow : true,
+        showCodeWindow: typeof snapshot.showCodeWindow === 'boolean' ? snapshot.showCodeWindow : true,
         dockTab:
           snapshot.dockTab === 'orchestrator' || snapshot.dockTab === 'explorer' || snapshot.dockTab === 'git' || snapshot.dockTab === 'settings'
             ? snapshot.dockTab
@@ -1426,6 +1516,7 @@ function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: string): Pa
     activePanelId,
     focusedEditorId,
     showWorkspaceWindow: typeof rec.showWorkspaceWindow === 'boolean' ? rec.showWorkspaceWindow : undefined,
+    showCodeWindow: typeof rec.showCodeWindow === 'boolean' ? rec.showCodeWindow : undefined,
     expandedDirectories,
   }
 }
@@ -1717,6 +1808,14 @@ function shouldSurfaceRawNoteInChat(method: string): boolean {
   return false
 }
 
+function isTurnCompletionRawNotification(method: string, params: any): boolean {
+  const methodLower = method.toLowerCase()
+  if (method === 'item/completed' && params?.item?.type === 'agentMessage') return true
+  if (methodLower.includes('turn') && methodLower.includes('complete')) return true
+  if (methodLower.includes('response') && methodLower.includes('complete')) return true
+  return false
+}
+
 const LIMIT_WARNING_PREFIX = 'Warning (Limits):'
 
 function isUsageLimitMessage(message: string): boolean {
@@ -1853,6 +1952,11 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
           value?.sandbox === 'read-only'
             ? value.sandbox
             : 'workspace-write',
+        allowedCommandPrefixes: normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedCommandPrefixes),
+        allowedAutoReadPrefixes: normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedAutoReadPrefixes),
+        allowedAutoWritePrefixes: normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedAutoWritePrefixes),
+        deniedAutoReadPrefixes: normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.deniedAutoReadPrefixes),
+        deniedAutoWritePrefixes: normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.deniedAutoWritePrefixes),
         themeId: (() => {
           const v = value as Partial<WorkspaceSettings> & { themeMode?: string; themePresetId?: string }
           if (v?.themeId && THEMES.some((t) => t.id === v.themeId)) return v.themeId
@@ -1872,6 +1976,11 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
           defaultModel: DEFAULT_MODEL,
           permissionMode: 'verify-first',
           sandbox: 'workspace-write',
+          allowedCommandPrefixes: [],
+          allowedAutoReadPrefixes: [],
+          allowedAutoWritePrefixes: [],
+          deniedAutoReadPrefixes: [],
+          deniedAutoWritePrefixes: [],
           themeId: WORKSPACE_THEME_INHERIT,
         }
       }
@@ -1885,6 +1994,11 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
         defaultModel: DEFAULT_MODEL,
         permissionMode: 'verify-first',
         sandbox: 'workspace-write',
+        allowedCommandPrefixes: [],
+        allowedAutoReadPrefixes: [],
+        allowedAutoWritePrefixes: [],
+        deniedAutoReadPrefixes: [],
+        deniedAutoWritePrefixes: [],
         themeId: WORKSPACE_THEME_INHERIT,
       }
     }
@@ -1926,6 +2040,11 @@ export default function App() {
     defaultModel: DEFAULT_MODEL,
     permissionMode: 'verify-first',
     sandbox: 'workspace-write',
+    allowedCommandPrefixes: [],
+    allowedAutoReadPrefixes: [],
+    allowedAutoWritePrefixes: [],
+    deniedAutoReadPrefixes: [],
+    deniedAutoWritePrefixes: [],
     themeId: WORKSPACE_THEME_INHERIT,
   })
   const [showThemeModal, setShowThemeModal] = useState(false)
@@ -1940,7 +2059,13 @@ export default function App() {
     runtimeLogPath: string
     diagnosticsConfigPath: string
   } | null>(null)
-  const [diagnosticsConfig, setDiagnosticsConfig] = useState<DiagnosticsConfig>({ ...DEFAULT_DIAGNOSTICS_CONFIG, colors: { ...DEFAULT_DIAGNOSTICS_CONFIG.colors } })
+  const [diagnosticsConfig, setDiagnosticsConfig] = useState<DiagnosticsConfig>({
+    ...DEFAULT_DIAGNOSTICS_CONFIG,
+    colors: {
+      light: { ...DEFAULT_DIAGNOSTICS_CONFIG.colors.light },
+      dark: { ...DEFAULT_DIAGNOSTICS_CONFIG.colors.dark },
+    },
+  })
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
   const [diagnosticsActionStatus, setDiagnosticsActionStatus] = useState<string | null>(null)
   const [providerAuthByName, setProviderAuthByName] = useState<Partial<Record<string, ProviderAuthStatus>>>({})
@@ -1951,6 +2076,7 @@ export default function App() {
   const [modelConfig, setModelConfig] = useState<ModelConfig>(() => getInitialModelConfig())
   const [modelCatalogRefreshStatus, setModelCatalogRefreshStatus] = useState<ModelCatalogRefreshStatus | null>(null)
   const [modelCatalogRefreshPending, setModelCatalogRefreshPending] = useState(false)
+  const [modelFormStatus, setModelFormStatus] = useState<string | null>(null)
   const [providerRegistry, setProviderRegistry] = useState<ProviderRegistry>(() => getInitialProviderRegistry())
   const [editingModel, setEditingModel] = useState<ModelInterface | null>(null)
   const [showProviderSetupModal, setShowProviderSetupModal] = useState(false)
@@ -1976,7 +2102,11 @@ export default function App() {
   const [gitStatus, setGitStatus] = useState<GitStatusState | null>(null)
   const [gitStatusLoading, setGitStatusLoading] = useState(false)
   const [gitStatusError, setGitStatusError] = useState<string | null>(null)
-  const [filePreview, setFilePreview] = useState<FilePreviewState | null>(null)
+  const [gitOperationPending, setGitOperationPending] = useState<GitOperation | null>(null)
+  const [explorerContextMenu, setExplorerContextMenu] = useState<{ x: number; y: number; relativePath: string } | null>(null)
+  const [gitContextMenu, setGitContextMenu] = useState<{ x: number; y: number; relativePath: string; deleted: boolean } | null>(null)
+  const [selectedGitPaths, setSelectedGitPaths] = useState<string[]>([])
+  const [gitSelectionAnchorPath, setGitSelectionAnchorPath] = useState<string | null>(null)
   const [selectedWorkspaceFile, setSelectedWorkspaceFile] = useState<string | null>(null)
   const [editorPanels, setEditorPanels] = useState<EditorPanelState[]>([])
   const [focusedEditorId, setFocusedEditorId] = useState<string | null>(null)
@@ -1984,12 +2114,17 @@ export default function App() {
   const [activityClock, setActivityClock] = useState(() => Date.now())
   const [panelDebugById, setPanelDebugById] = useState<Record<string, PanelDebugEntry[]>>({})
   const [lastPromptDurationMsByPanel, setLastPromptDurationMsByPanel] = useState<Record<string, number>>({})
+  const [panelTurnCompleteAtById, setPanelTurnCompleteAtById] = useState<Record<string, number>>({})
   const [settingsPopoverByPanel, setSettingsPopoverByPanel] = useState<Record<string, 'mode' | 'sandbox' | 'permission' | null>>({})
   const [codeBlockOpenById, setCodeBlockOpenById] = useState<Record<string, boolean>>({})
   const [timelineOpenByUnitId, setTimelineOpenByUnitId] = useState<Record<string, boolean>>({})
   const [timelinePinnedCodeByUnitId, setTimelinePinnedCodeByUnitId] = useState<Record<string, boolean>>({})
   const [chatHistory, setChatHistory] = useState<ChatHistoryEntry[]>(() => getInitialChatHistory())
-  const [selectedHistoryId, setSelectedHistoryId] = useState('')
+  const [historyDropdownOpen, setHistoryDropdownOpen] = useState(false)
+  const [deleteHistoryIdPending, setDeleteHistoryIdPending] = useState<string | null>(null)
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string>('')
+  const [deleteAllHistoryChecked, setDeleteAllHistoryChecked] = useState(false)
+  const [deleteThisAndOlderChecked, setDeleteThisAndOlderChecked] = useState(false)
 
   const modelList = modelConfig.interfaces.filter((m) => m.enabled).map((m) => m.id)
   const workspaceScopedHistory = useMemo(() => {
@@ -2002,6 +2137,37 @@ export default function App() {
     const base = [...modelList]
     if (includeCurrent && !base.includes(includeCurrent)) base.push(includeCurrent)
     return base
+  }
+
+  type ModelOptionGroup = { label: string; modelIds: string[] }
+  function getModelOptionsGrouped(includeCurrent?: string, enabledOnly = true): ModelOptionGroup[] {
+    const ids = enabledOnly ? getModelOptions(includeCurrent) : modelConfig.interfaces.map((m) => m.id)
+    const interfaces: ModelInterface[] = ids
+      .map((id) => modelConfig.interfaces.find((m) => m.id === id) ?? { id, displayName: id, provider: 'codex', enabled: false })
+      .filter((m): m is ModelInterface => !!m)
+    const groups: ModelOptionGroup[] = []
+    const codexCli: string[] = []
+    const codexApi: string[] = []
+    const byProvider: Record<string, string[]> = { claude: [], gemini: [], openrouter: [] }
+    for (const m of interfaces) {
+      if (m.provider === 'codex') {
+        if (CODEX_API_MODELS.includes(m.id)) codexApi.push(m.id)
+        else codexCli.push(m.id)
+      } else {
+        ;(byProvider[m.provider] ??= []).push(m.id)
+      }
+    }
+    if (codexCli.length) groups.push({ label: 'OpenAI (CLI)', modelIds: codexCli })
+    if (codexApi.length) groups.push({ label: 'OpenAI (API)', modelIds: codexApi })
+    const providerLabels: Record<string, string> = {
+      claude: 'Claude',
+      gemini: 'Gemini',
+      openrouter: 'OpenRouter',
+    }
+    for (const [provider, modelIds] of Object.entries(byProvider)) {
+      if (modelIds.length) groups.push({ label: providerLabels[provider] ?? provider, modelIds })
+    }
+    return groups
   }
 
   const layoutRef = useRef<HTMLDivElement | null>(null)
@@ -2028,6 +2194,7 @@ export default function App() {
   const lastFindInFilesQueryRef = useRef('')
   const reconnectingRef = useRef(new Set<string>())
   const activePromptStartedAtRef = useRef(new Map<string, number>())
+  const zoomWheelThrottleRef = useRef(false)
   const needsContextOnNextCodexSendRef = useRef<Record<string, boolean>>({})
   const workspaceRootRef = useRef(workspaceRoot)
   const workspaceListRef = useRef(workspaceList)
@@ -2036,9 +2203,15 @@ export default function App() {
   const appStateSaveTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
   const workspaceSnapshotsRef = useRef<Record<string, WorkspaceUiSnapshot>>({})
   const startupReadyNotifiedRef = useRef(false)
+  const historyDropdownRef = useRef<HTMLDivElement>(null)
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('vertical')
   const [showWorkspaceWindow, setShowWorkspaceWindow] = useState(true)
+  const [showCodeWindow, setShowCodeWindow] = useState(true)
+  const [showTerminalBar, setShowTerminalBar] = useState(false)
+  const [zoomLevel, setZoomLevel] = useState(0)
+  const [draggingPanelId, setDraggingPanelId] = useState<string | null>(null)
+  const [dragOverTarget, setDragOverTarget] = useState<string | null>(null)
   const [appStateHydrated, setAppStateHydrated] = useState(false)
   const [workspaceBootstrapComplete, setWorkspaceBootstrapComplete] = useState(false)
   const [pendingWorkspaceSwitch, setPendingWorkspaceSwitch] = useState<{
@@ -2117,6 +2290,17 @@ export default function App() {
   }, [workspaceList])
 
   useEffect(() => {
+    if (!historyDropdownOpen) return
+    const onMouseDown = (e: MouseEvent) => {
+      if (historyDropdownRef.current && !historyDropdownRef.current.contains(e.target as Node)) {
+        setHistoryDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [historyDropdownOpen])
+
+  useEffect(() => {
     localStorage.setItem(WORKSPACE_STORAGE_KEY, workspaceRoot)
   }, [workspaceRoot])
 
@@ -2144,6 +2328,15 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(WORKSPACE_DOCK_SIDE_STORAGE_KEY, workspaceDockSide)
   }, [workspaceDockSide])
+
+  useEffect(() => {
+    if (draggingPanelId) {
+      document.body.style.userSelect = 'none'
+      return () => {
+        document.body.style.userSelect = ''
+      }
+    }
+  }, [draggingPanelId])
 
   useEffect(() => {
     try {
@@ -2229,9 +2422,19 @@ export default function App() {
     focusedEditorIdRef.current = focusedEditorId
   }, [focusedEditorId])
 
+  function setFocusedEditor(next: string | null) {
+    focusedEditorIdRef.current = next
+    setFocusedEditorId(next)
+  }
+
   useEffect(() => {
     showWorkspaceWindowRef.current = showWorkspaceWindow
   }, [showWorkspaceWindow])
+
+  useEffect(() => {
+    const level = api.getZoomLevel?.()
+    if (level !== undefined) setZoomLevel(level)
+  }, [api])
 
   useEffect(() => {
     workspaceTreeRef.current = workspaceTree
@@ -2255,7 +2458,7 @@ export default function App() {
 
   useEffect(() => {
     if (focusedEditorId && !editorPanels.some((p) => p.id === focusedEditorId)) {
-      setFocusedEditorId(null)
+      setFocusedEditor(null)
     }
   }, [editorPanels, focusedEditorId])
 
@@ -2298,6 +2501,9 @@ export default function App() {
         if (typeof restored.showWorkspaceWindow === 'boolean') {
           setShowWorkspaceWindow(restored.showWorkspaceWindow)
         }
+        if (typeof restored.showCodeWindow === 'boolean') {
+          setShowCodeWindow(restored.showCodeWindow)
+        }
         if (restored.layoutMode) setLayoutMode(restored.layoutMode)
         if (restored.dockTab) setDockTab(restored.dockTab)
         if (restored.workspaceDockSide) setWorkspaceDockSide(restored.workspaceDockSide)
@@ -2334,12 +2540,12 @@ export default function App() {
           available.gemini.length === 0 &&
           available.openrouter.length === 0
         ) return
-        setModelConfig((prev) => syncModelConfigWithCatalog(prev, available))
+        setModelConfig((prev) => syncModelConfigWithCatalog(prev, available, providerRegistry))
       } catch {
         // ignore - use built-in models only
       }
     })()
-  }, [api])
+  }, [api, providerRegistry])
 
   const resolvedProviderConfigs = useMemo(
     () => resolveProviderConfigs(providerRegistry),
@@ -2416,6 +2622,7 @@ export default function App() {
             {
               layoutMode: snapshot.layoutMode,
               showWorkspaceWindow: snapshot.showWorkspaceWindow,
+              showCodeWindow: snapshot.showCodeWindow,
               dockTab: snapshot.dockTab,
               workspaceDockSide: snapshot.workspaceDockSide,
               panels: snapshot.panels.map((panel) => ({
@@ -2456,6 +2663,7 @@ export default function App() {
         ),
         layoutMode,
         showWorkspaceWindow,
+        showCodeWindow,
         dockTab,
         workspaceDockSide,
         activePanelId,
@@ -2490,6 +2698,7 @@ export default function App() {
           binary: panel.binary,
           error: panel.error,
           savedAt: panel.savedAt,
+          editMode: panel.editMode,
         })),
       }
       void api.saveAppState(payload).catch(() => {})
@@ -2513,12 +2722,25 @@ export default function App() {
     panels,
     selectedWorkspaceFile,
     showWorkspaceWindow,
+    showCodeWindow,
     workspaceList,
     workspaceRoot,
     workspaceDockSide,
   ])
 
   useEffect(() => {
+    const activePanelIds = new Set(panels.map((p) => p.id))
+    for (const panelId of Array.from(stickToBottomByPanelRef.current.keys())) {
+      if (!activePanelIds.has(panelId)) {
+        stickToBottomByPanelRef.current.delete(panelId)
+      }
+    }
+    for (const codeBlockId of Array.from(stickToBottomByCodeBlockRef.current.keys())) {
+      if (!codeBlockViewportRefs.current.has(codeBlockId)) {
+        stickToBottomByCodeBlockRef.current.delete(codeBlockId)
+      }
+    }
+
     // Defer scroll to next animation frame so layout (markdown, code blocks) is complete
     const raf = requestAnimationFrame(() => {
       for (const p of panels) {
@@ -2542,12 +2764,27 @@ export default function App() {
     setShowHiddenFiles(prefs.showHiddenFiles)
     setShowNodeModules(prefs.showNodeModules)
     setExpandedDirectories({})
-    setFilePreview(null)
+    setExplorerContextMenu(null)
+    setGitContextMenu(null)
+    setSelectedGitPaths([])
+    setGitSelectionAnchorPath(null)
     setSelectedWorkspaceFile(null)
     setFocusedEditorId(null)
     void refreshWorkspaceTree(prefs)
     void refreshGitStatus()
   }, [workspaceRoot, api])
+
+  useEffect(() => {
+    const entries = gitStatus?.entries ?? []
+    if (entries.length === 0) {
+      if (selectedGitPaths.length > 0) setSelectedGitPaths([])
+      if (gitSelectionAnchorPath) setGitSelectionAnchorPath(null)
+      return
+    }
+    const validPaths = new Set(entries.map((entry) => entry.relativePath))
+    setSelectedGitPaths((prev) => prev.filter((path) => validPaths.has(path)))
+    setGitSelectionAnchorPath((prev) => (prev && validPaths.has(prev) ? prev : null))
+  }, [gitStatus])
 
   useEffect(() => {
     setExpandedDirectories({})
@@ -2622,6 +2859,14 @@ export default function App() {
     return `Cannot open workspace:\n${requestedRoot}\n\n${result.message || 'Unknown error.'}`
   }
 
+  function handleWorkspacePickerFailure(requestedRoot: string, failure: WorkspaceApplyFailure) {
+    const msg =
+      failure.kind === 'request-error'
+        ? failure.message
+        : formatWorkspaceClaimFailure(requestedRoot, failure.result)
+    setWorkspacePickerError(msg)
+  }
+
   function makeWorkspaceDefaultPanel(nextWorkspaceRoot: string) {
     const ws = workspaceSettingsByPath[nextWorkspaceRoot]
     const panel = makeDefaultPanel('default', nextWorkspaceRoot)
@@ -2653,6 +2898,7 @@ export default function App() {
     return {
       layoutMode,
       showWorkspaceWindow,
+      showCodeWindow,
       dockTab,
       workspaceDockSide,
       panels: workspacePanels,
@@ -2670,6 +2916,7 @@ export default function App() {
       const panel = makeWorkspaceDefaultPanel(nextWorkspaceRoot)
       setLayoutMode('vertical')
       setShowWorkspaceWindow(true)
+      setShowCodeWindow(true)
       setDockTab('explorer')
       setWorkspaceDockSide(getInitialWorkspaceDockSide())
       setExpandedDirectories({})
@@ -2682,6 +2929,7 @@ export default function App() {
     }
     setLayoutMode(snapshot.layoutMode)
     setShowWorkspaceWindow(snapshot.showWorkspaceWindow)
+    setShowCodeWindow(snapshot.showCodeWindow)
     setDockTab(snapshot.dockTab)
     setWorkspaceDockSide(snapshot.workspaceDockSide)
     setExpandedDirectories({ ...snapshot.expandedDirectories })
@@ -2769,7 +3017,10 @@ export default function App() {
         overrides: {
           ...prev.overrides,
           ...Object.fromEntries(
-            CONNECTIVITY_PROVIDERS.map((id) => [id, { ...(prev.overrides[id] ?? {}), enabled: setupWizardSelection[id] }]),
+            CONNECTIVITY_PROVIDERS.filter((id) => setupWizardSelection[id]).map((id) => [
+              id,
+              { ...(prev.overrides[id] ?? {}), enabled: true },
+            ]),
           ),
         },
       }))
@@ -2846,28 +3097,27 @@ export default function App() {
     const next = targetRoot.trim()
     if (!next) return
     const current = workspaceRootRef.current?.trim() ?? ''
-    if (normalizeWorkspacePathForCompare(next) === normalizeWorkspacePathForCompare(current)) return
+    if (source !== 'picker' && normalizeWorkspacePathForCompare(next) === normalizeWorkspacePathForCompare(current)) return
     const fromPicker = source === 'picker'
-    if (fromPicker) setWorkspacePickerError(null)
+    if (fromPicker) {
+      setWorkspacePickerError(null)
+      setWorkspacePickerOpening(next)
+    }
     if (!current) {
       void (async () => {
-        const openedRoot = await applyWorkspaceRoot(next, {
-          showFailureAlert: !fromPicker,
-          rebindPanels: false,
-          onFailure: fromPicker
-            ? (f) => {
-                const msg =
-                  f.kind === 'request-error'
-                    ? f.message
-                    : formatWorkspaceClaimFailure(next, f.result)
-                setWorkspacePickerError(msg)
-              }
-            : undefined,
-        })
-        if (!openedRoot) return
-        applyWorkspaceSnapshot(openedRoot)
-        if (fromPicker) closeWorkspacePicker()
-        if (source === 'workspace-create') setShowWorkspaceModal(false)
+        try {
+          const openedRoot = await applyWorkspaceRoot(next, {
+            showFailureAlert: !fromPicker,
+            rebindPanels: false,
+            onFailure: fromPicker ? (f) => handleWorkspacePickerFailure(next, f) : undefined,
+          })
+          if (!openedRoot) return
+          applyWorkspaceSnapshot(openedRoot)
+          if (fromPicker) closeWorkspacePicker()
+          if (source === 'workspace-create') setShowWorkspaceModal(false)
+        } finally {
+          if (fromPicker) setWorkspacePickerOpening(null)
+        }
       })()
       return
     }
@@ -2885,15 +3135,16 @@ export default function App() {
       workspaceSnapshotsRef.current[currentWorkspace] = buildWorkspaceSnapshot(currentWorkspace)
     }
     const fromPicker = source === 'picker'
+    if (fromPicker) {
+      setWorkspacePickerError(null)
+      setWorkspacePickerOpening(targetRoot)
+    }
     const openedRoot = await applyWorkspaceRoot(targetRoot, {
       showFailureAlert: !fromPicker,
       rebindPanels: false,
-      onFailure: fromPicker
-        ? (f) => {
-            const msg = f.kind === 'request-error' ? f.message : formatWorkspaceClaimFailure(targetRoot, f.result)
-            setWorkspacePickerError(msg)
-          }
-        : undefined,
+      onFailure: fromPicker ? (f) => handleWorkspacePickerFailure(targetRoot, f) : undefined,
+    }).finally(() => {
+      if (fromPicker) setWorkspacePickerOpening(null)
     })
     if (!openedRoot) return
 
@@ -2972,7 +3223,7 @@ export default function App() {
 
       if (!disposed) {
         setWorkspaceRoot('')
-        alert('No workspace is available right now. Another Barnaby instance is already using each saved workspace.')
+        openWorkspacePicker('No workspace is available right now. Another Barnaby instance is already using each saved workspace.')
       }
     }
 
@@ -3033,6 +3284,7 @@ export default function App() {
     const existing = panelsRef.current.find((x) => x.historyId === historyId)
     if (existing) {
       setActivePanelId(existing.id)
+      setHistoryDropdownOpen(false)
       setFocusedEditorId(null)
       return
     }
@@ -3068,7 +3320,41 @@ export default function App() {
       ]
     })
     setActivePanelId(panelId)
+    setHistoryDropdownOpen(false)
     setFocusedEditorId(null)
+  }
+
+  async function deleteHistoryEntry(
+    historyId: string,
+    opts: { deleteAll?: boolean; deleteThisAndOlder?: boolean },
+  ) {
+    const selected = chatHistory.find((e) => e.id === historyId)
+    let idsToDelete: string[]
+
+    if (opts.deleteAll) {
+      idsToDelete = chatHistory.map((e) => e.id)
+    } else if (opts.deleteThisAndOlder && selected) {
+      const normalizedRoot = normalizeWorkspacePathForCompare(selected.workspaceRoot || '')
+      idsToDelete = chatHistory
+        .filter(
+          (e) =>
+            normalizeWorkspacePathForCompare(e.workspaceRoot || '') === normalizedRoot &&
+            e.savedAt <= selected.savedAt,
+        )
+        .map((e) => e.id)
+    } else {
+      idsToDelete = [historyId]
+    }
+
+    for (const id of idsToDelete) {
+      const panel = panelsRef.current.find((w) => w.historyId === id)
+      if (panel) await closePanel(panel.id, { skipUpsertToHistory: true })
+    }
+    setChatHistory((prev) => prev.filter((e) => !idsToDelete.includes(e.id)))
+    setDeleteHistoryIdPending(null)
+    setDeleteAllHistoryChecked(false)
+    setDeleteThisAndOlderChecked(false)
+    setHistoryDropdownOpen(false)
   }
 
   function archivePanelToHistory(panel: AgentPanelState) {
@@ -3102,17 +3388,19 @@ export default function App() {
   function registerMessageViewport(panelId: string, el: HTMLDivElement | null) {
     if (!el) {
       messageViewportRefs.current.delete(panelId)
-      stickToBottomByPanelRef.current.delete(panelId)
       return
     }
     messageViewportRefs.current.set(panelId, el)
-    stickToBottomByPanelRef.current.set(panelId, isViewportNearBottom(el))
+    // Preserve stickiness across ref callback churn (React may call ref(null) then ref(el) on rerender).
+    // Initial default is "stick to bottom" so new output keeps the latest message in view.
+    if (!stickToBottomByPanelRef.current.has(panelId)) {
+      stickToBottomByPanelRef.current.set(panelId, true)
+    }
   }
 
   function registerCodeBlockViewport(codeBlockId: string, el: HTMLPreElement | null) {
     if (!el) {
       codeBlockViewportRefs.current.delete(codeBlockId)
-      stickToBottomByCodeBlockRef.current.delete(codeBlockId)
       return
     }
     codeBlockViewportRefs.current.set(codeBlockId, el)
@@ -3218,6 +3506,11 @@ export default function App() {
         defaultModel: DEFAULT_MODEL,
         permissionMode: 'verify-first',
         sandbox: 'workspace-write',
+        allowedCommandPrefixes: [],
+        allowedAutoReadPrefixes: [],
+        allowedAutoWritePrefixes: [],
+        deniedAutoReadPrefixes: [],
+        deniedAutoWritePrefixes: [],
         themeId: WORKSPACE_THEME_INHERIT,
       } as WorkspaceSettings)
 
@@ -3227,6 +3520,11 @@ export default function App() {
         defaultModel: current.defaultModel ?? DEFAULT_MODEL,
         permissionMode: current.permissionMode ?? 'verify-first',
         sandbox: current.sandbox ?? 'workspace-write',
+        allowedCommandPrefixes: normalizeAllowedCommandPrefixes(current.allowedCommandPrefixes),
+        allowedAutoReadPrefixes: normalizeAllowedCommandPrefixes(current.allowedAutoReadPrefixes),
+        allowedAutoWritePrefixes: normalizeAllowedCommandPrefixes(current.allowedAutoWritePrefixes),
+        deniedAutoReadPrefixes: normalizeAllowedCommandPrefixes(current.deniedAutoReadPrefixes),
+        deniedAutoWritePrefixes: normalizeAllowedCommandPrefixes(current.deniedAutoWritePrefixes),
         themeId: normalizeWorkspaceThemeId(current.themeId ?? (current as any).themePresetId),
       } satisfies WorkspaceSettings
     }
@@ -3236,6 +3534,11 @@ export default function App() {
       defaultModel: current.defaultModel ?? DEFAULT_MODEL,
       permissionMode: current.permissionMode ?? 'verify-first',
       sandbox: current.sandbox ?? 'workspace-write',
+      allowedCommandPrefixes: normalizeAllowedCommandPrefixes(current.allowedCommandPrefixes),
+      allowedAutoReadPrefixes: normalizeAllowedCommandPrefixes(current.allowedAutoReadPrefixes),
+      allowedAutoWritePrefixes: normalizeAllowedCommandPrefixes(current.allowedAutoWritePrefixes),
+      deniedAutoReadPrefixes: normalizeAllowedCommandPrefixes(current.deniedAutoReadPrefixes),
+      deniedAutoWritePrefixes: normalizeAllowedCommandPrefixes(current.deniedAutoWritePrefixes),
       themeId: normalizeWorkspaceThemeId(current.themeId ?? (current as any).themePresetId),
     } satisfies WorkspaceSettings
   }
@@ -3248,6 +3551,11 @@ export default function App() {
       defaultModel: form.defaultModel.trim() || DEFAULT_MODEL,
       permissionMode,
       sandbox,
+      allowedCommandPrefixes: normalizeAllowedCommandPrefixes(form.allowedCommandPrefixes),
+      allowedAutoReadPrefixes: normalizeAllowedCommandPrefixes(form.allowedAutoReadPrefixes),
+      allowedAutoWritePrefixes: normalizeAllowedCommandPrefixes(form.allowedAutoWritePrefixes),
+      deniedAutoReadPrefixes: normalizeAllowedCommandPrefixes(form.deniedAutoReadPrefixes),
+      deniedAutoWritePrefixes: normalizeAllowedCommandPrefixes(form.deniedAutoWritePrefixes),
       themeId: normalizeWorkspaceThemeId((form as any).themeId ?? (form as any).themePresetId),
     }
   }
@@ -3260,6 +3568,11 @@ export default function App() {
       left.defaultModel === right.defaultModel &&
       left.permissionMode === right.permissionMode &&
       left.sandbox === right.sandbox &&
+      left.allowedCommandPrefixes.join('\n') === right.allowedCommandPrefixes.join('\n') &&
+      left.allowedAutoReadPrefixes.join('\n') === right.allowedAutoReadPrefixes.join('\n') &&
+      left.allowedAutoWritePrefixes.join('\n') === right.allowedAutoWritePrefixes.join('\n') &&
+      left.deniedAutoReadPrefixes.join('\n') === right.deniedAutoReadPrefixes.join('\n') &&
+      left.deniedAutoWritePrefixes.join('\n') === right.deniedAutoWritePrefixes.join('\n') &&
       left.themeId === right.themeId
     )
   }
@@ -3409,6 +3722,19 @@ export default function App() {
     )
   }
 
+  function markPanelTurnComplete(agentWindowId: string) {
+    setPanelTurnCompleteAtById((prev) => ({ ...prev, [agentWindowId]: Date.now() }))
+  }
+
+  function clearPanelTurnComplete(agentWindowId: string) {
+    setPanelTurnCompleteAtById((prev) => {
+      if (!(agentWindowId in prev)) return prev
+      const next = { ...prev }
+      delete next[agentWindowId]
+      return next
+    })
+  }
+
   function markPanelActivity(agentWindowId: string, evt: any) {
     const prev = activityLatestRef.current.get(agentWindowId)
     const entry = describeActivityEntry(evt)
@@ -3455,6 +3781,7 @@ export default function App() {
         appendPanelDebug(agentWindowId, 'event:status', `${evt.status}${evt.message ? ` - ${evt.message}` : ''}`)
         const isRetryableError = evt.status === 'error' && typeof evt.message === 'string' &&
           /status 429|Retrying with backoff|Attempt \d+ failed(?!.*Max attempts)|Rate limited/i.test(evt.message)
+        let closedAfterStreaming = false
         setPanels((prev) =>
           prev.map((w) =>
             w.id !== agentWindowId
@@ -3464,6 +3791,12 @@ export default function App() {
                   status: isRetryableError ? 'Rate limited — retrying...' : (evt.message ?? evt.status),
                   connected: evt.status === 'ready',
                   streaming: isRetryableError ? w.streaming : (evt.status === 'closed' || evt.status === 'error' ? false : w.streaming),
+                  ...(evt.status === 'closed' && !isRetryableError && w.streaming
+                    ? (() => {
+                        closedAfterStreaming = true
+                        return {}
+                      })()
+                    : {}),
                   messages:
                     evt.status === 'error' && typeof evt.message === 'string' && !isRetryableError
                       ? (() => {
@@ -3478,6 +3811,11 @@ export default function App() {
                 },
           ),
         )
+        if (evt.status === 'error' && !isRetryableError) {
+          clearPanelTurnComplete(agentWindowId)
+        } else if (evt.status === 'closed' && !isRetryableError && closedAfterStreaming) {
+          markPanelTurnComplete(agentWindowId)
+        }
         if ((evt.status === 'closed' || evt.status === 'error') && !isRetryableError) {
           activePromptStartedAtRef.current.delete(agentWindowId)
           queueMicrotask(() => kickQueuedMessage(agentWindowId))
@@ -3531,6 +3869,7 @@ export default function App() {
           activePromptStartedAtRef.current.delete(agentWindowId)
         }
         if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
+        markPanelTurnComplete(agentWindowId)
         queueMicrotask(() => kickQueuedMessage(agentWindowId))
       }
 
@@ -3554,6 +3893,9 @@ export default function App() {
 
       if (evt?.type === 'rawNotification') {
         const method = String(evt.method ?? '')
+        if (isTurnCompletionRawNotification(method, evt.params)) {
+          markPanelTurnComplete(agentWindowId)
+        }
         appendPanelDebug(agentWindowId, 'event:raw', method)
         const note = summarizeRawNotification(method, evt.params)
         if (!note) return
@@ -3658,6 +4000,25 @@ export default function App() {
       if (action === 'layoutVertical') setLayoutMode('vertical')
       if (action === 'layoutHorizontal') setLayoutMode('horizontal')
       if (action === 'layoutGrid') setLayoutMode('grid')
+      if (action === 'toggleWorkspaceWindow') setShowWorkspaceWindow((prev) => !prev)
+      if (action === 'toggleCodeWindow') setShowCodeWindow((prev) => !prev)
+      if (action === 'zoomIn') {
+        api.zoomIn?.()
+        const level = api.getZoomLevel?.()
+        if (level !== undefined) setZoomLevel(level)
+        return
+      }
+      if (action === 'zoomOut') {
+        api.zoomOut?.()
+        const level = api.getZoomLevel?.()
+        if (level !== undefined) setZoomLevel(level)
+        return
+      }
+      if (action === 'resetZoom') {
+        api.resetZoom?.()
+        setZoomLevel(0)
+        return
+      }
     })
 
     return () => {
@@ -3754,6 +4115,91 @@ export default function App() {
   function formatError(err: unknown) {
     if (err instanceof Error && err.message) return err.message
     return String(err ?? 'Unknown error')
+  }
+
+  function openDiagnosticsTarget(
+    target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig',
+    label: string,
+  ) {
+    if (target === 'chatHistory' || target === 'appState' || target === 'runtimeLog' || target === 'diagnosticsConfig') {
+      openDiagnosticsFileInEditor(target, label)
+      return
+    }
+    setDiagnosticsActionStatus(null)
+    void (async () => {
+      try {
+        const result = await api.openDiagnosticsPath?.(target)
+        if (!result?.ok) {
+          setDiagnosticsActionStatus(result?.error ? `Could not open ${label}: ${result.error}` : `Could not open ${label}.`)
+          return
+        }
+      } catch (err) {
+        setDiagnosticsActionStatus(`Could not open ${label}: ${formatError(err)}`)
+      }
+    })()
+  }
+
+  function openDiagnosticsFileInEditor(
+    target: 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig',
+    label: string,
+  ) {
+    setDiagnosticsActionStatus(null)
+    void (async () => {
+      try {
+        const result = await api.readDiagnosticsFile?.(target)
+        if (!result?.ok || typeof result.content !== 'string') {
+          setDiagnosticsActionStatus(result?.error ? `Could not open ${label}: ${result.error}` : `Could not open ${label}.`)
+          return
+        }
+        const existing = editorPanelsRef.current.find((p) => p.diagnosticsTarget === target)
+        setShowCodeWindow(true)
+        if (existing) {
+          setEditorPanels((prev) =>
+            prev.map((p) =>
+              p.id !== existing.id
+                ? p
+                : {
+                    ...p,
+                    content: result.content ?? p.content,
+                    size: result.content.length,
+                    dirty: false,
+                    diagnosticsReadOnly: result.writable === false,
+                    error: undefined,
+                  },
+            ),
+          )
+          setFocusedEditor(existing.id)
+          return
+        }
+        const panelId = `editor-${newId()}`
+        const panelTitle = fileNameFromRelativePath(result.path || `${target}.txt`)
+        const newPanel: EditorPanelState = {
+          id: panelId,
+          workspaceRoot,
+          relativePath: result.path || target,
+          title: panelTitle,
+          fontScale: 1,
+          content: result.content,
+          size: result.content.length,
+          loading: false,
+          saving: false,
+          dirty: false,
+          binary: false,
+          editMode: true,
+          diagnosticsTarget: target,
+          diagnosticsReadOnly: result.writable === false,
+        }
+        setEditorPanels((prev) => {
+          if (prev.length < MAX_EDITOR_PANELS) return [...prev, newPanel]
+          const oldestUneditedIdx = prev.findIndex((p) => !p.dirty)
+          const next = oldestUneditedIdx >= 0 ? prev.filter((_, i) => i !== oldestUneditedIdx) : prev
+          return [...next, newPanel]
+        })
+        setFocusedEditor(panelId)
+      } catch (err) {
+        setDiagnosticsActionStatus(`Could not open ${label}: ${formatError(err)}`)
+      }
+    })()
   }
 
   function fileToDataUrl(file: File): Promise<string> {
@@ -3870,6 +4316,32 @@ export default function App() {
       return null
     } finally {
       setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: false }))
+    }
+  }
+
+  async function refreshProviderApiAuthStatus(providerId: string) {
+    const apiConfig = API_CONFIG_BY_PROVIDER[providerId]
+    if (!apiConfig || !api.getProviderAuthStatus) return
+    setProviderAuthLoadingByName((prev) => ({ ...prev, [providerId]: true }))
+    try {
+      const status = (await api.getProviderAuthStatus({
+        id: providerId,
+        type: 'api',
+        apiBaseUrl: apiConfig.apiBaseUrl,
+        loginUrl: apiConfig.loginUrl,
+      })) as ProviderAuthStatus
+      setProviderAuthByName((prev) => ({ ...prev, [providerId]: status }))
+      setProviderAuthActionByName((prev) => ({ ...prev, [providerId]: null }))
+      await refreshProviderApiKeyState(providerId)
+      return status
+    } catch (err) {
+      setProviderAuthActionByName((prev) => ({
+        ...prev,
+        [providerId]: `API check failed: ${formatError(err)}`,
+      }))
+      return null
+    } finally {
+      setProviderAuthLoadingByName((prev) => ({ ...prev, [providerId]: false }))
     }
   }
 
@@ -4037,6 +4509,50 @@ export default function App() {
     }
   }
 
+  function resolveGitSelection(candidatePaths?: string[]) {
+    const entries = gitStatus?.entries ?? []
+    if (entries.length === 0) return []
+    const source = candidatePaths && candidatePaths.length > 0 ? candidatePaths : selectedGitPaths
+    if (source.length === 0) return []
+    const valid = new Set(entries.map((entry) => entry.relativePath))
+    const resolved: string[] = []
+    for (const path of source) {
+      if (!valid.has(path)) continue
+      if (!resolved.includes(path)) resolved.push(path)
+    }
+    return resolved
+  }
+
+  async function runGitOperation(op: GitOperation, candidatePaths?: string[]) {
+    if (!workspaceRoot || gitOperationPending) return
+    const selectedPaths = resolveGitSelection(candidatePaths)
+    setGitOperationPending(op)
+    setGitStatusError(null)
+    try {
+      const fn =
+        op === 'commit'
+          ? api.gitCommit
+          : op === 'push'
+            ? api.gitPush
+            : op === 'deploy'
+            ? api.gitDeploy
+            : op === 'build'
+                ? api.gitBuild
+                : api.gitRelease
+      const result = await fn(workspaceRoot, selectedPaths.length > 0 ? selectedPaths : undefined)
+      if (result.ok) {
+        setGitContextMenu(null)
+        void refreshGitStatus()
+      } else {
+        setGitStatusError(result.error ?? `${op} failed`)
+      }
+    } catch (err) {
+      setGitStatusError(`${op}: ${formatError(err)}`)
+    } finally {
+      setGitOperationPending(null)
+    }
+  }
+
   function setExplorerPrefs(next: ExplorerPrefs) {
     setShowHiddenFiles(next.showHiddenFiles)
     setShowNodeModules(next.showNodeModules)
@@ -4044,66 +4560,49 @@ export default function App() {
     setExplorerPrefsByWorkspace((prev) => ({ ...prev, [workspaceRoot]: next }))
   }
 
-  async function openFilePreview(relativePath: string) {
-    setSelectedWorkspaceFile(relativePath)
-    setFilePreview({
-      relativePath,
-      size: 0,
-      truncated: false,
-      binary: false,
-      content: '',
-      loading: true,
-    })
-    try {
-      const result = await api.readWorkspaceFile(workspaceRoot, relativePath)
-      setFilePreview({
-        relativePath: result.relativePath,
-        size: result.size,
-        truncated: result.truncated,
-        binary: result.binary,
-        content: result.content,
-        loading: false,
-      })
-    } catch (err) {
-      setFilePreview({
-        relativePath,
-        size: 0,
-        truncated: false,
-        binary: false,
-        content: '',
-        loading: false,
-        error: formatError(err),
-      })
-    }
-  }
-
   async function openEditorForRelativePath(relativePath: string) {
     if (!workspaceRoot || !relativePath) return
+    setShowCodeWindow(true)
     const existing = editorPanelsRef.current.find((p) => p.workspaceRoot === workspaceRoot && p.relativePath === relativePath)
     if (existing) {
-      setFocusedEditorId(existing.id)
+      setFocusedEditor(existing.id)
       return
+    }
+
+    const panels = editorPanelsRef.current
+    if (panels.length >= MAX_EDITOR_PANELS) {
+      const hasUnedited = panels.some((p) => !p.dirty)
+      if (!hasUnedited) {
+        alert(
+          `Maximum ${MAX_EDITOR_PANELS} code files open. All files have unsaved changes. Save or close some files to open more.`,
+        )
+        return
+      }
     }
 
     const id = `editor-${newId()}`
     const title = fileNameFromRelativePath(relativePath)
-    setEditorPanels((prev) => [
-      ...prev,
-      {
-        id,
-        workspaceRoot,
-        relativePath,
-        title,
-        fontScale: 1,
-        content: '',
-        size: 0,
-        loading: true,
-        saving: false,
-        dirty: false,
-        binary: false,
-      },
-    ])
-    setFocusedEditorId(id)
+    const newPanel: EditorPanelState = {
+      id,
+      workspaceRoot,
+      relativePath,
+      title,
+      fontScale: 1,
+      content: '',
+      size: 0,
+      loading: true,
+      saving: false,
+      dirty: false,
+      binary: false,
+      editMode: false,
+    }
+    setEditorPanels((prev) => {
+      if (prev.length < MAX_EDITOR_PANELS) return [...prev, newPanel]
+      const oldestUneditedIdx = prev.findIndex((p) => !p.dirty)
+      const next = oldestUneditedIdx >= 0 ? prev.filter((_, i) => i !== oldestUneditedIdx) : prev
+      return [...next, newPanel]
+    })
+    setFocusedEditor(id)
     try {
       const result = await api.readWorkspaceTextFile(workspaceRoot, relativePath)
       setEditorPanels((prev) =>
@@ -4160,6 +4659,8 @@ export default function App() {
       prev.map((p) =>
         p.id !== editorId
           ? p
+          : p.diagnosticsReadOnly
+            ? p
           : {
               ...p,
               content: nextContent,
@@ -4173,8 +4674,27 @@ export default function App() {
   async function saveEditorPanel(editorId: string) {
     const panel = editorPanelsRef.current.find((p) => p.id === editorId)
     if (!panel || panel.loading || panel.binary) return
+    if (panel.diagnosticsReadOnly) return
     setEditorPanels((prev) => prev.map((p) => (p.id === editorId ? { ...p, saving: true, error: undefined } : p)))
     try {
+      if (panel.diagnosticsTarget) {
+        const result = await api.writeDiagnosticsFile?.(panel.diagnosticsTarget, panel.content)
+        if (!result?.ok) throw new Error(result?.error || 'Failed to save diagnostics file')
+        setEditorPanels((prev) =>
+          prev.map((p) =>
+            p.id !== editorId
+              ? p
+              : {
+                  ...p,
+                  size: typeof result.size === 'number' ? result.size : p.content.length,
+                  saving: false,
+                  dirty: false,
+                  savedAt: Date.now(),
+                },
+          ),
+        )
+        return
+      }
       const result = await api.writeWorkspaceFile(panel.workspaceRoot, panel.relativePath, panel.content)
       setEditorPanels((prev) =>
         prev.map((p) =>
@@ -4211,6 +4731,19 @@ export default function App() {
   async function saveEditorPanelAs(editorId: string) {
     const panel = editorPanelsRef.current.find((p) => p.id === editorId)
     if (!panel || panel.loading || panel.binary) return
+    if (panel.diagnosticsTarget) {
+      setEditorPanels((prev) =>
+        prev.map((p) =>
+          p.id !== editorId
+            ? p
+            : {
+                ...p,
+                error: 'Save As is not available for diagnostics files.',
+              },
+        ),
+      )
+      return
+    }
 
     try {
       const nextRelativePath = await api.pickWorkspaceSavePath(panel.workspaceRoot, panel.relativePath)
@@ -4254,8 +4787,13 @@ export default function App() {
     const panel = editorPanelsRef.current.find((p) => p.id === editorId)
     if (!panel) return
     if (panel.dirty && !confirm(`Close "${panel.title}" without saving changes?`)) return
+    const idx = editorPanels.findIndex((p) => p.id === editorId)
     setEditorPanels((prev) => prev.filter((p) => p.id !== editorId))
-    if (focusedEditorId === editorId) setFocusedEditorId(null)
+    if (focusedEditorId === editorId) {
+      const remaining = editorPanels.filter((p) => p.id !== editorId)
+      const nextIdx = Math.min(idx, Math.max(0, remaining.length - 1))
+      setFocusedEditor(remaining[nextIdx]?.id ?? null)
+    }
   }
 
   async function createNewFileFromMenu() {
@@ -4427,6 +4965,60 @@ export default function App() {
     return entry.indexStatus === 'D' || entry.workingTreeStatus === 'D'
   }
 
+  function selectSingleGitEntry(relativePath: string) {
+    setSelectedWorkspaceFile(relativePath)
+    setSelectedGitPaths([relativePath])
+    setGitSelectionAnchorPath(relativePath)
+  }
+
+  function handleGitEntryClick(entry: GitStatusEntry, event: React.MouseEvent<HTMLButtonElement>) {
+    const entries = gitStatus?.entries ?? []
+    const clickedPath = entry.relativePath
+    const additive = event.metaKey || event.ctrlKey
+    setSelectedWorkspaceFile(clickedPath)
+
+    if (event.shiftKey) {
+      const anchorPath = gitSelectionAnchorPath ?? selectedGitPaths[selectedGitPaths.length - 1] ?? clickedPath
+      const anchorIndex = entries.findIndex((item) => item.relativePath === anchorPath)
+      const clickedIndex = entries.findIndex((item) => item.relativePath === clickedPath)
+      if (anchorIndex >= 0 && clickedIndex >= 0) {
+        const start = Math.min(anchorIndex, clickedIndex)
+        const end = Math.max(anchorIndex, clickedIndex)
+        const rangePaths = entries.slice(start, end + 1).map((item) => item.relativePath)
+        setSelectedGitPaths((prev) => (additive ? [...new Set([...prev, ...rangePaths])] : rangePaths))
+        setGitSelectionAnchorPath(anchorPath)
+        return
+      }
+    }
+
+    if (additive) {
+      setSelectedGitPaths((prev) => {
+        if (prev.includes(clickedPath)) return prev.filter((path) => path !== clickedPath)
+        return [...prev, clickedPath]
+      })
+      setGitSelectionAnchorPath(clickedPath)
+      return
+    }
+
+    selectSingleGitEntry(clickedPath)
+  }
+
+  function openGitContextMenu(event: React.MouseEvent<HTMLButtonElement>, entry: GitStatusEntry) {
+    event.preventDefault()
+    if (!selectedGitPaths.includes(entry.relativePath)) {
+      selectSingleGitEntry(entry.relativePath)
+    } else {
+      setSelectedWorkspaceFile(entry.relativePath)
+    }
+    setExplorerContextMenu(null)
+    setGitContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      relativePath: entry.relativePath,
+      deleted: isDeletedGitEntry(entry),
+    })
+  }
+
   function formatCheckedAt(ts?: number) {
     if (!ts) return 'Never'
     const dt = new Date(ts)
@@ -4462,17 +5054,119 @@ export default function App() {
     createAgentPanel(sourcePanelId)
   }
 
+  function reorderAgentPanel(draggedId: string, targetId: string) {
+    if (draggedId === targetId) return
+    setPanels((prev) => {
+      const draggedIdx = prev.findIndex((p) => p.id === draggedId)
+      const targetIdx = prev.findIndex((p) => p.id === targetId)
+      if (draggedIdx === -1 || targetIdx === -1) return prev
+      const next = [...prev]
+      const [removed] = next.splice(draggedIdx, 1)
+      const insertIdx = targetIdx > draggedIdx ? targetIdx - 1 : targetIdx
+      next.splice(insertIdx, 0, removed)
+      return next
+    })
+  }
+
+  const DND_TYPE_DOCK = 'application/x-barnaby-dock-panel'
+  const DND_TYPE_AGENT = 'application/x-barnaby-agent-panel'
+
+  function handleDragStart(
+    e: React.DragEvent,
+    type: 'workspace' | 'code' | 'agent',
+    id: string,
+  ) {
+    setDraggingPanelId(id)
+    e.dataTransfer.setData(type === 'agent' ? DND_TYPE_AGENT : DND_TYPE_DOCK, JSON.stringify({ type, id }))
+    e.dataTransfer.effectAllowed = 'move'
+  }
+
+  function handleDragEnd() {
+    setDraggingPanelId(null)
+    setDragOverTarget(null)
+  }
+
+  function handleDockDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragOverTarget(null)
+    const raw = e.dataTransfer.getData(DND_TYPE_DOCK)
+    if (!raw) return
+    try {
+      const { type } = JSON.parse(raw) as { type: string; id: string }
+      if (type === 'workspace' || type === 'code') {
+        setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  function handleAgentDrop(e: React.DragEvent, targetAgentId: string) {
+    e.preventDefault()
+    setDragOverTarget(null)
+    const raw = e.dataTransfer.getData(DND_TYPE_AGENT)
+    if (!raw) return
+    try {
+      const { id: draggedId } = JSON.parse(raw) as { type: string; id: string }
+      reorderAgentPanel(draggedId, targetAgentId)
+    } catch {
+      // ignore
+    }
+  }
+
+  const DROP_ZONE_OVERLAY_STYLE = { backgroundColor: 'color-mix(in srgb, var(--theme-accent-500) 28%, transparent)' }
+
+  function handleDragOver(
+    e: React.DragEvent,
+    opts: { acceptDock?: boolean; acceptAgent?: boolean; targetId?: string },
+  ) {
+    e.preventDefault()
+    if (opts.acceptDock && e.dataTransfer.types.includes(DND_TYPE_DOCK) && opts.targetId) {
+      e.dataTransfer.dropEffect = 'move'
+      setDragOverTarget(opts.targetId)
+    } else if (opts.acceptAgent && e.dataTransfer.types.includes(DND_TYPE_AGENT) && opts.targetId) {
+      e.dataTransfer.dropEffect = 'move'
+      setDragOverTarget(opts.targetId)
+    }
+  }
+
   function renderWorkspaceTile() {
     return (
       <div
         data-workspace-window-root="true"
-        className="h-full min-h-0 min-w-0 flex flex-col border border-neutral-200/80 dark:border-neutral-800 rounded-lg overflow-hidden bg-neutral-50 dark:bg-neutral-900 font-mono"
+        className="relative h-full min-h-0 min-w-0 flex flex-col border border-neutral-200/80 dark:border-neutral-800 rounded-lg overflow-hidden bg-neutral-50 dark:bg-neutral-900 font-mono"
         onMouseDownCapture={() => setFocusedEditorId(null)}
+        onDragOver={(e) => showCodeWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
+        onDrop={(e) => showCodeWindow && handleDockDrop(e)}
+        onWheel={(e) => {
+          if (!isZoomWheelGesture(e)) return
+          e.preventDefault()
+          if (zoomWheelThrottleRef.current) return
+          zoomWheelThrottleRef.current = true
+          if (e.deltaY < 0) api.zoomIn?.()
+          else if (e.deltaY > 0) api.zoomOut?.()
+          const level = api.getZoomLevel?.()
+          if (level !== undefined) setZoomLevel(level)
+          setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
+        }}
       >
-        <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800">
+        {/* workspaceTitleBar: bar with "Workspace Window" label */}
+        <div
+          data-workspace-title-bar="true"
+          className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 shrink-0 select-none"
+          draggable={showCodeWindow}
+          onDragStart={(e) => showCodeWindow && handleDragStart(e, 'workspace', 'workspace-window')}
+          onDragEnd={handleDragEnd}
+          onDragOver={(e) => showCodeWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
+          onDrop={(e) => showCodeWindow && handleDockDrop(e)}
+        >
           <div className="text-xs font-semibold text-neutral-700 dark:text-neutral-200">Workspace Window</div>
         </div>
-        <div className="px-2.5 py-2 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center gap-1.5 bg-neutral-100 dark:bg-neutral-900/80">
+        {draggingPanelId && dragOverTarget === 'dock-workspace' && (
+          <div className="absolute inset-0 rounded-lg pointer-events-none z-10" style={DROP_ZONE_OVERLAY_STYLE} />
+        )}
+        {/* workspaceDockTabBar: bar with orchestrator/explorer/git/settings tab icons */}
+        <div data-workspace-dock-tab-bar="true" className="px-2.5 py-2 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center gap-1.5 bg-neutral-100 dark:bg-neutral-900/80">
           <div className="inline-flex items-center gap-1.5">
             <button
               type="button"
@@ -4571,6 +5265,18 @@ export default function App() {
               )}
             </svg>
           </button>
+          <button
+            type="button"
+            title="Close workspace window"
+            aria-label="Close workspace window"
+            className="h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
+            onClick={() => setShowWorkspaceWindow(false)}
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+              <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            </svg>
+          </button>
         </div>
         <div className="flex-1 min-h-0">
           {dockTab === 'orchestrator'
@@ -4581,6 +5287,263 @@ export default function App() {
                 ? renderGitPane()
                 : renderWorkspaceSettingsPane()}
         </div>
+      </div>
+    )
+  }
+
+  function setEditorTabEditMode(editorId: string, editMode: boolean) {
+    setEditorPanels((prev) =>
+      prev.map((p) => (p.id === editorId ? { ...p, editMode } : p)),
+    )
+  }
+
+  function renderCodeWindowTile() {
+    const activePanel =
+      (focusedEditorId ? editorPanels.find((p) => p.id === focusedEditorId) : null) ??
+      editorPanels[0] ??
+      null
+    const hasTabs = editorPanels.length > 0
+
+    return (
+      <div
+        className="relative h-full min-h-0 min-w-0 flex flex-col border border-neutral-200/80 dark:border-neutral-800 rounded-lg overflow-hidden bg-neutral-50 dark:bg-neutral-900 font-mono"
+        onMouseDownCapture={(e) => {
+          const target = e.target
+          if (target instanceof HTMLElement) {
+            // Avoid fighting with the dropdown/buttons; keep current selection stable.
+            if (target.closest('select') || target.closest('button') || target.closest('textarea') || target.closest('a')) return
+          }
+          const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
+          if (id) setFocusedEditor(id)
+        }}
+        onDragOver={(e) => showWorkspaceWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-code' })}
+        onDrop={(e) => showWorkspaceWindow && handleDockDrop(e)}
+        onWheel={(e) => {
+          if (!isZoomWheelGesture(e)) return
+          e.preventDefault()
+          if (zoomWheelThrottleRef.current) return
+          zoomWheelThrottleRef.current = true
+          if (e.deltaY < 0) api.zoomIn?.()
+          else if (e.deltaY > 0) api.zoomOut?.()
+          const level = api.getZoomLevel?.()
+          if (level !== undefined) setZoomLevel(level)
+          setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
+        }}
+      >
+        <div
+          className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-2 shrink-0 select-none"
+          draggable={showWorkspaceWindow}
+          onDragStart={(e) => showWorkspaceWindow && handleDragStart(e, 'code', 'code-window')}
+          onDragEnd={handleDragEnd}
+          onDragOver={(e) => showWorkspaceWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-code' })}
+          onDrop={(e) => showWorkspaceWindow && handleDockDrop(e)}
+        >
+          <div className="text-xs font-semibold text-neutral-700 dark:text-neutral-200">Code Window</div>
+          <button
+            type="button"
+            className={`${CODE_WINDOW_TOOLBAR_BUTTON_SM} ml-auto`}
+            onClick={() => setShowCodeWindow(false)}
+            title="Close code window"
+            aria-label="Close code window"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+        {draggingPanelId && dragOverTarget === 'dock-code' && (
+          <div className="absolute inset-0 rounded-lg pointer-events-none z-10" style={DROP_ZONE_OVERLAY_STYLE} />
+        )}
+        {hasTabs && activePanel && (
+          <div className="px-2 py-2 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center gap-2 flex-wrap bg-neutral-100 dark:bg-neutral-900/80 shrink-0">
+            <span className="text-xs text-neutral-600 dark:text-neutral-400">Current file:</span>
+            <select
+              className={`flex-1 min-w-0 max-w-[240px] text-[11px] font-mono ${UI_SELECT_CLASS} dark:border-neutral-700/80 dark:bg-neutral-800/80 dark:text-neutral-200`}
+              value={focusedEditorId ?? ''}
+              onChange={(e) => {
+                const id = e.target.value
+                if (id) setFocusedEditor(id)
+              }}
+              title={activePanel.relativePath}
+            >
+              {editorPanels.map((tab) => (
+                <option key={tab.id} value={tab.id} title={tab.relativePath + (tab.dirty ? ' (unsaved)' : '')}>
+                  {tab.title}{tab.dirty ? ' *' : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={`px-2 py-1 text-xs rounded border ${
+                activePanel.editMode ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100' : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700/80 dark:bg-transparent dark:text-neutral-300 dark:hover:bg-neutral-800/80 dark:hover:border-neutral-600'
+              }`}
+              onClick={() => {
+                const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
+                if (!id) return
+                const panel = editorPanelsRef.current.find((p) => p.id === id)
+                const nextMode = !(panel?.editMode ?? false)
+                setEditorTabEditMode(id, nextMode)
+                setFocusedEditor(id)
+              }}
+              disabled={activePanel.loading || activePanel.binary}
+              title={activePanel.editMode ? 'Switch to view-only' : 'Enable editing'}
+            >
+              {activePanel.editMode ? 'View' : 'Edit'}
+            </button>
+            <button
+              type="button"
+              className={`${CODE_WINDOW_TOOLBAR_BUTTON} ${applicationSettings.editorWordWrap ? 'shadow-inner bg-neutral-200 border-neutral-400 text-neutral-800 dark:bg-neutral-700/80 dark:border-neutral-600 dark:text-neutral-100' : ''}`}
+              onClick={() => setApplicationSettings((p) => ({ ...p, editorWordWrap: !p.editorWordWrap }))}
+              aria-label={applicationSettings.editorWordWrap ? 'Word wrap on' : 'Word wrap off'}
+              title={applicationSettings.editorWordWrap ? 'Word wrap on (click to turn off)' : 'Word wrap off (click to turn on)'}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M5 4L2 8l3 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M11 4l3 4-3 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M9 6L7 10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={CODE_WINDOW_TOOLBAR_BUTTON}
+              disabled={activePanel.loading || activePanel.saving || activePanel.binary || !activePanel.dirty}
+              onClick={() => {
+                const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
+                if (!id) return
+                setFocusedEditor(id)
+                void saveEditorPanel(id)
+              }}
+              aria-label="Save"
+              title="Save (Ctrl+S)"
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M5.2 9.5H10.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={CODE_WINDOW_TOOLBAR_BUTTON}
+              disabled={activePanel.loading || activePanel.saving || activePanel.binary}
+              onClick={() => {
+                const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
+                if (!id) return
+                setFocusedEditor(id)
+                void saveEditorPanelAs(id)
+              }}
+              aria-label="Save As"
+              title="Save As (Ctrl+Shift+S)"
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M8 8.4V12.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <path d="M6.1 10.3H9.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={CODE_WINDOW_TOOLBAR_BUTTON_SM}
+              onClick={() => {
+                const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
+                if (!id) return
+                setFocusedEditor(id)
+                closeEditorPanel(id)
+              }}
+              title="Close tab"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+        )}
+        <div className="flex-1 min-h-0 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
+          {!hasTabs && (
+            <div className="h-full flex items-center justify-center text-sm text-neutral-500 dark:text-neutral-400 p-4 text-center">
+              Double-click a file in the workspace to open it.
+            </div>
+          )}
+          {hasTabs && activePanel && activePanel.loading && (
+            <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">Loading file...</div>
+          )}
+          {hasTabs && activePanel && !activePanel.loading && activePanel.error && (
+            <div className="p-4 text-sm text-red-600 dark:text-red-400">{activePanel.error}</div>
+          )}
+          {hasTabs && activePanel && !activePanel.loading && !activePanel.error && activePanel.binary && (
+            <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">
+              Binary files are not editable in this editor.
+            </div>
+          )}
+          {hasTabs && activePanel && !activePanel.loading && !activePanel.error && !activePanel.binary && (
+            activePanel.editMode ? (
+              <textarea
+                className={`h-full w-full resize-none border-0 outline-none p-4 m-0 text-[12px] leading-5 font-mono bg-white dark:bg-neutral-950 text-blue-950 dark:text-blue-100 ${applicationSettings.editorWordWrap ? 'whitespace-pre-wrap' : 'whitespace-pre'}`}
+                style={{
+                  fontSize: `${12 * activePanel.fontScale}px`,
+                  lineHeight: `${20 * activePanel.fontScale}px`,
+                }}
+                value={activePanel.content}
+                onFocus={() => setFocusedEditor(activePanel.id)}
+                onChange={(e) => updateEditorContent(activePanel.id, e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                    e.preventDefault()
+                    if (e.shiftKey) void saveEditorPanelAs(activePanel.id)
+                    else void saveEditorPanel(activePanel.id)
+                  }
+                }}
+                spellCheck={false}
+              />
+            ) : (
+              <div
+                className="h-full overflow-auto select-text outline-none"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+                    e.preventDefault()
+                    const el = e.currentTarget
+                    const range = document.createRange()
+                    range.selectNodeContents(el)
+                    const sel = window.getSelection()
+                    if (sel) {
+                      sel.removeAllRanges()
+                      sel.addRange(range)
+                    }
+                  }
+                }}
+              >
+                <SyntaxHighlighter
+                  language={detectLanguage(activePanel.relativePath)}
+                  style={activeTheme.mode === 'dark' ? oneDark : oneLight}
+                  customStyle={{ margin: 0, padding: '1rem', fontSize: '12px', background: 'transparent' }}
+                  codeTagProps={{ style: { fontFamily: 'inherit' } }}
+                  showLineNumbers
+                  wrapLongLines={applicationSettings.editorWordWrap}
+                >
+                  {activePanel.content}
+                </SyntaxHighlighter>
+              </div>
+            )
+          )}
+        </div>
+        {hasTabs && activePanel && (
+          <div className="px-3 py-1.5 border-t border-neutral-200 dark:border-neutral-800 text-[11px] text-neutral-500 dark:text-neutral-400 flex items-center justify-between shrink-0">
+            <span>{Math.round(activePanel.size / 1024)} KB</span>
+            <span>
+              {activePanel.saving
+                ? 'Saving...'
+                : activePanel.dirty
+                  ? 'Unsaved changes'
+                  : activePanel.savedAt
+                    ? `Saved ${new Date(activePanel.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                    : 'Saved'}
+            </span>
+          </div>
+        )}
       </div>
     )
   }
@@ -4605,7 +5568,13 @@ export default function App() {
           if (!isZoomWheelGesture(e)) return
           e.preventDefault()
           setFocusedEditorId(panel.id)
-          zoomEditorFont(panel.id, e.deltaY)
+          if (zoomWheelThrottleRef.current) return
+          zoomWheelThrottleRef.current = true
+          if (e.deltaY < 0) api.zoomIn?.()
+          else if (e.deltaY > 0) api.zoomOut?.()
+          const level = api.getZoomLevel?.()
+          if (level !== undefined) setZoomLevel(level)
+          setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
         }}
       >
         <div className="px-3 py-2.5 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center justify-between gap-2">
@@ -4708,10 +5677,9 @@ export default function App() {
 
   function renderLayoutPane(panelId: string) {
     if (panelId === 'workspace-window') return renderWorkspaceTile()
+    if (panelId === 'code-window') return renderCodeWindowTile()
     const agentPanel = panels.find((w) => w.id === panelId)
     if (agentPanel) return renderPanelContent(agentPanel)
-    const editorPanel = editorPanels.find((w) => w.id === panelId)
-    if (editorPanel) return renderEditorPanel(editorPanel)
     return null
   }
 
@@ -4729,12 +5697,12 @@ export default function App() {
         {panelChunks.map((rowPanels, rowIdx) => (
           <React.Fragment key={rowIdx}>
             {rowIdx > 0 && <Separator className="h-1 bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400 data-[resize-handle-active]:bg-blue-500" />}
-            <Panel id={`grid-row-${rowIdx}`} defaultSize={100 / rows} minSize={10} className="min-h-0 min-w-0">
+            <Panel id={`grid-row-${rowIdx}`} defaultSize={`${100 / rows}`} minSize="10" className="min-h-0 min-w-0">
               <Group orientation="horizontal" className="h-full min-w-0" id={`grid-row-${rowIdx}-inner`}>
                 {rowPanels.map((panelId, colIdx) => (
                   <React.Fragment key={panelId}>
                     {colIdx > 0 && <Separator className="w-1 bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400" />}
-                    <Panel id={`panel-${panelId}`} defaultSize={100 / rowPanels.length} minSize={15} className="min-h-0 min-w-0">
+                    <Panel id={`panel-${panelId}`} defaultSize={`${100 / rowPanels.length}`} minSize="15" className="min-h-0 min-w-0">
                       {renderLayoutPane(panelId)}
                     </Panel>
                   </React.Fragment>
@@ -4756,6 +5724,13 @@ export default function App() {
     initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>,
   ) {
     const mi = modelConfig.interfaces.find((m) => m.id === model)
+    const provider = mi?.provider ?? 'codex'
+    const allowedCommandPrefixes = workspaceSettingsByPath[cwd]?.allowedCommandPrefixes ?? []
+    const allowedAutoReadPrefixes = workspaceSettingsByPath[cwd]?.allowedAutoReadPrefixes ?? []
+    const allowedAutoWritePrefixes = workspaceSettingsByPath[cwd]?.allowedAutoWritePrefixes ?? []
+    const deniedAutoReadPrefixes = workspaceSettingsByPath[cwd]?.deniedAutoReadPrefixes ?? []
+    const deniedAutoWritePrefixes = workspaceSettingsByPath[cwd]?.deniedAutoWritePrefixes ?? []
+
     await withTimeout(
       api.connect(winId, {
         model,
@@ -4763,7 +5738,12 @@ export default function App() {
         permissionMode,
         approvalPolicy: permissionMode === 'proceed-always' ? 'never' : 'on-request',
         sandbox,
-        provider: mi?.provider ?? 'codex',
+        allowedCommandPrefixes,
+        allowedAutoReadPrefixes,
+        allowedAutoWritePrefixes,
+        deniedAutoReadPrefixes,
+        deniedAutoWritePrefixes,
+        provider,
         modelConfig: mi?.config,
         initialHistory,
       }),
@@ -4981,6 +5961,7 @@ export default function App() {
       appendPanelDebug(winId, 'turn/start', 'Turn started')
     } catch (e: any) {
       activePromptStartedAtRef.current.delete(winId)
+      clearPanelTurnComplete(winId)
       const errMsg = formatConnectionError(e, provider)
       appendPanelDebug(winId, 'error', errMsg)
       setPanels((prev) =>
@@ -5020,6 +6001,13 @@ export default function App() {
     const messageAttachments = w.attachments.map((a) => ({ ...a }))
     const imagePaths = messageAttachments.map((a) => a.path)
     if (!text && imagePaths.length === 0) return
+    const hasDirtyEditor = editorPanels.some((p) => p.dirty)
+    if (hasDirtyEditor) {
+      const proceed = confirm(
+        'You have unsaved changes in the Code Window. Agents may overwrite your edits. Save your changes first, or choose OK to continue anyway.',
+      )
+      if (!proceed) return
+    }
     const provider = getModelProvider(w.model)
     const usedPercent = provider === 'codex' ? getRateLimitPercent(w.usage) : null
     if (usedPercent !== null && usedPercent >= 99.5) {
@@ -5059,6 +6047,7 @@ export default function App() {
       )
       return
     }
+    clearPanelTurnComplete(winId)
     let snapshotForHistory: AgentPanelState | null = null
     setPanels((prev) =>
       prev.map((x) => {
@@ -5101,10 +6090,11 @@ export default function App() {
     if (!isBusy) void sendToAgent(winId, text, imagePaths)
   }
 
-  async function closePanel(panelId: string) {
+  async function closePanel(panelId: string, opts?: { skipUpsertToHistory?: boolean }) {
     const panel = panelsRef.current.find((w) => w.id === panelId)
-    if (panel) upsertPanelToHistory(panel)
+    if (panel && !opts?.skipUpsertToHistory) upsertPanelToHistory(panel)
     activePromptStartedAtRef.current.delete(panelId)
+    clearPanelTurnComplete(panelId)
     setLastPromptDurationMsByPanel((prev) => {
       if (!(panelId in prev)) return prev
       const next = { ...prev }
@@ -5230,7 +6220,13 @@ export default function App() {
               : 'text-neutral-700 hover:border-neutral-300 dark:text-neutral-300 dark:hover:border-neutral-700'
           }`}
           style={{ paddingLeft: `${rowPadding}px` }}
-          onClick={() => openFilePreview(node.relativePath)}
+          onClick={() => setSelectedWorkspaceFile(node.relativePath)}
+          onDoubleClick={() => void openEditorForRelativePath(node.relativePath)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            setGitContextMenu(null)
+            setExplorerContextMenu({ x: e.clientX, y: e.clientY, relativePath: node.relativePath })
+          }}
           title={node.relativePath}
         >
           <span className="text-neutral-400 dark:text-neutral-500">•</span>
@@ -5366,17 +6362,100 @@ export default function App() {
 
   function renderGitPane() {
     const canShowEntries = Boolean(gitStatus?.ok)
+    const entries = gitStatus?.entries ?? []
+    const resolvedSelectedPaths = resolveGitSelection()
+    const selectedPathSet = new Set(resolvedSelectedPaths)
+    const hasSelection = resolvedSelectedPaths.length > 0
+    const hasChanges = Boolean(gitStatus?.ok && !gitStatus?.clean)
+    const canCommit = hasSelection ? resolvedSelectedPaths.length > 0 : hasChanges
+    const busy = Boolean(gitOperationPending)
+    const commitTitle = hasSelection ? `Commit selected changes (${resolvedSelectedPaths.length})` : 'Commit all changes'
+    const pushTitle = hasSelection ? `Push (commit selected ${resolvedSelectedPaths.length} first)` : 'Push'
+    const iconBtnClass =
+      'h-8 w-8 inline-flex items-center justify-center rounded-md border font-medium border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed'
     return (
       <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
-        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs flex items-center justify-between">
-          <span className="font-medium text-neutral-700 dark:text-neutral-300">Git status (view only)</span>
-          <button
-            type="button"
-            className={UI_BUTTON_SECONDARY_CLASS}
-            onClick={refreshGitStatus}
-          >
-            Refresh
-          </button>
+        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs flex items-center justify-between gap-2">
+          <span className="font-medium text-neutral-700 dark:text-neutral-300 truncate">Git</span>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              className={iconBtnClass}
+              title={commitTitle}
+              aria-label={commitTitle}
+              disabled={!canCommit || busy}
+              onClick={() => void runGitOperation('commit')}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M5 8l2 2 4-4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={iconBtnClass}
+              title={pushTitle}
+              aria-label={pushTitle}
+              disabled={busy || !gitStatus?.ok}
+              onClick={() => void runGitOperation('push')}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 11V3M8 3L5 6M8 3l3 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={iconBtnClass}
+              title="Deploy"
+              aria-label="Deploy"
+              disabled={busy || !workspaceRoot}
+              onClick={() => void runGitOperation('deploy')}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 2L2 6l6 4 6-4-6-4z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                <path d="M2 10l6 4 6-4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={iconBtnClass}
+              title="Build"
+              aria-label="Build"
+              disabled={busy || !workspaceRoot}
+              onClick={() => void runGitOperation('build')}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3 4h4l2 3 2-3h4v8H3V4z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                <path d="M6 7v4M10 7v4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={iconBtnClass}
+              title="Release"
+              aria-label="Release"
+              disabled={busy || !workspaceRoot}
+              onClick={() => void runGitOperation('release')}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 2l1.2 3.6 3.8.1-2.9 2.2 1.1 3.7L8 9.8l-3.2 1.8 1.1-3.7-2.9-2.2 3.8-.1L8 2z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={iconBtnClass}
+              title="Refresh"
+              aria-label="Refresh"
+              disabled={busy}
+              onClick={() => void refreshGitStatus()}
+            >
+              <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <path d="M10.5 6A4.5 4.5 0 116 1.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <path d="M10.5 1.5v3h-3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
         </div>
         <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs space-y-1.5">
           <div className="font-mono truncate" title={gitStatus?.branch ?? '(unknown)'}>
@@ -5396,6 +6475,11 @@ export default function App() {
           <div className="text-neutral-500 dark:text-neutral-400">
             Ahead {gitStatus?.ahead ?? 0}, behind {gitStatus?.behind ?? 0} | Updated {formatCheckedAt(gitStatus?.checkedAt)}
           </div>
+          {hasSelection && (
+            <div className="text-blue-700 dark:text-blue-300">
+              Selected {resolvedSelectedPaths.length} {resolvedSelectedPaths.length === 1 ? 'file' : 'files'}
+            </div>
+          )}
         </div>
         <div className="flex-1 overflow-auto p-2 space-y-0.5">
           {gitStatusLoading && <p className="text-xs text-neutral-500 dark:text-neutral-400 px-1">Loading git status...</p>}
@@ -5405,25 +6489,35 @@ export default function App() {
               Working tree clean.
             </div>
           )}
-          {!gitStatusLoading && canShowEntries && gitStatus?.entries.map((entry) => (
-            <button
-              key={`${entry.relativePath}-${entry.indexStatus}-${entry.workingTreeStatus}`}
-              type="button"
-              className="w-full text-left px-2.5 py-1 rounded-md text-xs font-mono border border-transparent bg-transparent hover:bg-neutral-100/80 dark:hover:bg-neutral-800/60 active:bg-neutral-200/60 dark:active:bg-neutral-700/60 hover:border-neutral-300 dark:hover:border-neutral-600 text-neutral-800 dark:text-neutral-200"
-              onClick={() => openFilePreview(entry.relativePath)}
-              title={entry.relativePath}
-            >
-              <div className="flex items-start gap-2">
-                <span className={`px-1.5 py-0.5 rounded text-[10px] shrink-0 ${gitEntryClass(entry)}`}>{gitStatusText(entry)}</span>
-                <span className={`truncate flex-1 ${isDeletedGitEntry(entry) ? 'line-through opacity-70' : ''}`}>{entry.relativePath}</span>
-              </div>
-              {entry.renamedFrom && (
-                <div className="pl-8 text-[10px] text-neutral-500 dark:text-neutral-400 truncate">
-                  from {entry.renamedFrom}
+          {!gitStatusLoading && canShowEntries && entries.map((entry) => {
+            const selected = selectedPathSet.has(entry.relativePath)
+            return (
+              <button
+                key={`${entry.relativePath}-${entry.indexStatus}-${entry.workingTreeStatus}`}
+                type="button"
+                aria-selected={selected}
+                className={`w-full text-left px-2.5 py-1 rounded-md text-xs font-mono border text-neutral-800 dark:text-neutral-200 ${
+                  selected
+                    ? 'bg-blue-50/90 border-blue-300 dark:bg-blue-950/30 dark:border-blue-800'
+                    : 'border-transparent bg-transparent hover:bg-neutral-100/80 dark:hover:bg-neutral-800/60 active:bg-neutral-200/60 dark:active:bg-neutral-700/60 hover:border-neutral-300 dark:hover:border-neutral-600'
+                }`}
+                onClick={(e) => handleGitEntryClick(entry, e)}
+                onDoubleClick={() => !isDeletedGitEntry(entry) && void openEditorForRelativePath(entry.relativePath)}
+                onContextMenu={(e) => openGitContextMenu(e, entry)}
+                title={entry.relativePath}
+              >
+                <div className="flex items-start gap-2">
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] shrink-0 ${gitEntryClass(entry)}`}>{gitStatusText(entry)}</span>
+                  <span className={`truncate flex-1 ${isDeletedGitEntry(entry) ? 'line-through opacity-70' : ''}`}>{entry.relativePath}</span>
                 </div>
-              )}
-            </button>
-          ))}
+                {entry.renamedFrom && (
+                  <div className="pl-8 text-[10px] text-neutral-500 dark:text-neutral-400 truncate">
+                    from {entry.renamedFrom}
+                  </div>
+                )}
+              </button>
+            )
+          })}
         </div>
       </div>
     )
@@ -5522,6 +6616,83 @@ export default function App() {
                 </select>
               </div>
             )}
+            {workspaceForm.sandbox !== 'read-only' && workspaceForm.permissionMode === 'proceed-always' && (
+              <>
+              <div className="space-y-1.5">
+                <label className="text-neutral-600 dark:text-neutral-300">Allowed command prefixes</label>
+                  <textarea
+                    className={`w-full min-h-[96px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                    value={workspaceForm.allowedCommandPrefixes.join('\n')}
+                    onChange={(e) =>
+                      setWorkspaceForm((prev) => ({
+                        ...prev,
+                        allowedCommandPrefixes: parseAllowedCommandPrefixesInput(e.target.value),
+                      }))
+                    }
+                    placeholder={'npm run build:dist:raw\nnpx vite build'}
+                  />
+                  <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                    One prefix per line. Leave blank to allow all commands in Proceed always mode.
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-neutral-600 dark:text-neutral-300">Allowed auto-read paths</label>
+                  <textarea
+                    className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                    value={workspaceForm.allowedAutoReadPrefixes.join('\n')}
+                    onChange={(e) =>
+                      setWorkspaceForm((prev) => ({
+                        ...prev,
+                        allowedAutoReadPrefixes: parseAllowedCommandPrefixesInput(e.target.value),
+                      }))
+                    }
+                    placeholder={'src/\npackage.json'}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-neutral-600 dark:text-neutral-300">Allowed auto-write paths</label>
+                  <textarea
+                    className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                    value={workspaceForm.allowedAutoWritePrefixes.join('\n')}
+                    onChange={(e) =>
+                      setWorkspaceForm((prev) => ({
+                        ...prev,
+                        allowedAutoWritePrefixes: parseAllowedCommandPrefixesInput(e.target.value),
+                      }))
+                    }
+                    placeholder={'src/\npackage.json'}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-neutral-600 dark:text-neutral-300">Denied auto-read paths</label>
+                  <textarea
+                    className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                    value={workspaceForm.deniedAutoReadPrefixes.join('\n')}
+                    onChange={(e) =>
+                      setWorkspaceForm((prev) => ({
+                        ...prev,
+                        deniedAutoReadPrefixes: parseAllowedCommandPrefixesInput(e.target.value),
+                      }))
+                    }
+                    placeholder={'../\n.env'}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-neutral-600 dark:text-neutral-300">Denied auto-write paths</label>
+                  <textarea
+                    className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                    value={workspaceForm.deniedAutoWritePrefixes.join('\n')}
+                    onChange={(e) =>
+                      setWorkspaceForm((prev) => ({
+                        ...prev,
+                        deniedAutoWritePrefixes: parseAllowedCommandPrefixesInput(e.target.value),
+                      }))
+                    }
+                  placeholder={'../\n.env'}
+                />
+              </div>
+            </>
+            )}
             <div className="space-y-1.5">
               <label className="text-neutral-600 dark:text-neutral-300">Theme</label>
               <select
@@ -5543,21 +6714,6 @@ export default function App() {
               </select>
             </div>
             <div className="space-y-1.5">
-              <span className="text-neutral-600 dark:text-neutral-300">Timeline controls</span>
-              <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                Debug and trace visibility is now global.
-              </div>
-              <button
-                type="button"
-                className="h-7 px-2 inline-flex items-center rounded-md border border-neutral-300 bg-white text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                onClick={() => {
-                  setShowWorkspaceModal(false)
-                  setAppSettingsView('connectivity')
-                  setShowAppSettingsModal(true)
-                }}
-              >
-                Open Application Settings
-              </button>
               <div className="pt-1 flex items-center gap-1.5">
                 <button
                   type="button"
@@ -5612,7 +6768,7 @@ export default function App() {
   }
 
   return (
-    <div className="theme-preset h-screen w-full min-w-0 max-w-full overflow-hidden flex flex-col bg-neutral-100 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
+    <div className="theme-preset h-screen w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden flex flex-col bg-neutral-100 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
       <style>{`
         .theme-preset .bg-blue-600 { background-color: var(--theme-accent-600) !important; }
         .theme-preset .hover\\:bg-blue-500:hover { background-color: var(--theme-accent-500) !important; }
@@ -5688,9 +6844,68 @@ export default function App() {
           border-color: var(--theme-dark-950);
         }
       `}</style>
-      <div className="shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 px-4 py-3 bg-white dark:bg-neutral-950">
+      {/* appHeaderBar: main top bar with Workspace/History dropdowns and layout toggles */}
+      <div data-app-header-bar="true" className="shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 px-4 py-3 bg-white dark:bg-neutral-950">
         <div className="flex flex-wrap items-center justify-between gap-2.5 text-xs min-w-0">
           <div className="flex items-center gap-1.5 min-w-0">
+            {/* Left sidebar | Bottom terminal | Right sidebar */}
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button
+                type="button"
+                className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shrink-0 ${
+                  showWorkspaceWindow
+                    ? 'shadow-inner bg-neutral-200 border-neutral-400 text-neutral-800 dark:bg-neutral-700 dark:border-neutral-600 dark:text-neutral-100'
+                    : 'border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                }`}
+                onClick={() => setShowWorkspaceWindow((prev) => !prev)}
+                title={showWorkspaceWindow ? 'Hide left sidebar' : 'Show left sidebar'}
+                aria-label={showWorkspaceWindow ? 'Hide left sidebar' : 'Show left sidebar'}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path
+                    d="M2.5 5.1c0-.6.5-1.1 1.1-1.1h3.2l1.2 1.2h4.9c.6 0 1.1.5 1.1 1.1v6.2c0 .6-.5 1.1-1.1 1.1H3.6c-.6 0-1.1-.5-1.1-1.1V5.1Z"
+                    stroke="currentColor"
+                    strokeWidth="1.2"
+                    strokeLinejoin="round"
+                  />
+                  <path d="M2.5 6.2h11.0" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shrink-0 ${
+                  showTerminalBar
+                    ? 'shadow-inner bg-neutral-200 border-neutral-400 text-neutral-800 dark:bg-neutral-700 dark:border-neutral-600 dark:text-neutral-100'
+                    : 'border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                }`}
+                onClick={() => setShowTerminalBar((prev) => !prev)}
+                title={showTerminalBar ? 'Hide terminal' : 'Show terminal'}
+                aria-label={showTerminalBar ? 'Hide terminal' : 'Show terminal'}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2">
+                  <rect x="2" y="2" width="12" height="12" rx="1" />
+                  <rect x="2" y="9" width="12" height="5" rx="0.5" fill="currentColor" fillOpacity="0.6" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shrink-0 ${
+                  showCodeWindow
+                    ? 'shadow-inner bg-neutral-200 border-neutral-400 text-neutral-800 dark:bg-neutral-700 dark:border-neutral-600 dark:text-neutral-100'
+                    : 'border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                }`}
+                onClick={() => setShowCodeWindow((prev) => !prev)}
+                title={showCodeWindow ? 'Hide right sidebar' : 'Show right sidebar'}
+                aria-label={showCodeWindow ? 'Hide right sidebar' : 'Show right sidebar'}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M6 5L3.5 8 6 11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M10 5L12.5 8 10 11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M9 5.7L7 10.3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="mx-1.5 h-6 w-px bg-neutral-300/80 dark:bg-neutral-700/80" />
             <span className="text-neutral-600 dark:text-neutral-300">Workspace</span>
             <select
               className={`h-9 px-3 rounded-lg font-mono shadow-sm w-[34vw] max-w-[440px] min-w-[220px] ${UI_INPUT_CLASS}`}
@@ -5728,24 +6943,52 @@ export default function App() {
             </button>
             <div className="mx-2 h-6 w-px bg-neutral-300/80 dark:bg-neutral-700/80" />
             <span className="text-neutral-600 dark:text-neutral-300">History</span>
-            <select
-              className={`h-9 px-3 rounded-lg shadow-sm w-[30vw] max-w-[360px] min-w-[180px] ${UI_INPUT_CLASS}`}
-              value={selectedHistoryId}
-              onChange={(e) => {
-                const historyId = e.target.value
-                setSelectedHistoryId(historyId)
-                if (!historyId) return
-                openChatFromHistory(historyId)
-                setSelectedHistoryId('')
-              }}
-            >
-              <option value="">Open chat...</option>
-              {workspaceScopedHistory.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {formatHistoryOptionLabel(entry)}
-                </option>
-              ))}
-            </select>
+            <div ref={historyDropdownRef} className="relative shrink-0">
+              <button
+                type="button"
+                className={`h-9 px-3 rounded-lg shadow-sm w-[45vw] max-w-[540px] min-w-[270px] text-left flex items-center justify-between gap-2 ${UI_INPUT_CLASS}`}
+                onClick={() => setHistoryDropdownOpen((o) => !o)}
+              >
+                <span className="truncate">Open chat...</span>
+                <svg width="10" height="10" viewBox="0 0 10 10" className={`shrink-0 transition-transform ${historyDropdownOpen ? 'rotate-180' : ''}`}>
+                  <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                </svg>
+              </button>
+              {historyDropdownOpen && (
+                <div className="absolute top-full left-0 right-0 mt-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg z-50 max-h-64 overflow-auto min-w-[270px]">
+                  {workspaceScopedHistory.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-neutral-500 dark:text-neutral-400">No conversations yet</div>
+                  ) : (
+                    workspaceScopedHistory.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="flex items-center gap-2 group px-3 py-2 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer text-sm"
+                        onClick={() => openChatFromHistory(entry.id)}
+                      >
+                        <span className="flex-1 min-w-0 truncate text-neutral-800 dark:text-neutral-200">
+                          {formatHistoryOptionLabel(entry)}
+                        </span>
+                        <button
+                          type="button"
+                          className="shrink-0 w-7 h-7 flex items-center justify-center rounded border border-transparent hover:border-red-300 dark:hover:border-red-700 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setDeleteHistoryIdPending(entry.id)
+                            setHistoryDropdownOpen(false)
+                          }}
+                          title="Delete conversation"
+                          aria-label="Delete conversation"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                            <path d="M2 2L8 8M8 2L2 8" />
+                          </svg>
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
             <button
               type="button"
               className={`${UI_ICON_BUTTON_CLASS} shrink-0 disabled:opacity-50 disabled:cursor-not-allowed`}
@@ -5759,17 +7002,20 @@ export default function App() {
               </svg>
             </button>
           </div>
-          <div className="flex items-center gap-1">
+          {/* layoutToolbar: Tile V/H/Grid */}
+          <div data-layout-toolbar="true" className="flex items-center gap-1">
             <button
-              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
-                layoutMode === 'horizontal' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-              }`}
-              onClick={() => setLayoutMode('horizontal')}
-              title="Split horizontal (H)"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
+              onClick={() => {
+                setAppSettingsView('preferences')
+                setShowAppSettingsModal(true)
+              }}
+              title="Application Settings"
+              aria-label="Application Settings"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <rect x="2.5" y="3" width="11" height="5" rx="1" stroke="currentColor" />
-                <rect x="2.5" y="8" width="11" height="5" rx="1" stroke="currentColor" />
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 5.8A2.2 2.2 0 1 1 8 10.2A2.2 2.2 0 0 1 8 5.8Z" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M13.1 8.7V7.3L11.8 6.9C11.7 6.6 11.6 6.4 11.4 6.1L12 4.9L11.1 4L9.9 4.6C9.6 4.4 9.4 4.3 9.1 4.2L8.7 2.9H7.3L6.9 4.2C6.6 4.3 6.4 4.4 6.1 4.6L4.9 4L4 4.9L4.6 6.1C4.4 6.4 4.3 6.6 4.2 6.9L2.9 7.3V8.7L4.2 9.1C4.3 9.4 4.4 9.6 4.6 9.9L4 11.1L4.9 12L6.1 11.4C6.4 11.6 6.6 11.7 6.9 11.8L7.3 13.1H8.7L9.1 11.8C9.4 11.7 9.6 11.6 9.9 11.4L11.1 12L12 11.1L11.4 9.9C11.6 9.6 11.7 9.4 11.8 9.1L13.1 8.7Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
               </svg>
             </button>
             <button
@@ -5777,7 +7023,8 @@ export default function App() {
                 layoutMode === 'vertical' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
               }`}
               onClick={() => setLayoutMode('vertical')}
-              title="Split vertical (V)"
+              title="Tile Vertical"
+              aria-label="Tile Vertical"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                 <rect x="2.5" y="3" width="5.5" height="10" rx="1" stroke="currentColor" />
@@ -5786,49 +7033,51 @@ export default function App() {
             </button>
             <button
               className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
-                layoutMode === 'grid' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                layoutMode === 'horizontal' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
               }`}
-              onClick={() => setLayoutMode('grid')}
-              title="Tile / Grid"
+              onClick={() => setLayoutMode('horizontal')}
+              title="Tile Horizontal"
+              aria-label="Tile Horizontal"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <rect x="3" y="3" width="4.5" height="4.5" rx="1" stroke="currentColor" />
-                <rect x="8.5" y="3" width="4.5" height="4.5" rx="1" stroke="currentColor" />
-                <rect x="3" y="8.5" width="4.5" height="4.5" rx="1" stroke="currentColor" />
-                <rect x="8.5" y="8.5" width="4.5" height="4.5" rx="1" stroke="currentColor" />
+                <rect x="2.5" y="3" width="11" height="5" rx="1" stroke="currentColor" />
+                <rect x="2.5" y="8" width="11" height="5" rx="1" stroke="currentColor" />
               </svg>
             </button>
             <button
-              className={UI_ICON_BUTTON_CLASS}
-              onClick={() => setShowWorkspaceWindow((prev) => !prev)}
-              title={showWorkspaceWindow ? 'Hide workspace window' : 'Show workspace window'}
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
+                layoutMode === 'grid' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+              }`}
+              onClick={() => setLayoutMode('grid')}
+              title="Tile Grid"
+              aria-label="Tile Grid"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <rect x="2.2" y="2.5" width="11.6" height="11" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
-                <path
-                  d="M10 3.3H13V12.7H10Z"
-                  fill="currentColor"
-                  fillOpacity={showWorkspaceWindow ? 0.38 : 0.2}
-                />
-                <path d="M10 3.2V12.8" stroke="currentColor" strokeOpacity="0.55" strokeWidth="1" />
+                <rect x="2.5" y="2.5" width="5" height="5" rx="1" stroke="currentColor" />
+                <rect x="8.5" y="2.5" width="5" height="5" rx="1" stroke="currentColor" />
+                <rect x="2.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor" />
+                <rect x="8.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor" />
               </svg>
             </button>
           </div>
         </div>
       </div>
 
-      <div className="relative flex-1 min-h-0 min-w-0 bg-gradient-to-b from-neutral-100/90 to-neutral-100/60 dark:from-neutral-900 dark:to-neutral-950">
-        <div ref={layoutRef} className="h-full flex flex-col min-h-0 min-w-0">
+      <div className="flex-1 flex flex-col min-h-0 min-w-0">
+        <div className="relative flex-1 min-h-0 min-w-0 bg-gradient-to-b from-neutral-100/90 to-neutral-100/60 dark:from-neutral-900 dark:to-neutral-950">
+          <div ref={layoutRef} className="h-full flex flex-col min-h-0 min-w-0">
           {(() => {
-            const contentPaneIds = [...panels.map((p) => p.id), ...editorPanels.map((p) => p.id)]
-            const layoutPaneIds = showWorkspaceWindow
-              ? workspaceDockSide === 'left'
-                ? ['workspace-window', ...contentPaneIds]
-                : [...contentPaneIds, 'workspace-window']
-              : contentPaneIds
+            const contentPaneIds = panels.map((p) => p.id)
+            const layoutPaneIds = [
+              ...(showWorkspaceWindow && workspaceDockSide === 'left' ? ['workspace-window'] : []),
+              ...(showCodeWindow && workspaceDockSide === 'right' ? ['code-window'] : []),
+              ...contentPaneIds,
+              ...(showCodeWindow && workspaceDockSide === 'left' ? ['code-window'] : []),
+              ...(showWorkspaceWindow && workspaceDockSide === 'right' ? ['workspace-window'] : []),
+            ]
             if (layoutPaneIds.length === 1) {
               const id = layoutPaneIds[0]
-              if (id === 'workspace-window') {
+              if (id === 'workspace-window' || id === 'code-window') {
                 return (
                   <div className="flex-1 min-h-0 min-w-0 overflow-hidden px-3 py-3">
                     <div className="h-full min-h-0 max-w-full" style={{ width: '20%' }}>
@@ -5839,159 +7088,226 @@ export default function App() {
               }
               return <div className="flex-1 min-h-0 min-w-0 overflow-hidden">{renderLayoutPane(id)}</div>
             }
-            if (layoutMode === 'grid') {
-              return renderGridLayout(layoutPaneIds as string[])
-            }
-            return (
-              (() => {
-                // UX naming:
-                // - "Horizontal" means a horizontal split line (stacked panes, top/bottom)
-                // - "Vertical" means a vertical split line (side-by-side panes, left/right)
-                // react-resizable-panels uses orientation as the pane flow direction, so we map accordingly.
-                const paneFlowOrientation = layoutMode === 'horizontal' ? 'vertical' : 'horizontal'
-                const contentPaneCount = panels.length + editorPanels.length
-                const layoutGroupKey = `${paneFlowOrientation}:${workspaceDockSide}:${showWorkspaceWindow ? '1' : '0'}:${layoutPaneIds.join('|')}`
-                return (
-                  <Group key={layoutGroupKey} orientation={paneFlowOrientation} className="flex-1 min-h-0 min-w-0" id="main-layout">
-                    {(layoutPaneIds as string[]).map((panelId, idx) => (
-                      <React.Fragment key={panelId}>
-                        {idx > 0 && (
-                          <Separator
-                            className={
-                              paneFlowOrientation === 'horizontal'
-                                ? 'w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
-                                : 'h-1 min-h-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
-                            }
-                          />
-                        )}
-                        <Panel
-                          id={`panel-${panelId}`}
-                          defaultSize={
-                            paneFlowOrientation === 'horizontal' && showWorkspaceWindow
-                              ? panelId === 'workspace-window'
-                                ? 20
-                                : 80 / Math.max(1, contentPaneCount)
-                              : 100 / layoutPaneIds.length
+            // Tile vertical, horizontal, and grid: sidebars honour workspaceDockSide; only agent panels are tiled.
+            const leftPaneId =
+              (showWorkspaceWindow && workspaceDockSide === 'left' ? 'workspace-window' : null) ||
+              (showCodeWindow && workspaceDockSide === 'right' ? 'code-window' : null)
+            const rightPaneId =
+              (showCodeWindow && workspaceDockSide === 'left' ? 'code-window' : null) ||
+              (showWorkspaceWindow && workspaceDockSide === 'right' ? 'workspace-window' : null)
+            const paneFlowOrientation = layoutMode === 'horizontal' ? 'vertical' : 'horizontal'
+            const layoutGroupKey = `${layoutMode}:${leftPaneId ?? 'x'}:${rightPaneId ?? 'x'}:${contentPaneIds.join('|')}`
+            const contentPane =
+              contentPaneIds.length === 0 ? null : contentPaneIds.length === 1 ? (
+                <div className="h-full min-h-0 overflow-hidden">{renderLayoutPane(contentPaneIds[0])}</div>
+              ) : layoutMode === 'grid' ? (
+                renderGridLayout(contentPaneIds as string[])
+              ) : (
+                <Group orientation={paneFlowOrientation} className="h-full min-h-0 min-w-0" id="content-tiles">
+                  {(contentPaneIds as string[]).map((panelId, idx) => (
+                    <React.Fragment key={panelId}>
+                      {idx > 0 && (
+                        <Separator
+                          className={
+                            paneFlowOrientation === 'horizontal'
+                              ? 'w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
+                              : 'h-1 min-h-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
                           }
-                          minSize={15}
-                          className="min-h-0 min-w-0"
-                        >
-                          {renderLayoutPane(panelId)}
-                        </Panel>
-                      </React.Fragment>
-                    ))}
-                  </Group>
-                )
-              })()
+                        />
+                      )}
+                      <Panel
+                        id={`panel-${panelId}`}
+                        defaultSize={`${100 / contentPaneIds.length}`}
+                        minSize="15"
+                        className="min-h-0 min-w-0"
+                      >
+                        {renderLayoutPane(panelId)}
+                      </Panel>
+                    </React.Fragment>
+                  ))}
+                </Group>
+              )
+            return (
+              <Group key={layoutGroupKey} orientation="horizontal" className="flex-1 min-h-0 min-w-0" id="main-layout">
+                {leftPaneId && (
+                  <>
+                    <Panel
+                      id={`panel-${leftPaneId}`}
+                      defaultSize="20"
+                      minSize="15"
+                      maxSize="50"
+                      className="min-h-0 min-w-0"
+                    >
+                      {renderLayoutPane(leftPaneId)}
+                    </Panel>
+                    <Separator className="w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
+                  </>
+                )}
+                <Panel id="panel-content-tiled" defaultSize={leftPaneId && rightPaneId ? '60' : leftPaneId || rightPaneId ? '80' : '100'} minSize="20" className="min-h-0 min-w-0">
+                  {contentPane}
+                </Panel>
+                {rightPaneId && (
+                  <>
+                    <Separator className="w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
+                    <Panel
+                      id={`panel-${rightPaneId}`}
+                      defaultSize="20"
+                      minSize="15"
+                      maxSize="50"
+                      className="min-h-0 min-w-0"
+                    >
+                      {renderLayoutPane(rightPaneId)}
+                    </Panel>
+                  </>
+                )}
+              </Group>
             )
           })()}
-        </div>
-      </div>
-
-      <footer className="shrink-0 px-4 py-2 border-t border-neutral-200/80 dark:border-neutral-800 bg-white/85 dark:bg-neutral-950 text-xs text-neutral-600 dark:text-neutral-400 flex items-center gap-4 backdrop-blur">
-        <span className="font-mono truncate max-w-[40ch]" title={workspaceRoot}>
-          {workspaceRoot.split(/[/\\]/).pop() || workspaceRoot}
-        </span>
-        <span>{panels.length} agent{panels.length !== 1 ? 's' : ''}</span>
-        {(() => {
-          const withUsage = panels
-            .map((p) => {
-              const rateLimit = getRateLimitPercent(p.usage)
-              if (rateLimit !== null) {
-                return { pct: rateLimit, label: formatRateLimitLabel(p.usage) }
-              }
-                  const context = estimatePanelContextUsage(p)
-                  if (context) {
-                    return { pct: context.usedPercent, label: `${context.usedPercent.toFixed(1)}% context` }
-                  }
-              return null
-            })
-            .filter((x): x is { pct: number; label: string | null } => x !== null)
-
-          if (withUsage.length === 0) return null
-          const worst = withUsage.reduce((a, b) => (b.pct > a.pct ? b : a))
-          return worst.label ? <span>Usage: {worst.label}</span> : null
-        })()}
-      </footer>
-
-      {filePreview && (
-        <div
-          className="fixed inset-0 z-40 bg-black/35 backdrop-blur-[2px] flex items-center justify-center p-4"
-          onClick={() => setFilePreview(null)}
-        >
-          <div
-            className="w-[72vw] h-[72vh] min-w-[520px] min-h-[320px] max-w-[90vw] max-h-[90vh] resize overflow-hidden rounded-2xl border border-neutral-200/80 dark:border-neutral-800 bg-white/95 dark:bg-neutral-950 shadow-2xl flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-2 min-w-0">
-              <div className="min-w-0 flex-1 text-xs font-mono truncate" title={filePreview.relativePath}>
-                {filePreview.relativePath}
-              </div>
-              <div className="shrink-0 flex items-center gap-2">
-                <button
-                  type="button"
-                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50"
-                  disabled={filePreview.loading || Boolean(filePreview.error) || filePreview.binary}
-                  onClick={() => {
-                    void openEditorForRelativePath(filePreview.relativePath)
-                    setFilePreview(null)
-                  }}
-                >
-                  Open in Editor
-                </button>
-                <button
-                  type="button"
-                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50"
-                  disabled={filePreview.loading}
-                  onClick={() => openFilePreview(filePreview.relativePath)}
-                >
-                  Refresh
-                </button>
-                <button
-                  type="button"
-                  className={UI_CLOSE_ICON_BUTTON_CLASS}
-                  onClick={() => setFilePreview(null)}
-                  title="Close preview"
-                >
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                    <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                    <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 min-h-0 overflow-auto bg-neutral-50 dark:bg-neutral-900">
-              {filePreview.loading && (
-                <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">Loading file preview...</div>
-              )}
-              {!filePreview.loading && filePreview.error && (
-                <div className="p-4 text-sm text-red-600 dark:text-red-400">{filePreview.error}</div>
-              )}
-              {!filePreview.loading && !filePreview.error && filePreview.binary && (
-                <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">
-                  Binary file preview is not supported.
-                </div>
-              )}
-              {!filePreview.loading && !filePreview.error && !filePreview.binary && (
-                <div className="h-full overflow-hidden text-[12px] leading-5 font-mono">
-                  <SyntaxHighlighter
-                    language={detectLanguage(filePreview.relativePath)}
-                    style={activeTheme.mode === 'dark' ? oneDark : oneLight}
-                    customStyle={{ margin: 0, padding: '1rem', height: '100%', fontSize: '12px', background: 'transparent' }}
-                    showLineNumbers={true}
-                    wrapLines={false}
-                  >
-                    {filePreview.content}
-                  </SyntaxHighlighter>
-                </div>
-              )}
-            </div>
-            <div className="px-3 py-1.5 border-t border-neutral-200 dark:border-neutral-800 text-[11px] text-neutral-500 dark:text-neutral-400 flex items-center justify-between">
-              <span>{Math.round(filePreview.size / 1024)} KB</span>
-              <span>{filePreview.truncated ? 'Preview truncated at 1 MB.' : 'Read-only preview.'}</span>
-            </div>
           </div>
         </div>
+
+        {showTerminalBar && (
+          <div className="shrink-0 flex flex-col border-t border-neutral-200 dark:border-neutral-800 bg-neutral-900 dark:bg-neutral-950" style={{ height: 220 }}>
+            <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-neutral-700 shrink-0">
+              <span className="text-xs font-semibold text-neutral-300">
+                Terminal{workspaceRoot?.trim() ? ` (${workspaceRoot.split(/[/\\]/).pop() || workspaceRoot})` : ''}
+              </span>
+              <button
+                type="button"
+                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-600 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700"
+                onClick={() => setShowTerminalBar(false)}
+                title="Close terminal"
+                aria-label="Close terminal"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 2L8 8M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden p-1">
+              {api && typeof api.terminalSpawn === 'function' ? (
+                <EmbeddedTerminal workspaceRoot={workspaceRoot?.trim() || ''} api={api} />
+              ) : (
+                <div className="h-full flex items-center justify-center text-neutral-500 text-sm">
+                  Terminal requires Electron
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <footer className="shrink-0 px-4 py-2 border-t border-neutral-200/80 dark:border-neutral-800 bg-white/85 dark:bg-neutral-950 text-xs text-neutral-600 dark:text-neutral-400 flex items-center gap-4 backdrop-blur">
+          <span className="font-mono truncate max-w-[40ch]" title={workspaceRoot}>
+            {workspaceRoot.split(/[/\\]/).pop() || workspaceRoot}
+          </span>
+          <span>{panels.length} agent{panels.length !== 1 ? 's' : ''}</span>
+          <span>Zoom: {100 + zoomLevel * 20}%</span>
+        </footer>
+      </div>
+
+      {gitContextMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            aria-hidden
+            onClick={() => setGitContextMenu(null)}
+          />
+          <div
+            className="fixed z-50 py-1 min-w-[170px] rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 shadow-lg"
+            style={{ left: gitContextMenu.x, top: gitContextMenu.y }}
+          >
+            {!gitContextMenu.deleted && (
+              <>
+                <button
+                  type="button"
+                  className="w-full px-3 py-1.5 text-left text-xs text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                  onClick={() => {
+                    void openEditorForRelativePath(gitContextMenu.relativePath)
+                    setGitContextMenu(null)
+                  }}
+                >
+                  Open
+                </button>
+                <div className="mx-2 my-1 h-px bg-neutral-200 dark:bg-neutral-700" />
+              </>
+            )}
+            <button
+              type="button"
+              className="w-full px-3 py-1.5 text-left text-xs text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+              onClick={() => {
+                setGitContextMenu(null)
+                void runGitOperation('commit')
+              }}
+            >
+              Commit
+            </button>
+            <button
+              type="button"
+              className="w-full px-3 py-1.5 text-left text-xs text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+              onClick={() => {
+                setGitContextMenu(null)
+                void runGitOperation('push')
+              }}
+            >
+              Push
+            </button>
+            <button
+              type="button"
+              className="w-full px-3 py-1.5 text-left text-xs text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+              onClick={() => {
+                setGitContextMenu(null)
+                void runGitOperation('deploy')
+              }}
+            >
+              Deploy
+            </button>
+            <button
+              type="button"
+              className="w-full px-3 py-1.5 text-left text-xs text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+              onClick={() => {
+                setGitContextMenu(null)
+                void runGitOperation('build')
+              }}
+            >
+              Build
+            </button>
+            <button
+              type="button"
+              className="w-full px-3 py-1.5 text-left text-xs text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+              onClick={() => {
+                setGitContextMenu(null)
+                void runGitOperation('release')
+              }}
+            >
+              Release
+            </button>
+          </div>
+        </>
+      )}
+
+      {explorerContextMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            aria-hidden
+            onClick={() => setExplorerContextMenu(null)}
+          />
+          <div
+            className="fixed z-50 py-1 min-w-[120px] rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 shadow-lg"
+            style={{ left: explorerContextMenu.x, top: explorerContextMenu.y }}
+          >
+            <button
+              type="button"
+              className="w-full px-3 py-1.5 text-left text-xs text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+              onClick={() => {
+                void openEditorForRelativePath(explorerContextMenu.relativePath)
+                setExplorerContextMenu(null)
+              }}
+            >
+              Open
+            </button>
+          </div>
+        </>
       )}
 
       {showThemeModal && (
@@ -6086,29 +7402,41 @@ export default function App() {
                 <div className="flex items-center gap-2 mb-4">
                   <button
                     type="button"
-                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                    className={`px-2.5 py-1.5 rounded-md border text-xs inline-flex items-center gap-2 ${
+                      modelCatalogRefreshPending
+                        ? 'border-blue-400 bg-blue-50 text-blue-800 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
+                        : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700'
+                    }`}
                     onClick={async () => {
                       setModelCatalogRefreshPending(true)
                       setModelCatalogRefreshStatus(null)
                       try {
                         const available = await api.getAvailableModels()
                         if (available.codex.length === 0 && available.claude.length === 0 && available.gemini.length === 0) {
-                          setModelCatalogRefreshStatus({ kind: 'error', message: 'Catalog refresh failed: no models were returned.' })
+                          setModelCatalogRefreshStatus({ kind: 'error', message: 'Provider refresh failed: no models were returned.' })
                           return
                         }
-                        setModelConfig((prev) => syncModelConfigWithCatalog(prev, available))
-                        setModelCatalogRefreshStatus({ kind: 'success', message: 'Models refreshed from catalog.' })
+                        setModelConfig((prev) => syncModelConfigWithCatalog(prev, available, providerRegistry))
+                        setModelCatalogRefreshStatus({ kind: 'success', message: 'Models refreshed from providers.' })
                       } catch (err) {
-                        setModelCatalogRefreshStatus({ kind: 'error', message: `Catalog refresh failed: ${formatError(err)}` })
+                        setModelCatalogRefreshStatus({ kind: 'error', message: `Provider refresh failed: ${formatError(err)}` })
                       } finally {
                         setModelCatalogRefreshPending(false)
                       }
                     }}
                     disabled={modelCatalogRefreshPending}
                   >
-                    {modelCatalogRefreshPending ? 'Refreshing models...' : 'Refresh models from catalog'}
+                    {modelCatalogRefreshPending && (
+                      <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.3" strokeWidth="1.6" />
+                        <path d="M8 2a6 6 0 0 1 6 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                      </svg>
+                    )}
+                    {modelCatalogRefreshPending ? 'Refreshing models...' : 'Refresh models from providers'}
                   </button>
-                  <span className="text-xs text-neutral-500 dark:text-neutral-400">Fetches from barnaby.build</span>
+                  <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                    {modelCatalogRefreshPending ? 'Querying provider CLIs/APIs now...' : 'Queries local provider CLIs/APIs'}
+                  </span>
                   {modelCatalogRefreshStatus && (
                     <span
                       className={`text-xs ${
@@ -6145,7 +7473,7 @@ export default function App() {
                       value={modelForm.provider}
                       onChange={(e) => setModelForm((p) => ({ ...p, provider: e.target.value as ModelProvider }))}
                     >
-                      <option value="codex">Codex (ChatGPT)</option>
+                      <option value="codex">OpenAI (Codex CLI / OpenAI API)</option>
                       <option value="claude">Claude (CLI subscription)</option>
                       <option value="gemini">Gemini (CLI subscription)</option>
                       <option value="openrouter">OpenRouter (API)</option>
@@ -6164,11 +7492,29 @@ export default function App() {
                     <button
                       className={UI_BUTTON_PRIMARY_CLASS}
                       onClick={() => {
+                        const nextId = modelForm.id.trim()
+                        if (!nextId) {
+                          setModelFormStatus('Model ID is required.')
+                          return
+                        }
+                        const duplicate = modelConfig.interfaces.find(
+                          (m) => m.id === nextId && m.id !== editingModel.id,
+                        )
+                        if (duplicate) {
+                          setModelFormStatus(`Model ID "${nextId}" already exists.`)
+                          return
+                        }
+                        const nextModel: ModelInterface = {
+                          ...modelForm,
+                          id: nextId,
+                          displayName: modelForm.displayName.trim() || nextId,
+                        }
                         const idx = modelConfig.interfaces.findIndex((m) => m.id === editingModel.id)
                         const next = [...modelConfig.interfaces]
-                        if (idx >= 0) next[idx] = modelForm
-                        else next.push(modelForm)
+                        if (idx >= 0) next[idx] = nextModel
+                        else next.push(nextModel)
                         setModelConfig({ interfaces: next })
+                        setModelFormStatus('Saved.')
                         setEditingModel(null)
                       }}
                     >
@@ -6176,30 +7522,41 @@ export default function App() {
                     </button>
                     <button
                       className="px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                      onClick={() => setEditingModel(null)}
+                      onClick={() => {
+                        setModelFormStatus(null)
+                        setEditingModel(null)
+                      }}
                     >
                       Cancel
                     </button>
                   </div>
+                  {modelFormStatus && (
+                    <div className="text-xs text-neutral-600 dark:text-neutral-400">{modelFormStatus}</div>
+                  )}
                 </div>
               ) : (
                 <>
                   <div className="space-y-2">
-                    {modelConfig.interfaces.map((m) => (
-                      <div
-                        key={m.id}
-                        className="flex items-center justify-between px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-900"
-                      >
-                        <div>
-                          <span className="font-medium">{m.displayName || m.id}</span>
-                          <span className="text-xs text-neutral-500 dark:text-neutral-400 ml-2">
-                            {m.provider} {!m.enabled && '(disabled)'}
-                          </span>
-                        </div>
+                    {getModelOptionsGrouped(undefined, false).flatMap((grp) =>
+                      grp.modelIds.map((id) => {
+                        const m = modelConfig.interfaces.find((x) => x.id === id)
+                        if (!m) return null
+                        return (
+                          <div
+                            key={m.id}
+                            className="flex items-center justify-between px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                          >
+                            <div>
+                              <span className="font-medium">{m.displayName || m.id}</span>
+                              <span className="text-xs text-neutral-500 dark:text-neutral-400 ml-2">
+                                {grp.label} {!m.enabled && '(disabled)'}
+                              </span>
+                            </div>
                         <div className="flex gap-1">
                           <button
                             className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                             onClick={() => {
+                              setModelFormStatus(null)
                               setModelForm({ ...m })
                               setEditingModel(m)
                             }}
@@ -6218,11 +7575,14 @@ export default function App() {
                           </button>
                         </div>
                       </div>
-                    ))}
+                        )
+                      }),
+                    )}
                   </div>
                   <button
                     className="mt-4 px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                     onClick={() => {
+                      setModelFormStatus(null)
                       setModelForm({
                         id: '',
                         displayName: '',
@@ -6321,9 +7681,12 @@ export default function App() {
                 <div className="text-xs text-neutral-600 dark:text-neutral-400">
                   Barnaby supports both local CLI providers and API providers. These checks run when opened (OpenRouter is excluded to avoid rate limits). Use Re-check on a provider to validate it.
                 </div>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400 italic">
+                  Fallback connectivity is used only when the primary method has reached its usage limits.
+                </p>
                 <ul className="list-none space-y-1.5 text-xs text-neutral-600 dark:text-neutral-400 border border-neutral-200 dark:border-neutral-800 rounded-lg p-3 bg-white/60 dark:bg-neutral-950/40">
                   <li className="font-medium text-neutral-700 dark:text-neutral-300 uppercase tracking-wide pb-1">Provider coverage</li>
-                  <li>CODEX — full support (connectivity checks + model routing in panels).</li>
+                  <li>OPENAI — Codex CLI (primary) + OpenAI API (fallback when limits reached).</li>
                   <li>CLAUDE — full support (connectivity checks + model routing in panels).</li>
                   <li>GEMINI — full support (connectivity checks + model routing in panels).</li>
                   <li>OPENROUTER — full support (API key; check manually to avoid rate limits).</li>
@@ -6334,6 +7697,16 @@ export default function App() {
                     const status = providerAuthByName[config.id]
                     const loading = providerAuthLoadingByName[config.id]
                     const action = providerAuthActionByName[config.id]
+                    const isDual = PROVIDERS_WITH_DUAL_MODE.includes(config.id as ConnectivityProvider)
+                    const primary = providerRegistry.overrides[config.id]?.primary ?? 'cli'
+                    const fallbackEnabled = providerRegistry.overrides[config.id]?.fallbackEnabled ?? false
+                    const fallback = providerRegistry.overrides[config.id]?.fallback ?? (primary === 'cli' ? 'api' : 'cli')
+                    const needsCli = !isDual
+                      ? config.type === 'cli'
+                      : primary === 'cli' || (fallbackEnabled && fallback === 'cli')
+                    const needsApi = !isDual
+                      ? config.type === 'api'
+                      : primary === 'api' || (fallbackEnabled && fallback === 'api')
                     const statusLabel = !status
                       ? 'Unknown'
                       : !status.installed
@@ -6440,119 +7813,258 @@ export default function App() {
                                   : config.displayName
                               }
                             />
-                            {config.type === 'cli' ? (
+                            {/* Primary / Fallback connectivity mode — shown for all built-in providers */}
+                            <span className="text-neutral-500 dark:text-neutral-400">Primary</span>
+                            <select
+                              className={`${UI_SELECT_CLASS} text-sm`}
+                              value={
+                                PROVIDERS_API_ONLY.includes(config.id as ConnectivityProvider)
+                                  ? 'api'
+                                  : (override?.primary ?? 'cli')
+                              }
+                              onChange={(e) => {
+                                if (!PROVIDERS_WITH_DUAL_MODE.includes(config.id as ConnectivityProvider)) return
+                                setProviderRegistry((prev: ProviderRegistry) => ({
+                                  ...prev,
+                                  overrides: {
+                                    ...prev.overrides,
+                                    [config.id]: {
+                                      ...prev.overrides[config.id],
+                                      primary: e.target.value as ConnectivityMode,
+                                      fallback: (e.target.value as ConnectivityMode) === (override?.fallback ?? 'api')
+                                        ? (e.target.value === 'cli' ? 'api' : 'cli')
+                                        : override?.fallback,
+                                    },
+                                  },
+                                }))
+                              }}
+                              disabled={PROVIDERS_CLI_ONLY.includes(config.id as ConnectivityProvider) || PROVIDERS_API_ONLY.includes(config.id as ConnectivityProvider)}
+                            >
+                              {!PROVIDERS_API_ONLY.includes(config.id as ConnectivityProvider) && <option value="cli">CLI</option>}
+                              {!PROVIDERS_CLI_ONLY.includes(config.id as ConnectivityProvider) && <option value="api">API</option>}
+                            </select>
+                            {PROVIDERS_WITH_DUAL_MODE.includes(config.id as ConnectivityProvider) && (
                               <>
-                                <span className="text-neutral-500 dark:text-neutral-400">CLI path</span>
-                                <input
-                                  type="text"
-                                  className={`${UI_INPUT_CLASS} text-sm font-mono`}
-                                  value={override?.cliPath ?? ''}
-                                  onChange={(e) =>
-                                    setProviderRegistry((prev: ProviderRegistry) => ({
-                                      ...prev,
-                                      overrides: {
-                                        ...prev.overrides,
-                                        [config.id]: { ...prev.overrides[config.id], cliPath: e.target.value || undefined },
-                                      },
-                                    }))
-                                  }
-                                  placeholder="Use system PATH"
-                                />
-                              </>
-                            ) : (
-                              <>
-                                <span className="text-neutral-500 dark:text-neutral-400">API base URL</span>
-                                <input
-                                  type="text"
-                                  className={`${UI_INPUT_CLASS} text-sm font-mono`}
-                                  value={override?.apiBaseUrl ?? ''}
-                                  onChange={(e) =>
-                                    setProviderRegistry((prev: ProviderRegistry) => ({
-                                      ...prev,
-                                      overrides: {
-                                        ...prev.overrides,
-                                        [config.id]: { ...prev.overrides[config.id], apiBaseUrl: e.target.value || undefined },
-                                      },
-                                    }))
-                                  }
-                                  placeholder={config.apiBaseUrl}
-                                />
-                                <span className="text-neutral-500 dark:text-neutral-400">API key</span>
-                                <div className="flex items-center gap-2">
-                                  <input
-                                    type="password"
-                                    className={`${UI_INPUT_CLASS} text-sm font-mono w-full`}
-                                    value={providerApiKeyDraftByName[config.id] ?? ''}
-                                    onChange={(e) =>
-                                      setProviderApiKeyDraftByName((prev) => ({ ...prev, [config.id]: e.target.value }))
-                                    }
-                                    placeholder={providerApiKeyStateByName[config.id] ? 'Key saved (enter to replace)' : 'sk-or-v1-...'}
-                                  />
-                                  <button
-                                    type="button"
-                                    className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                                    onClick={() => void saveProviderApiKey(config.id)}
-                                  >
-                                    Save
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                                    onClick={() => void importProviderApiKeyFromEnv(config.id)}
-                                    title="Import OPENROUTER_API_KEY from environment"
-                                  >
-                                    Import Env
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                                    onClick={() => void clearProviderApiKey(config.id)}
-                                  >
-                                    Clear
-                                  </button>
-                                </div>
+                                <span className="text-neutral-500 dark:text-neutral-400 col-span-2">
+                                  <label className="inline-flex items-center gap-1.5">
+                                    <input
+                                      type="checkbox"
+                                      checked={override?.fallbackEnabled ?? false}
+                                      onChange={(e) =>
+                                        setProviderRegistry((prev: ProviderRegistry) => ({
+                                          ...prev,
+                                          overrides: {
+                                            ...prev.overrides,
+                                            [config.id]: { ...prev.overrides[config.id], fallbackEnabled: e.target.checked },
+                                          },
+                                        }))
+                                      }
+                                      className="rounded border-neutral-300"
+                                    />
+                                    Fallback
+                                  </label>
+                                </span>
+                                {override?.fallbackEnabled && (
+                                  <>
+                                    <span className="text-neutral-500 dark:text-neutral-400">Fallback mode</span>
+                                    <select
+                                      className={`${UI_SELECT_CLASS} text-sm`}
+                                      value={
+                                        (() => {
+                                          const p = override?.primary ?? 'cli'
+                                          const f = override?.fallback ?? (p === 'cli' ? 'api' : 'cli')
+                                          return f === p ? (p === 'cli' ? 'api' : 'cli') : f
+                                        })()
+                                      }
+                                      onChange={(e) =>
+                                        setProviderRegistry((prev: ProviderRegistry) => ({
+                                          ...prev,
+                                          overrides: {
+                                            ...prev.overrides,
+                                            [config.id]: { ...prev.overrides[config.id], fallback: e.target.value as ConnectivityMode },
+                                          },
+                                        }))
+                                      }
+                                    >
+                                      {(override?.primary ?? 'cli') !== 'cli' && <option value="cli">CLI</option>}
+                                      {(override?.primary ?? 'cli') !== 'api' && <option value="api">API</option>}
+                                    </select>
+                                  </>
+                                )}
                               </>
                             )}
+                            {(() => {
+                              const isDual = PROVIDERS_WITH_DUAL_MODE.includes(config.id as ConnectivityProvider)
+                              const primary = override?.primary ?? 'cli'
+                              const fallbackEnabled = override?.fallbackEnabled ?? false
+                              const fallback = override?.fallback ?? (primary === 'cli' ? 'api' : 'cli')
+                              const needsCli = !isDual ? config.type === 'cli' : primary === 'cli' || (fallbackEnabled && fallback === 'cli')
+                              const needsApi = !isDual ? config.type === 'api' : primary === 'api' || (fallbackEnabled && fallback === 'api')
+                              return needsCli ? (
+                                <>
+                                  <span className="text-neutral-500 dark:text-neutral-400">CLI path</span>
+                                  <input
+                                    type="text"
+                                    className={`${UI_INPUT_CLASS} text-sm font-mono`}
+                                    value={override?.cliPath ?? ''}
+                                    onChange={(e) =>
+                                      setProviderRegistry((prev: ProviderRegistry) => ({
+                                        ...prev,
+                                        overrides: {
+                                          ...prev.overrides,
+                                          [config.id]: { ...prev.overrides[config.id], cliPath: e.target.value || undefined },
+                                        },
+                                      }))
+                                    }
+                                    placeholder="Use system PATH"
+                                  />
+                                </>
+                              ) : null
+                            })()}
+                            {(() => {
+                              const isDual = PROVIDERS_WITH_DUAL_MODE.includes(config.id as ConnectivityProvider)
+                              const primary = override?.primary ?? 'cli'
+                              const fallbackEnabled = override?.fallbackEnabled ?? false
+                              const fallback = override?.fallback ?? (primary === 'cli' ? 'api' : 'cli')
+                              const needsApi = !isDual ? config.type === 'api' : primary === 'api' || (fallbackEnabled && fallback === 'api')
+                              return needsApi ? (
+                                <>
+                                  <span className="text-neutral-500 dark:text-neutral-400">API base URL</span>
+                                  <input
+                                    type="text"
+                                    className={`${UI_INPUT_CLASS} text-sm font-mono`}
+                                    value={override?.apiBaseUrl ?? ''}
+                                    onChange={(e) =>
+                                      setProviderRegistry((prev: ProviderRegistry) => ({
+                                        ...prev,
+                                        overrides: {
+                                          ...prev.overrides,
+                                          [config.id]: { ...prev.overrides[config.id], apiBaseUrl: e.target.value || undefined },
+                                        },
+                                      }))
+                                    }
+                                    placeholder={'apiBaseUrl' in config ? config.apiBaseUrl : (override?.apiBaseUrl || 'https://...')}
+                                  />
+                                  <span className="text-neutral-500 dark:text-neutral-400">API key</span>
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="password"
+                                      className={`${UI_INPUT_CLASS} text-sm font-mono w-full`}
+                                      value={providerApiKeyDraftByName[config.id] ?? ''}
+                                      onChange={(e) =>
+                                        setProviderApiKeyDraftByName((prev) => ({ ...prev, [config.id]: e.target.value }))
+                                      }
+                                      placeholder={providerApiKeyStateByName[config.id] ? 'Key saved (enter to replace)' : (config.id === 'openrouter' ? 'sk-or-v1-...' : config.id === 'codex' ? 'sk-...' : 'API key')}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                      onClick={() => void saveProviderApiKey(config.id)}
+                                    >
+                                      Save
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                      onClick={() => void importProviderApiKeyFromEnv(config.id)}
+                                      title={`Import ${config.id.toUpperCase()}_API_KEY from environment`}
+                                    >
+                                      Import Env
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                      onClick={() => void clearProviderApiKey(config.id)}
+                                    >
+                                      Clear
+                                    </button>
+                                  </div>
+                                </>
+                              ) : null
+                            })()}
                           </div>
                         )}
-                        <div className="text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap break-words">
-                          {loading ? `Checking ${config.displayName}...` : status?.detail || 'No status yet.'}
-                        </div>
-                        <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                          Checked: {status?.checkedAt ? formatCheckedAt(status.checkedAt) : 'Never'}
-                        </div>
-                        {config.enabled && (
+                        {(needsCli || needsApi) && (
+                          <>
+                            <div className="text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap break-words">
+                              {loading
+                                ? `Checking ${config.displayName}...`
+                                : status?.detail || (needsApi && !needsCli ? 'Click Test API to validate.' : 'No status yet.')}
+                            </div>
+                            <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                              Checked: {status?.checkedAt ? formatCheckedAt(status.checkedAt) : 'Never'}
+                            </div>
+                          </>
+                        )}
+                        {config.enabled && (needsCli || needsApi) && (
                           <div className="flex items-center gap-2 flex-wrap">
-                            <button
-                              type="button"
-                              className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                              disabled={loading}
-                              onClick={() => void refreshProviderAuthStatus(config)}
-                            >
-                              {loading ? 'Checking...' : 'Re-check'}
-                            </button>
-                            <button
-                              type="button"
-                              className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                              disabled={loading}
-                              onClick={() => void startProviderLoginFlow(config)}
-                            >
-                              {config.type === 'api' ? 'Open keys page' : status?.authenticated ? 'Re-authenticate' : 'Open login'}
-                            </button>
-                            {config.type === 'cli' && (config.upgradeCommand || config.upgradePackage) && (
-                              <button
-                                type="button"
-                                className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                                disabled={loading}
-                                onClick={() => void startProviderUpgradeFlow(config)}
-                                title={
-                                  config.upgradePackage
-                                    ? `Clean reinstall: npm uninstall -g ${config.upgradePackage}; npm install -g ${config.upgradePackage}@latest`
-                                    : config.upgradeCommand
-                                }
-                              >
-                                Upgrade CLI
-                              </button>
+                            {needsCli && (
+                              <>
+                                <button
+                                  type="button"
+                                  className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                  disabled={loading}
+                                  onClick={() => void refreshProviderAuthStatus(config)}
+                                >
+                                  {loading ? 'Checking...' : 'Re-check'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                  disabled={loading}
+                                  onClick={() => void startProviderLoginFlow(config)}
+                                >
+                                  {status?.authenticated ? 'Re-authenticate' : 'Open login'}
+                                </button>
+                                {config.type === 'cli' &&
+                                  ((config as ProviderConfigCli).upgradeCommand || (config as ProviderConfigCli).upgradePackage) && (
+                                  <button
+                                    type="button"
+                                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                    disabled={loading}
+                                    onClick={() => void startProviderUpgradeFlow(config)}
+                                    title={
+                                      (config as ProviderConfigCli).upgradePackage
+                                        ? `Clean reinstall: npm uninstall -g ${(config as ProviderConfigCli).upgradePackage}; npm install -g ${(config as ProviderConfigCli).upgradePackage}@latest`
+                                        : (config as ProviderConfigCli).upgradeCommand
+                                    }
+                                  >
+                                    Upgrade CLI
+                                  </button>
+                                )}
+                              </>
+                            )}
+                            {needsApi && (
+                              <>
+                                <button
+                                  type="button"
+                                  className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                  disabled={loading}
+                                  onClick={() => void refreshProviderApiAuthStatus(config.id)}
+                                >
+                                  {loading ? 'Checking...' : 'Test API'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                  onClick={() =>
+                                    void startProviderLoginFlow(
+                                      API_CONFIG_BY_PROVIDER[config.id]
+                                        ? {
+                                            id: config.id,
+                                            displayName: config.displayName,
+                                            enabled: config.enabled,
+                                            type: 'api' as const,
+                                            apiBaseUrl: API_CONFIG_BY_PROVIDER[config.id].apiBaseUrl,
+                                            loginUrl: API_CONFIG_BY_PROVIDER[config.id].loginUrl,
+                                          }
+                                        : config,
+                                    )
+                                  }
+                                >
+                                  Open keys page
+                                </button>
+                              </>
                             )}
                             {action && <span className="text-xs text-neutral-600 dark:text-neutral-400">{action}</span>}
                           </div>
@@ -6678,9 +8190,17 @@ export default function App() {
                 </div>
                 <div className="rounded-lg border border-neutral-200 bg-neutral-50/70 p-3 dark:border-neutral-700 dark:bg-neutral-900/50">
                   <div className="text-xs text-neutral-600 dark:text-neutral-400">
-                    Advanced: edit <code className="font-mono text-[11px]">diagnostics.json</code> for message colors and per-category toggles.
+                    Advanced: edit <code className="font-mono text-[11px]">diagnostics.json</code> for per-category toggles and separate <code className="font-mono text-[11px]">colors.light</code>/<code className="font-mono text-[11px]">colors.dark</code> sets.
                     {diagnosticsInfo?.diagnosticsConfigPath && (
-                      <div className="mt-1 font-mono text-[11px] text-neutral-500 dark:text-neutral-500 break-all">{diagnosticsInfo.diagnosticsConfigPath}</div>
+                      <div className="mt-1">
+                        <button 
+                          type="button"
+                          className="font-mono text-[11px] text-blue-600 dark:text-blue-400 hover:underline break-all text-left"
+                          onClick={() => openDiagnosticsTarget('diagnosticsConfig', 'diagnostics config')}
+                        >
+                          {diagnosticsInfo.diagnosticsConfigPath}
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -6691,32 +8211,9 @@ export default function App() {
                 <div className="text-xs text-neutral-600 dark:text-neutral-400">
                   Runtime logs and persisted state are stored in your Barnaby user data folder.
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                    onClick={() => {
-                      setDiagnosticsActionStatus(null)
-                      void (async () => {
-                        try {
-                          const result = await api.openRuntimeLog?.()
-                          if (!result?.ok) {
-                            setDiagnosticsActionStatus(result?.error ? `Could not open runtime log: ${result.error}` : 'Could not open runtime log.')
-                            return
-                          }
-                          setDiagnosticsActionStatus('Opened runtime log.')
-                        } catch (err) {
-                          setDiagnosticsActionStatus(`Could not open runtime log: ${formatError(err)}`)
-                        }
-                      })()
-                    }}
-                  >
-                    Open runtime log
-                  </button>
-                  {diagnosticsActionStatus && (
-                    <span className="text-xs text-neutral-600 dark:text-neutral-400">{diagnosticsActionStatus}</span>
-                  )}
-                </div>
+                {diagnosticsActionStatus && (
+                  <div className="text-xs text-neutral-600 dark:text-neutral-400">{diagnosticsActionStatus}</div>
+                )}
 
                 <div className="pt-2 border-t border-neutral-200 dark:border-neutral-800">
                   <div className="text-xs font-medium text-red-600 dark:text-red-400 mb-1">Danger Zone</div>
@@ -6743,12 +8240,12 @@ export default function App() {
                 )}
                 {diagnosticsInfo && (
                   <div className="space-y-1 text-xs font-mono text-neutral-700 dark:text-neutral-300">
-                    <div><span className="font-semibold">userData</span>: {diagnosticsInfo.userDataPath}</div>
-                    <div><span className="font-semibold">storage</span>: {diagnosticsInfo.storageDir}</div>
-                    <div><span className="font-semibold">runtime log</span>: {diagnosticsInfo.runtimeLogPath}</div>
-                    <div><span className="font-semibold">app state</span>: {diagnosticsInfo.appStatePath}</div>
-                    <div><span className="font-semibold">chat history</span>: {diagnosticsInfo.chatHistoryPath}</div>
-                    <div><span className="font-semibold">diagnostics config</span>: {diagnosticsInfo.diagnosticsConfigPath}</div>
+                    <div><span className="font-semibold">userData</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => openDiagnosticsTarget('userData', 'userData folder')}>{diagnosticsInfo.userDataPath}</button></div>
+                    <div><span className="font-semibold">storage</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => openDiagnosticsTarget('storage', 'storage folder')}>{diagnosticsInfo.storageDir}</button></div>
+                    <div><span className="font-semibold">runtime log</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => openDiagnosticsTarget('runtimeLog', 'runtime log')}>{diagnosticsInfo.runtimeLogPath}</button></div>
+                    <div><span className="font-semibold">app state</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => openDiagnosticsTarget('appState', 'app state')}>{diagnosticsInfo.appStatePath}</button></div>
+                    <div><span className="font-semibold">chat history</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => openDiagnosticsTarget('chatHistory', 'chat history')}>{diagnosticsInfo.chatHistoryPath}</button></div>
+                    <div><span className="font-semibold">diagnostics config</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => openDiagnosticsTarget('diagnosticsConfig', 'diagnostics config')}>{diagnosticsInfo.diagnosticsConfigPath}</button></div>
                   </div>
                 )}
               </section>
@@ -6917,7 +8414,7 @@ export default function App() {
               {setupWizardStep === 'providers' ? (
                 <div className="grid grid-cols-2 gap-2">
                   {([
-                    { id: 'codex', label: 'Codex' },
+                    { id: 'codex', label: 'OpenAI' },
                     { id: 'claude', label: 'Claude' },
                     { id: 'gemini', label: 'Gemini' },
                     { id: 'openrouter', label: 'OpenRouter (Free Models)' },
@@ -6968,7 +8465,7 @@ export default function App() {
                               onChange={(e) =>
                                 setProviderApiKeyDraftByName((prev) => ({ ...prev, [providerId]: e.target.value }))
                               }
-                              placeholder={providerApiKeyStateByName[providerId] ? 'Key saved (enter to replace)' : 'sk-or-v1-...'}
+                              placeholder={providerApiKeyStateByName[providerId] ? 'Key saved (enter to replace)' : (providerId === 'codex' ? 'sk-...' : 'sk-or-v1-...')}
                             />
                             <button className={UI_BUTTON_SECONDARY_CLASS} onClick={() => void saveProviderApiKey(providerId)}>Save</button>
                             <button className={UI_BUTTON_SECONDARY_CLASS} onClick={() => void importProviderApiKeyFromEnv(providerId)}>Import Env</button>
@@ -7058,6 +8555,74 @@ export default function App() {
         </div>
       )}
 
+      {deleteHistoryIdPending && (
+        <div className={MODAL_BACKDROP_CLASS}>
+          <div className={`w-full max-w-md ${MODAL_CARD_CLASS}`}>
+            <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+              <div className="font-medium">Delete conversation</div>
+              <button
+                className={UI_CLOSE_ICON_BUTTON_CLASS}
+                onClick={() => {
+                  setDeleteHistoryIdPending(null)
+                  setDeleteAllHistoryChecked(false)
+                  setDeleteThisAndOlderChecked(false)
+                }}
+                title="Close"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4 text-sm text-neutral-700 dark:text-neutral-300 space-y-3">
+              <p>This conversation will be permanently deleted. Continue?</p>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deleteAllHistoryChecked}
+                  onChange={(e) => setDeleteAllHistoryChecked(e.target.checked)}
+                />
+                <span>Delete all conversation history</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deleteThisAndOlderChecked}
+                  onChange={(e) => setDeleteThisAndOlderChecked(e.target.checked)}
+                />
+                <span>Delete this and old conversations</span>
+              </label>
+            </div>
+            <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end gap-2">
+              <button
+                type="button"
+                className={UI_BUTTON_SECONDARY_CLASS}
+                onClick={() => {
+                  setDeleteHistoryIdPending(null)
+                  setDeleteAllHistoryChecked(false)
+                  setDeleteThisAndOlderChecked(false)
+                }}
+              >
+                No
+              </button>
+              <button
+                type="button"
+                className={UI_BUTTON_PRIMARY_CLASS}
+                onClick={() =>
+                  deleteHistoryEntry(deleteHistoryIdPending, {
+                    deleteAll: deleteAllHistoryChecked,
+                    deleteThisAndOlder: deleteThisAndOlderChecked,
+                  })
+                }
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {pendingWorkspaceSwitch && (
         <div className={MODAL_BACKDROP_CLASS}>
           <div className={`w-full max-w-lg ${MODAL_CARD_CLASS}`}>
@@ -7131,26 +8696,37 @@ export default function App() {
               )}
               <div className="space-y-1">
                 {workspaceList.map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    className={`w-full text-left px-3 py-2 rounded text-sm font-mono truncate border ${
-                      p === workspaceRoot
-                        ? 'border-neutral-300 bg-neutral-100 text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100'
-                        : 'border-transparent text-neutral-800 hover:border-neutral-300 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:border-neutral-700 dark:hover:bg-neutral-900'
-                    }`}
-                    onClick={() => {
-                      requestWorkspaceSwitch(p, 'picker')
-                    }}
-                  >
-                    {p}
-                  </button>
+                  (() => {
+                    const isCurrent =
+                      normalizeWorkspacePathForCompare(p) === normalizeWorkspacePathForCompare(workspaceRoot)
+                    const isOpening = workspacePickerOpening === p
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-sm font-mono border ${
+                          isCurrent
+                            ? 'border-blue-300 bg-blue-50 text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-100'
+                            : 'border-neutral-300 bg-neutral-50 text-neutral-900 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900/70 dark:text-neutral-100 dark:hover:bg-neutral-800/80'
+                        } ${workspacePickerOpening ? 'disabled:opacity-70 disabled:cursor-not-allowed' : ''}`}
+                        onClick={() => {
+                          requestWorkspaceSwitch(p, 'picker')
+                        }}
+                        disabled={Boolean(workspacePickerOpening)}
+                        aria-busy={isOpening || undefined}
+                      >
+                        <span className="truncate text-left">{p}</span>
+                        {isOpening && <span className="shrink-0 text-[10px] uppercase tracking-wide">Opening...</span>}
+                      </button>
+                    )
+                  })()
                 ))}
               </div>
               <button
                 type="button"
-                className="mt-3 w-full rounded-md border border-dashed border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                className="mt-3 w-full rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-sm text-neutral-900 hover:bg-neutral-100 disabled:opacity-70 disabled:cursor-not-allowed dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
                 onClick={async () => {
+                  if (workspacePickerOpening) return
                   const selected = await api.openFolderDialog?.()
                   if (!selected) return
                   setWorkspaceList((prev) => (prev.includes(selected) ? prev : [selected, ...prev]))
@@ -7161,6 +8737,11 @@ export default function App() {
                       defaultModel: DEFAULT_MODEL,
                       permissionMode: 'verify-first',
                       sandbox: 'workspace-write',
+                      allowedCommandPrefixes: [],
+                      allowedAutoReadPrefixes: [],
+                      allowedAutoWritePrefixes: [],
+                      deniedAutoReadPrefixes: [],
+                      deniedAutoWritePrefixes: [],
                       themeId: WORKSPACE_THEME_INHERIT,
                     },
                   }))
@@ -7169,6 +8750,7 @@ export default function App() {
                     await api.writeWorkspaceConfig?.(selected)
                   } catch {}
                 }}
+                disabled={Boolean(workspacePickerOpening)}
               >
                 + Select folder...
               </button>
@@ -7279,6 +8861,27 @@ export default function App() {
                   </select>
                 </div>
               )}
+              {workspaceForm.sandbox !== 'read-only' && workspaceForm.permissionMode === 'proceed-always' && (
+                <div className="grid grid-cols-[140px_1fr] items-start gap-2">
+                  <span className="text-neutral-600 dark:text-neutral-300 pt-1">Allowed prefixes</span>
+                  <div className="space-y-1">
+                    <textarea
+                      className={`w-full min-h-[96px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                      value={workspaceForm.allowedCommandPrefixes.join('\n')}
+                      onChange={(e) =>
+                        setWorkspaceForm((prev) => ({
+                          ...prev,
+                          allowedCommandPrefixes: parseAllowedCommandPrefixesInput(e.target.value),
+                        }))
+                      }
+                      placeholder={'npm run build:dist:raw\nnpx vite build'}
+                    />
+                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                      One prefix per line. Leave blank to allow all commands.
+                    </p>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <span className="text-neutral-600 dark:text-neutral-300">Theme</span>
                 <select
@@ -7354,7 +8957,15 @@ export default function App() {
     const msSinceLastActivity = activity ? activityClock - activity.lastEventAt : Number.POSITIVE_INFINITY
     const isRunning = isBusy
     const isQueued = !isRunning && queueCount > 0
-    const isFinalComplete = !isRunning && !isQueued && activity?.lastEventLabel === 'Turn complete'
+    const completionNoticeAt = panelTurnCompleteAtById[w.id]
+    const completionNoticeAgeMs =
+      typeof completionNoticeAt === 'number' ? Math.max(0, activityClock - completionNoticeAt) : Number.POSITIVE_INFINITY
+    const showCompletionNotice = Number.isFinite(completionNoticeAgeMs) && completionNoticeAgeMs < PANEL_COMPLETION_NOTICE_MS
+    const completionNoticeOpacity = showCompletionNotice
+      ? Math.max(0.45, 1 - completionNoticeAgeMs / PANEL_COMPLETION_NOTICE_MS)
+      : 0
+    const isFinalComplete =
+      !isRunning && !isQueued && (activity?.lastEventLabel === 'Turn complete' || showCompletionNotice)
     const hasRecentActivity = msSinceLastActivity < 4000
     const activityDotClass = isRunning
       ? 'bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.15)]'
@@ -7393,11 +9004,12 @@ export default function App() {
     const showActivityUpdates = verbose || diagnosticsConfig.showActivityUpdates
     const showReasoningUpdates = verbose || diagnosticsConfig.showReasoningUpdates
     const showOperationTrace = verbose || diagnosticsConfig.showOperationTrace
-    const debugNoteColor = diagnosticsConfig.colors.debugNotes
-    const activityUpdateColor = diagnosticsConfig.colors.activityUpdates
-    const reasoningUpdateColor = diagnosticsConfig.colors.reasoningUpdates
-    const operationTraceColor = diagnosticsConfig.colors.operationTrace
-    const timelineMessageColor = diagnosticsConfig.colors.thinkingProgress
+    const diagnosticsColors = effectiveTheme === 'dark' ? diagnosticsConfig.colors.dark : diagnosticsConfig.colors.light
+    const debugNoteColor = diagnosticsColors.debugNotes
+    const activityUpdateColor = diagnosticsColors.activityUpdates
+    const reasoningUpdateColor = diagnosticsColors.reasoningUpdates
+    const operationTraceColor = diagnosticsColors.operationTrace
+    const timelineMessageColor = diagnosticsColors.thinkingProgress
     const settingsPopover = settingsPopoverByPanel[w.id] ?? null
     const interactionMode = parseInteractionMode(w.interactionMode)
     const contextUsage = estimatePanelContextUsage(w)
@@ -7433,12 +9045,43 @@ export default function App() {
           e.preventDefault()
           setActivePanelId(w.id)
           setFocusedEditorId(null)
-          zoomPanelFont(w.id, e.deltaY)
+          if (zoomWheelThrottleRef.current) return
+          zoomWheelThrottleRef.current = true
+          if (e.deltaY < 0) api.zoomIn?.()
+          else if (e.deltaY > 0) api.zoomOut?.()
+          const level = api.getZoomLevel?.()
+          if (level !== undefined) setZoomLevel(level)
+          setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
         }}
       >
-        <div className="flex items-center justify-between gap-2 min-w-0 px-3 py-2.5 border-b border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-950 shrink-0">
-          <div className="flex-1 min-w-0 text-sm font-semibold tracking-tight truncate" title={w.title}>{getConversationPrecis(w)}</div>
-          <div className="flex items-center gap-1">
+        <div
+          data-agent-panel-header="true"
+          className="relative flex items-center justify-between gap-2 min-w-0 px-3 py-2.5 border-b border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-950 shrink-0"
+          onDragOver={(e) => panels.length > 1 && handleDragOver(e, { acceptAgent: true, targetId: `agent-${w.id}` })}
+          onDrop={(e) => panels.length > 1 && handleAgentDrop(e, w.id)}
+        >
+          {draggingPanelId && draggingPanelId !== w.id && dragOverTarget === `agent-${w.id}` && (
+            <div className="absolute inset-0 rounded-none pointer-events-none z-10" style={DROP_ZONE_OVERLAY_STYLE} />
+          )}
+          <div
+            className="flex-1 min-w-0 flex items-center gap-2 select-none"
+            title={panels.length > 1 ? `${w.title} — drag to reorder` : w.title}
+            draggable={panels.length > 1}
+            onDragStart={(e) => panels.length > 1 && handleDragStart(e, 'agent', w.id)}
+            onDragEnd={handleDragEnd}
+          >
+            {panels.length > 1 && (
+              <span className="shrink-0 flex text-neutral-400 dark:text-neutral-500 touch-none" aria-hidden="true">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                  <circle cx="4" cy="3" r="1" /><circle cx="8" cy="3" r="1" />
+                  <circle cx="4" cy="6" r="1" /><circle cx="8" cy="6" r="1" />
+                  <circle cx="4" cy="9" r="1" /><circle cx="8" cy="9" r="1" />
+                </svg>
+              </span>
+            )}
+            <span className="text-sm font-semibold tracking-tight truncate">{getConversationPrecis(w)}</span>
+          </div>
+          <div className="flex items-center gap-1 shrink-0 cursor-default">
             <button
               className={[
                 'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
@@ -7450,9 +9093,8 @@ export default function App() {
               title={panels.length >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'Split panel'}
               aria-label="Split panel"
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <rect x="2.5" y="3" width="5.2" height="10" rx="1" stroke="currentColor" />
-                <rect x="8.3" y="3" width="5.2" height="10" rx="1" stroke="currentColor" />
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
               </svg>
             </button>
             <button
@@ -8000,6 +9642,9 @@ export default function App() {
               ))}
             </div>
           )}
+          <div className="mb-1 px-0.5 min-w-0 text-[11px] text-neutral-400 dark:text-neutral-600">
+            <span className="break-words [overflow-wrap:anywhere]">{w.status}</span>
+          </div>
           <div className="flex items-end gap-2 min-w-0">
             <textarea
               ref={(el) => registerTextarea(w.id, el)}
@@ -8093,7 +9738,16 @@ export default function App() {
                 />
                 {activityLabel}
               </span>
-              <span className="break-words [overflow-wrap:anywhere]">{w.status}</span>
+              {showCompletionNotice && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/35 dark:text-emerald-200 transition-opacity"
+                  style={{ opacity: completionNoticeOpacity }}
+                  aria-live="polite"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
+                  complete
+                </span>
+              )}
               {responseDurationLabel && (
                 <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400" title="Response duration">
                   t+{responseDurationLabel}
@@ -8292,4 +9946,3 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
     )
   }
 }
-

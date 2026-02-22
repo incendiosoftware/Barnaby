@@ -6,7 +6,8 @@
         { "id": "gpt-5.3-codex", "displayName": "GPT 5.3 (Codex)" },
         { "id": "gpt-5.3-codex-spark", "displayName": "GPT 5.3 Codex Spark" },
         { "id": "gpt-5.2-codex", "displayName": "GPT 5.2 (Codex)" },
-        { "id": "gpt-5.1-codex", "displayName": "GPT 5.1 (Codex)" }
+        { "id": "gpt-5.1-codex", "displayName": "GPT 5.1 (Codex)" },
+         { "id": "gpt-5.1-codex-mini", "displayName": "GPT 5.1 (Codex Mini)" }
       ]
     },
     "claude": {

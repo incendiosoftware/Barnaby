@@ -1,6 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import readline from 'node:readline'
+import fs from 'node:fs'
+import path from 'node:path'
 
 type JsonRpcId = number
 
@@ -36,6 +38,11 @@ export type CodexConnectOptions = {
   permissionMode?: 'verify-first' | 'proceed-always'
   approvalPolicy?: 'on-request' | 'never'
   sandbox?: 'read-only' | 'workspace-write'
+  allowedCommandPrefixes?: string[]
+  allowedAutoReadPrefixes?: string[]
+  allowedAutoWritePrefixes?: string[]
+  deniedAutoReadPrefixes?: string[]
+  deniedAutoWritePrefixes?: string[]
 }
 
 export class CodexAppServerClient extends EventEmitter {
@@ -48,6 +55,11 @@ export class CodexAppServerClient extends EventEmitter {
   private threadId: string | null = null
   private activeTurnId: string | null = null
   private permissionMode: 'verify-first' | 'proceed-always' = 'verify-first'
+  private allowedCommandPrefixes: string[] = []
+  private allowedAutoReadPrefixes: string[] = []
+  private allowedAutoWritePrefixes: string[] = []
+  private deniedAutoReadPrefixes: string[] = []
+  private deniedAutoWritePrefixes: string[] = []
   private lastStderr = ''
 
   emitEvent(evt: FireHarnessCodexEvent) {
@@ -70,6 +82,11 @@ export class CodexAppServerClient extends EventEmitter {
     }
 
     this.permissionMode = options.permissionMode ?? 'verify-first'
+    this.allowedCommandPrefixes = this.normalizeAllowedCommandPrefixes(options.allowedCommandPrefixes)
+    this.allowedAutoReadPrefixes = this.normalizeAllowedCommandPrefixes(options.allowedAutoReadPrefixes)
+    this.allowedAutoWritePrefixes = this.normalizeAllowedCommandPrefixes(options.allowedAutoWritePrefixes)
+    this.deniedAutoReadPrefixes = this.normalizeAllowedCommandPrefixes(options.deniedAutoReadPrefixes)
+    this.deniedAutoWritePrefixes = this.normalizeAllowedCommandPrefixes(options.deniedAutoWritePrefixes)
 
     if (this.proc) await this.close()
 
@@ -120,7 +137,7 @@ export class CodexAppServerClient extends EventEmitter {
     })
     this.sendNotification('initialized', {})
 
-    // Create a thread that behaves like chat: no approvals, no side-effect permissions.
+    // Create the thread and let approval policy come from workspace permission settings.
     const threadStart = await this.sendRequest('thread/start', {
       model: options.model,
       cwd: options.cwd,
@@ -129,6 +146,9 @@ export class CodexAppServerClient extends EventEmitter {
         (this.permissionMode === 'proceed-always' ? 'never' : 'on-request'),
       sandbox: options.sandbox ?? 'workspace-write',
     })
+
+    // Write the CLI config to enforce permissions
+    this.writeCliConfig(options.cwd)
 
     const threadId = (threadStart as any)?.thread?.id
     if (!threadId || typeof threadId !== 'string') {
@@ -249,7 +269,37 @@ export class CodexAppServerClient extends EventEmitter {
       // Best-effort: respond "decline" for approval requests.
       if (method.endsWith('/requestApproval')) {
         if (this.permissionMode === 'proceed-always') {
-          this.sendResponse(id, { decision: 'accept' })
+          const command = this.extractApprovalCommand((msg as any).params)
+          const filePath = this.extractApprovalPath((msg as any).params)
+          
+          if (filePath) {
+             const mode = method.includes('read') ? 'read' : 'write' // Heuristic
+             if (this.shouldAutoApprovePath(filePath, mode)) {
+               this.sendResponse(id, { decision: 'accept' })
+             } else {
+               this.emitEvent({
+                 type: 'status',
+                 status: 'error',
+                 message: `Action blocked by allowed command prefixes (${filePath}). Update workspace prefix allowlist to permit this command.`,
+               })
+               this.sendResponse(id, { decision: 'decline' })
+             }
+          } else if (command) {
+            if (this.shouldAutoApproveCommand(command)) {
+              this.sendResponse(id, { decision: 'accept' })
+            } else {
+              const commandNote = command ? ` (${this.shorten(command, 120)})` : ''
+              this.emitEvent({
+                type: 'status',
+                status: 'error',
+                message: `Action blocked by allowed command prefixes${commandNote}. Update workspace prefix allowlist to permit this command.`,
+              })
+              this.sendResponse(id, { decision: 'decline' })
+            }
+          } else {
+             // Fallback
+             this.sendResponse(id, { decision: 'decline' })
+          }
         } else {
           this.emitEvent({
             type: 'status',
@@ -368,6 +418,182 @@ export class CodexAppServerClient extends EventEmitter {
   private writeMessage(message: unknown) {
     if (!this.proc) throw new Error('codex app-server process not running')
     this.proc.stdin.write(`${JSON.stringify(message)}\n`)
+  }
+
+  private writeCliConfig(cwd: string) {
+    // Only proceed if we have meaningful permissions to write
+    if (this.permissionMode !== 'proceed-always') return
+    
+    const configDir = path.join(cwd, '.cursor')
+    const configPath = path.join(configDir, 'cli.json')
+
+    // If all lists are empty, we should NOT enforce a restrictive cli.json.
+    // Instead, we remove it to restore the default "Allow All" behavior of the agent.
+    if (this.allowedCommandPrefixes.length === 0 &&
+        this.allowedAutoReadPrefixes.length === 0 &&
+        this.allowedAutoWritePrefixes.length === 0 &&
+        this.deniedAutoReadPrefixes.length === 0 &&
+        this.deniedAutoWritePrefixes.length === 0) {
+        
+        if (fs.existsSync(configPath)) {
+            try {
+                fs.unlinkSync(configPath)
+            } catch (e) { /* ignore */ }
+        }
+        return
+    }
+    
+    // Extract binary names from command prefixes to allow execution
+    const allowedBinaries = new Set<string>()
+    if (this.allowedCommandPrefixes.length === 0) {
+        // If the user specified file rules but NO command rules, 
+        // we can't easily "Allow All Shells" in cli.json safely.
+        // We will default to allowing common build tools if the list is empty but other rules exist.
+        // Or strictly, we should probably require them to be explicit.
+        // For now, let's add common tools to avoid "everything breaking" when just trying to deny a file.
+        allowedBinaries.add('Shell(npm)')
+        allowedBinaries.add('Shell(node)')
+        allowedBinaries.add('Shell(git)')
+    } else {
+        for (const prefix of this.allowedCommandPrefixes) {
+            const parts = prefix.trim().split(/\s+/)
+            if (parts[0]) allowedBinaries.add(`Shell(${parts[0]})`)
+        }
+    }
+
+    // Build read/write rules
+    const readRules = this.allowedAutoReadPrefixes.length > 0 
+        ? this.allowedAutoReadPrefixes.map(p => `Read(${p}**)`)
+        : ['Read(**)']
+
+    const writeRules = this.allowedAutoWritePrefixes.length > 0 
+        ? this.allowedAutoWritePrefixes.map(p => `Write(${p}**)`)
+        : ['Write(**)']
+    
+    const deniedRead = this.deniedAutoReadPrefixes.map(p => `Read(${p}**)`)
+    const deniedWrite = this.deniedAutoWritePrefixes.map(p => `Write(${p}**)`)
+
+    const config = {
+      permissions: {
+        allow: [
+          ...Array.from(allowedBinaries),
+          ...readRules,
+          ...writeRules
+        ],
+        deny: [
+          ...deniedRead,
+          ...deniedWrite
+        ]
+      }
+    }
+
+    try {
+      if (!fs.existsSync(configDir)) {
+        fs.mkdirSync(configDir, { recursive: true })
+      }
+      fs.writeFileSync(
+        configPath, 
+        JSON.stringify(config, null, 2),
+        'utf8'
+      )
+    } catch (err) {
+      this.emitEvent({ 
+        type: 'status', 
+        status: 'error', 
+        message: `Failed to write permission config: ${String(err)}` 
+      })
+    }
+  }
+
+  private extractApprovalPath(params: any): string | null {
+    const direct =
+      this.pickString(params, ['path', 'file', 'filename']) ??
+      this.pickString(params?.path, ['path', 'file', 'filename']) ??
+      this.pickString(params?.request, ['path', 'file', 'filename']) ??
+      this.pickString(params?.request?.path, ['path', 'file', 'filename']) ??
+      this.pickString(params?.action, ['path', 'file', 'filename']) ??
+      this.pickString(params?.toolInput, ['path', 'file', 'filename']) ??
+      this.pickString(params?.input, ['path', 'file', 'filename']) ??
+      null
+    if (direct) return direct
+    if (typeof params?.path === 'string' && params.path.trim()) return params.path.trim()
+    return null
+  }
+
+  private shouldAutoApprovePath(pathStr: string, mode: 'read' | 'write'): boolean {
+    const list = mode === 'read' ? this.allowedAutoReadPrefixes : this.allowedAutoWritePrefixes
+    const denied = mode === 'read' ? this.deniedAutoReadPrefixes : this.deniedAutoWritePrefixes
+    if (list.length === 0 && denied.length === 0) return true
+    
+    const p = pathStr.trim().replace(/\\/g, '/')
+    
+    // Check denials first
+    for (const prefix of denied) {
+      if (p.startsWith(prefix)) return false
+    }
+
+    // Then check allows
+    if (list.length === 0) return true // Default to allow if no explicit allows
+    for (const prefix of list) {
+      if (p.startsWith(prefix)) return true
+    }
+    
+    return false
+  }
+
+  private normalizeAllowedCommandPrefixes(raw: unknown): string[] {
+    if (!Array.isArray(raw)) return []
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const item of raw) {
+      if (typeof item !== 'string') continue
+      const value = item.trim()
+      if (!value) continue
+      const key = value.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      result.push(value)
+    }
+    return result.slice(0, 64)
+  }
+
+  private shouldAutoApproveCommand(command: string | null): boolean {
+    if (this.allowedCommandPrefixes.length === 0) return true
+    if (!command) return false
+    const normalizedCommand = command.trim().toLowerCase()
+    return this.allowedCommandPrefixes.some((prefix) =>
+      normalizedCommand.startsWith(prefix.toLowerCase()),
+    )
+  }
+
+  private extractApprovalCommand(params: any): string | null {
+    const direct =
+      this.pickString(params, ['command', 'cmd']) ??
+      this.pickString(params?.command, ['command', 'cmd', 'raw']) ??
+      this.pickString(params?.request, ['command', 'cmd']) ??
+      this.pickString(params?.request?.command, ['command', 'cmd', 'raw']) ??
+      this.pickString(params?.action, ['command', 'cmd']) ??
+      this.pickString(params?.toolInput, ['command', 'cmd']) ??
+      this.pickString(params?.input, ['command', 'cmd']) ??
+      null
+    if (direct) return direct
+    if (typeof params?.command === 'string' && params.command.trim()) return params.command.trim()
+    if (typeof params?.cmd === 'string' && params.cmd.trim()) return params.cmd.trim()
+    return null
+  }
+
+  private pickString(obj: any, keys: string[]): string | null {
+    if (!obj || typeof obj !== 'object') return null
+    for (const key of keys) {
+      const value = obj?.[key]
+      if (typeof value === 'string' && value.trim()) return value.trim()
+    }
+    return null
+  }
+
+  private shorten(value: string, maxLen: number) {
+    if (value.length <= maxLen) return value
+    return `${value.slice(0, maxLen)}...`
   }
 }
 

@@ -2,8 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
 
-import { resolveAtFileReferences } from './atFileResolver'
-
+/** Ensure npm global bin is in PATH so Electron can find gemini CLI. */
 function getGeminiSpawnEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env }
   if (process.platform === 'win32') {
@@ -16,6 +15,8 @@ function getGeminiSpawnEnv(): NodeJS.ProcessEnv {
   return env
 }
 
+import { resolveAtFileReferences } from './atFileResolver'
+
 export type GeminiClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
   | { type: 'assistantDelta'; delta: string }
@@ -24,10 +25,6 @@ export type GeminiClientEvent =
   | { type: 'thinking'; message: string }
 
 const INITIAL_HISTORY_MAX_MESSAGES = 24
-
-const GEMINI_NOISE = /quota|retrying after|rate.?limit|capacity.*exhausted|reset after|YOLO mode|Loaded cached credentials|All tool calls will be/i
-const GEMINI_RETRYABLE = /status 429|Retrying with backoff|Attempt \d+ failed(?!.*Max attempts)|No capacity available/i
-const STDERR_NOISE = /YOLO mode|Loaded cached credentials|All tool calls will be|^\s*at /i
 
 export type GeminiConnectOptions = {
   model: string
@@ -39,13 +36,7 @@ export class GeminiClient extends EventEmitter {
   private model: string = 'gemini-2.0-flash'
   private cwd: string = process.cwd()
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
-  private proc: ChildProcessWithoutNullStreams | null = null
-  private stdoutBuffer: string = ''
-  private stderrAccum: string = ''
-  private turnResolve: (() => void) | null = null
-  private turnReject: ((err: Error) => void) | null = null
-  private assistantText: string = ''
-  private sessionReady: boolean = false
+  private activeProc: ChildProcessWithoutNullStreams | null = null
 
   private normalizeModelId(model: string) {
     const legacyMap: Record<string, string> = {
@@ -68,26 +59,31 @@ export class GeminiClient extends EventEmitter {
     )
   }
 
-  private formatExitError(code: number | null, signal: string | null): string {
-    const stderrTrimmed = this.stderrAccum.trim()
+  private static readonly STDERR_NOISE = /YOLO mode|Loaded cached credentials|All tool calls will be|^\s*at /i
+
+  /** Map Gemini CLI exit codes to user-friendly messages (per Gemini CLI docs) */
+  private formatGeminiExitError(code: number | null, signal: string | null, stderr: string): string {
+    const stderrTrimmed = stderr.trim()
     if (stderrTrimmed) {
       const meaningful = stderrTrimmed
         .split('\n')
         .map((l) => l.trim())
-        .filter((l) => l && !STDERR_NOISE.test(l))
+        .filter((l) => l && !GeminiClient.STDERR_NOISE.test(l))
       const firstLine = meaningful[0] ?? stderrTrimmed.split('\n').find((l) => l.trim()) ?? stderrTrimmed.split('\n')[0]
       return firstLine.length > 300 ? firstLine.slice(0, 300) + '...' : firstLine
     }
     if (signal) return `Gemini CLI was terminated (${signal})`
     const knownCodes: Record<number, string> = {
-      1: 'Gemini CLI failed. Model may be at capacity — try again shortly or switch models.',
+      1: 'Gemini CLI failed. Model may be at capacity — try again in a moment or switch to a different model.',
       41: 'Authentication failed. Run `gemini` in a terminal and log in with Google.',
       42: 'Invalid or missing input. Check your prompt or model selection.',
       44: 'Sandbox error. Try without sandbox or check your Docker/Podman setup.',
       52: 'Invalid config. Check your Gemini CLI settings.json.',
       53: 'Session turn limit reached. Start a new session.',
     }
-    return knownCodes[code ?? 0] ?? `Gemini CLI exited with code ${code ?? 'unknown'}`
+    const msg = knownCodes[code ?? 0]
+    if (msg) return msg
+    return `Gemini CLI exited with code ${code ?? 'unknown'}`
   }
 
   emitEvent(evt: GeminiClientEvent) {
@@ -99,7 +95,6 @@ export class GeminiClient extends EventEmitter {
     const normalized = this.normalizeModelId(requestedModel)
     this.model = normalized
     this.cwd = options.cwd || process.cwd()
-
     if (normalized !== requestedModel) {
       this.emitEvent({
         type: 'status',
@@ -107,253 +102,14 @@ export class GeminiClient extends EventEmitter {
         message: `Model ${requestedModel} mapped to ${normalized} for Gemini CLI.`,
       })
     }
-
     this.emitEvent({ type: 'status', status: 'starting', message: 'Connecting to Gemini CLI...' })
     await this.assertGeminiCliAvailable()
-
     this.history =
       (options.initialHistory?.length ?? 0) > 0
         ? options.initialHistory!.slice(-INITIAL_HISTORY_MAX_MESSAGES)
         : []
-
-    await this.spawnPersistentSession()
+    this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })
     return { threadId: 'gemini' }
-  }
-
-  /**
-   * Spawn the Gemini CLI in interactive mode with stream-json output.
-   * The process stays alive across multiple turns.
-   */
-  private async spawnPersistentSession(): Promise<void> {
-    if (this.proc) {
-      try { this.proc.kill() } catch { /* ignore */ }
-      this.proc = null
-    }
-
-    this.sessionReady = false
-    this.stdoutBuffer = ''
-    this.stderrAccum = ''
-
-    const args = ['-m', this.model, '--yolo', '--output-format', 'stream-json']
-    const spawnEnv = getGeminiSpawnEnv()
-    const spawnOpts = {
-      cwd: this.cwd,
-      stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
-      env: spawnEnv,
-    }
-
-    const proc =
-      process.platform === 'win32'
-        ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
-            ...spawnOpts,
-            windowsHide: true,
-          } as object)
-        : spawn('gemini', args, spawnOpts)
-
-    this.proc = proc
-    proc.stdout.setEncoding('utf8')
-    proc.stderr.setEncoding('utf8')
-
-    proc.stdout.on('data', (chunk: string) => this.handleStdout(chunk))
-    proc.stderr.on('data', (chunk: string) => this.handleStderr(chunk))
-
-    proc.on('error', (err) => {
-      this.sessionReady = false
-      if (this.turnReject) {
-        this.turnReject(err)
-        this.turnResolve = null
-        this.turnReject = null
-      }
-      this.emitEvent({ type: 'status', status: 'error', message: err.message })
-    })
-
-    proc.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
-      this.sessionReady = false
-      this.proc = null
-
-      if (this.stdoutBuffer.trim()) {
-        this.processLine(this.stdoutBuffer.trim())
-        this.stdoutBuffer = ''
-      }
-
-      if (this.turnResolve) {
-        if (code === 0) {
-          this.finishTurn()
-        } else {
-          const errMsg = this.formatExitError(code, signal)
-          this.emitEvent({ type: 'status', status: 'error', message: errMsg })
-          this.turnReject?.(new Error(errMsg))
-          this.turnResolve = null
-          this.turnReject = null
-          this.emitEvent({ type: 'assistantCompleted' })
-        }
-      }
-
-      this.emitEvent({ type: 'status', status: 'closed', message: 'Gemini CLI session ended' })
-    })
-
-    // Wait for the init event to confirm session is alive
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Gemini CLI did not start within 30 seconds'))
-      }, 30_000)
-
-      const onEvent = (evt: GeminiClientEvent) => {
-        if (evt.type === 'status' && evt.status === 'ready') {
-          clearTimeout(timeout)
-          this.removeListener('event', onEvent)
-          resolve()
-        } else if (evt.type === 'status' && evt.status === 'error') {
-          clearTimeout(timeout)
-          this.removeListener('event', onEvent)
-          reject(new Error(evt.message ?? 'Gemini CLI failed to start'))
-        }
-      }
-      this.on('event', onEvent)
-    })
-  }
-
-  private handleStdout(chunk: string) {
-    if (!chunk) return
-    this.stdoutBuffer += chunk
-    const lines = this.stdoutBuffer.split('\n')
-    this.stdoutBuffer = lines.pop() ?? ''
-
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      this.processLine(trimmed)
-    }
-  }
-
-  private processLine(trimmed: string) {
-    let evt: any
-    try {
-      evt = JSON.parse(trimmed)
-    } catch {
-      if (GEMINI_NOISE.test(trimmed)) return
-
-      const short = trimmed.length > 300 ? trimmed.slice(0, 300) + '...' : trimmed
-
-      if (/Max attempts reached/i.test(trimmed)) {
-        this.emitEvent({ type: 'status', status: 'error', message: short })
-      } else if (GEMINI_RETRYABLE.test(trimmed)) {
-        this.emitEvent({ type: 'thinking', message: 'Rate limited — CLI is retrying...' })
-      } else {
-        this.emitEvent({ type: 'thinking', message: short })
-      }
-      return
-    }
-
-    switch (evt.type) {
-      case 'init':
-        this.sessionReady = true
-        this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })
-        break
-
-      case 'message':
-        if (evt.role === 'user') break
-        if ((evt.role === 'assistant' || evt.role === 'model') && typeof evt.content === 'string') {
-          this.emitEvent({ type: 'assistantDelta', delta: evt.content })
-          this.assistantText += evt.content
-          if (evt.delta) {
-            const snippet = evt.content.trim()
-            if (snippet.length > 0 && snippet.length < 200) {
-              this.emitEvent({ type: 'thinking', message: snippet })
-            }
-          }
-        }
-        break
-
-      case 'tool_use':
-      case 'toolUse':
-      case 'functionCall': {
-        const toolName = evt.tool_name ?? evt.name ?? evt.toolName ?? 'tool'
-        const params = evt.parameters ?? evt.args ?? evt.input ?? {}
-        const detail = params.file_path ?? params.command ?? params.dir_path ??
-          params.pattern ?? params.query ?? params.path ?? params.url ?? ''
-        this.emitEvent({ type: 'thinking', message: `Using ${toolName}${detail ? `: ${detail}` : ''}` })
-        break
-      }
-
-      case 'tool_result':
-      case 'toolResult':
-      case 'functionResponse': {
-        const output = typeof evt.output === 'string' ? evt.output
-          : typeof evt.result === 'string' ? evt.result
-          : typeof evt.response === 'string' ? evt.response : ''
-        const status = evt.status === 'success' ? 'done' : (evt.status ?? 'done')
-        const short = output.length > 160 ? output.slice(0, 160) + '...' : output
-        this.emitEvent({ type: 'thinking', message: short || status })
-        break
-      }
-
-      case 'thinking':
-      case 'thought': {
-        const text = typeof evt.content === 'string' ? evt.content
-          : typeof evt.message === 'string' ? evt.message
-          : typeof evt.text === 'string' ? evt.text : ''
-        if (text) {
-          const short = text.length > 200 ? text.slice(0, 200) + '...' : text
-          this.emitEvent({ type: 'thinking', message: short })
-        }
-        break
-      }
-
-      case 'result':
-        if (evt.stats) {
-          this.emitEvent({ type: 'usageUpdated', usage: evt.stats })
-        }
-        this.finishTurn()
-        break
-
-      case 'error': {
-        const raw = evt.message ?? evt.content ?? 'Unknown error'
-        const errMsg = typeof raw === 'string'
-          ? (raw.length > 300 ? raw.slice(0, 300) + '...' : raw)
-          : 'Gemini error'
-        if (GEMINI_NOISE.test(errMsg)) break
-
-        if (/status 429|Retrying with backoff|Attempt \d+ failed/i.test(errMsg)) {
-          this.emitEvent({ type: 'thinking', message: 'Rate limited — CLI is retrying...' })
-        } else {
-          this.emitEvent({ type: 'status', status: 'error', message: errMsg })
-        }
-        break
-      }
-
-      default: {
-        const msg = evt.message ?? evt.content ?? evt.text ?? ''
-        if (typeof msg === 'string' && msg.trim()) {
-          const short = msg.length > 200 ? msg.slice(0, 200) + '...' : msg
-          this.emitEvent({ type: 'thinking', message: `[${evt.type}] ${short}` })
-        }
-      }
-    }
-  }
-
-  private finishTurn() {
-    const text = this.assistantText.trim()
-    if (text) {
-      this.history.push({ role: 'assistant', text })
-    }
-    this.assistantText = ''
-    this.emitEvent({ type: 'assistantCompleted' })
-    if (this.turnResolve) {
-      this.turnResolve()
-      this.turnResolve = null
-      this.turnReject = null
-    }
-  }
-
-  private handleStderr(chunk: string) {
-    this.stderrAccum += chunk
-    const trimmed = chunk.trim()
-    if (!trimmed) return
-    if (!STDERR_NOISE.test(trimmed) && !GEMINI_NOISE.test(trimmed)) {
-      const short = trimmed.length > 200 ? trimmed.slice(0, 200) + '...' : trimmed
-      this.emitEvent({ type: 'thinking', message: short })
-    }
   }
 
   async sendUserMessageWithImages(text: string, localImagePaths: string[]) {
@@ -365,8 +121,10 @@ export class GeminiClient extends EventEmitter {
     const userText = trimmed ? trimmed + imageRefs : imagePaths.map((p) => `@${p}`).join('\n')
     const fileContext = resolveAtFileReferences(userText, this.cwd)
     const fullMessage = userText + fileContext
+    this.history.push({ role: 'user', text: fullMessage })
 
-    await this.sendTurn(fullMessage)
+    const prompt = this.buildGeminiPrompt(fullMessage)
+    await this.runTurn(prompt)
   }
 
   async sendUserMessage(text: string) {
@@ -375,51 +133,246 @@ export class GeminiClient extends EventEmitter {
 
     const fileContext = resolveAtFileReferences(trimmed, this.cwd)
     const fullMessage = trimmed + fileContext
+    this.history.push({ role: 'user', text: fullMessage })
 
-    await this.sendTurn(fullMessage)
+    const prompt = this.buildGeminiPrompt(fullMessage)
+    await this.runTurn(prompt)
   }
 
-  private async sendTurn(message: string): Promise<void> {
-    if (!this.proc || !this.sessionReady) {
-      throw new Error('Gemini session is not active. Reconnect first.')
-    }
+  private async runTurn(prompt: string): Promise<void> {
+    const startTurn = (modelId: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        const args = ['-m', modelId, '--yolo', '--output-format', 'stream-json']
+        const spawnOpts = {
+          cwd: this.cwd,
+          stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
+          env: getGeminiSpawnEnv(),
+        }
+        const proc =
+          process.platform === 'win32'
+            ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
+                ...spawnOpts,
+                windowsHide: true,
+              } as object)
+            : spawn('gemini', args, spawnOpts)
 
-    this.history.push({ role: 'user', text: message })
-    this.assistantText = ''
-    this.stderrAccum = ''
+        this.activeProc = proc
 
-    return new Promise<void>((resolve, reject) => {
-      this.turnResolve = resolve
-      this.turnReject = reject
+        proc.stdin.write(prompt)
+        proc.stdin.end()
 
-      try {
-        this.proc!.stdin.write(message + '\n')
-      } catch (err) {
-        this.turnResolve = null
-        this.turnReject = null
-        reject(err instanceof Error ? err : new Error(String(err)))
+        proc.stdout.setEncoding('utf8')
+        proc.stderr.setEncoding('utf8')
+
+        let assistantText = ''
+        let stderr = ''
+        let resolved = false
+        let stdoutBuffer = ''
+
+        const GEMINI_NOISE = /quota|retrying after|rate.?limit|capacity.*exhausted|reset after|YOLO mode|Loaded cached credentials|All tool calls will be/i
+        const GEMINI_RETRYABLE = /status 429|Retrying with backoff|Attempt \d+ failed(?!.*Max attempts)|No capacity available/i
+
+        proc.stdout.on('data', (chunk: string) => {
+          if (!chunk) return
+          stdoutBuffer += chunk
+          const lines = stdoutBuffer.split('\n')
+          stdoutBuffer = lines.pop() ?? ''
+
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed) continue
+            let evt: any
+            try {
+              evt = JSON.parse(trimmed)
+            } catch {
+              if (GEMINI_NOISE.test(trimmed)) continue
+
+              const short = trimmed.length > 300 ? trimmed.slice(0, 300) + '...' : trimmed
+
+              if (/Max attempts reached/i.test(trimmed)) {
+                this.emitEvent({ type: 'status', status: 'error', message: short })
+              } else if (GEMINI_RETRYABLE.test(trimmed)) {
+                this.emitEvent({ type: 'thinking', message: 'Rate limited — CLI is retrying...' })
+              } else {
+                this.emitEvent({ type: 'thinking', message: short })
+              }
+              continue
+            }
+
+            switch (evt.type) {
+              case 'message':
+                if ((evt.role === 'assistant' || evt.role === 'model') && typeof evt.content === 'string') {
+                  this.emitEvent({ type: 'assistantDelta', delta: evt.content })
+                  assistantText += evt.content
+                  if (evt.delta) {
+                    const snippet = evt.content.trim()
+                    if (snippet.length > 0 && snippet.length < 200) {
+                      this.emitEvent({ type: 'thinking', message: snippet })
+                    }
+                  }
+                }
+                break
+              case 'tool_use':
+              case 'toolUse':
+              case 'functionCall': {
+                const toolName = evt.tool_name ?? evt.name ?? evt.toolName ?? 'tool'
+                const params = evt.parameters ?? evt.args ?? evt.input ?? {}
+                const detail = params.file_path ?? params.command ?? params.dir_path ??
+                  params.pattern ?? params.query ?? params.path ?? params.url ?? ''
+                const desc = `Using ${toolName}${detail ? `: ${detail}` : ''}`
+                this.emitEvent({ type: 'thinking', message: desc })
+                break
+              }
+              case 'tool_result':
+              case 'toolResult':
+              case 'functionResponse': {
+                const status = evt.status === 'success' ? 'done' : (evt.status ?? 'done')
+                const output = typeof evt.output === 'string' ? evt.output
+                  : typeof evt.result === 'string' ? evt.result
+                  : typeof evt.response === 'string' ? evt.response : ''
+                const short = output.length > 160 ? output.slice(0, 160) + '...' : output
+                this.emitEvent({ type: 'thinking', message: short || status })
+                break
+              }
+              case 'thinking':
+              case 'thought': {
+                const text = typeof evt.content === 'string' ? evt.content
+                  : typeof evt.message === 'string' ? evt.message
+                  : typeof evt.text === 'string' ? evt.text : ''
+                if (text) {
+                  const short = text.length > 200 ? text.slice(0, 200) + '...' : text
+                  this.emitEvent({ type: 'thinking', message: short })
+                }
+                break
+              }
+              case 'result':
+                if (evt.stats) {
+                  this.emitEvent({ type: 'usageUpdated', usage: evt.stats })
+                }
+                break
+              case 'error': {
+                const raw = evt.message ?? evt.content ?? 'Unknown error'
+                const errMsg = typeof raw === 'string'
+                  ? (raw.length > 300 ? raw.slice(0, 300) + '...' : raw)
+                  : 'Gemini error'
+                if (GEMINI_NOISE.test(errMsg)) break
+
+                const isRetryable = /status 429|Retrying with backoff|Attempt \d+ failed/i.test(errMsg)
+                if (isRetryable) {
+                  this.emitEvent({ type: 'thinking', message: `Rate limited — CLI is retrying...` })
+                } else {
+                  this.emitEvent({ type: 'status', status: 'error', message: errMsg })
+                }
+                break
+              }
+              case 'init':
+                break
+              default: {
+                const msg = evt.message ?? evt.content ?? evt.text ?? ''
+                if (typeof msg === 'string' && msg.trim()) {
+                  const short = msg.length > 200 ? msg.slice(0, 200) + '...' : msg
+                  this.emitEvent({ type: 'thinking', message: `[${evt.type}] ${short}` })
+                }
+              }
+            }
+          }
+        })
+
+        proc.stderr.on('data', (chunk: string) => {
+          stderr += chunk
+          const trimmed = chunk.trim()
+          if (!trimmed) return
+          if (!GEMINI_NOISE.test(trimmed)) {
+            const short = trimmed.length > 200 ? trimmed.slice(0, 200) + '...' : trimmed
+            this.emitEvent({ type: 'thinking', message: short })
+          }
+        })
+
+        proc.on('error', (err) => {
+          if (!resolved) {
+            resolved = true
+            reject(err)
+          }
+        })
+        proc.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+          this.activeProc = null
+          if (stdoutBuffer.trim()) {
+            try {
+              const evt: any = JSON.parse(stdoutBuffer.trim())
+              if (evt.type === 'message' && evt.role === 'assistant' && typeof evt.content === 'string') {
+                this.emitEvent({ type: 'assistantDelta', delta: evt.content })
+                assistantText += evt.content
+              } else if (evt.type === 'result' && evt.stats) {
+                this.emitEvent({ type: 'usageUpdated', usage: evt.stats })
+              }
+            } catch {
+              // ignore
+            }
+          }
+
+          if (!resolved) {
+            resolved = true
+            if (code === 0) resolve()
+            else reject(new Error(this.formatGeminiExitError(code, signal, stderr)))
+          }
+          if (code === 0) {
+            this.history.push({ role: 'assistant', text: assistantText.trim() || assistantText })
+            this.emitEvent({ type: 'assistantCompleted' })
+          } else {
+            this.emitEvent({ type: 'status', status: 'error', message: this.formatGeminiExitError(code, signal, stderr) })
+            this.emitEvent({ type: 'assistantCompleted' })
+          }
+        })
+      })
+
+    try {
+      await startTurn(this.model)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (this.isModelNotFoundError(msg) && this.model !== 'gemini-2.0-flash') {
+        try {
+          this.emitEvent({
+            type: 'status',
+            status: 'starting',
+            message: `Model "${this.model}" not found. Retrying with gemini-2.0-flash...`,
+          })
+          this.model = 'gemini-2.0-flash'
+          await startTurn(this.model)
+        } catch (retryErr: unknown) {
+          const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr)
+          this.emitEvent({ type: 'status', status: 'error', message: retryMsg })
+          this.emitEvent({ type: 'assistantCompleted' })
+        }
+      } else {
+        this.emitEvent({ type: 'status', status: 'error', message: msg })
+        this.emitEvent({ type: 'assistantCompleted' })
       }
-    })
+    }
   }
 
   async interruptActiveTurn() {
-    if (this.turnResolve) {
-      this.finishTurn()
+    if (!this.activeProc) return
+    try {
+      this.activeProc.kill()
+    } catch {
+      // ignore
+    } finally {
+      this.activeProc = null
     }
   }
 
   async close() {
-    this.turnResolve = null
-    this.turnReject = null
-    if (this.proc) {
-      try { this.proc.kill() } catch { /* ignore */ }
-      this.proc = null
-    }
-    this.sessionReady = false
+    await this.interruptActiveTurn()
     this.history = []
-    this.assistantText = ''
-    this.stdoutBuffer = ''
-    this.stderrAccum = ''
+  }
+
+  private buildGeminiPrompt(userMessage: string): string {
+    const lastAssistant = [...this.history].reverse().find((m) => m.role === 'assistant')
+    const continuationHint = lastAssistant
+      ? `\n\nFor context, your previous response was:\n${lastAssistant.text.slice(0, 1200)}\n\n`
+      : ''
+
+    return `${continuationHint}${userMessage}`
   }
 
   private async assertGeminiCliAvailable() {

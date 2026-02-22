@@ -75,6 +75,11 @@ interface Window {
         permissionMode?: 'verify-first' | 'proceed-always'
         approvalPolicy?: 'on-request' | 'never'
         sandbox?: 'read-only' | 'workspace-write'
+        allowedCommandPrefixes?: string[]
+        allowedAutoReadPrefixes?: string[]
+        allowedAutoWritePrefixes?: string[]
+        deniedAutoReadPrefixes?: string[]
+        deniedAutoWritePrefixes?: string[]
         provider?: 'codex' | 'claude' | 'gemini' | 'openrouter'
         modelConfig?: Record<string, string>
         initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
@@ -118,16 +123,43 @@ interface Window {
       showOperationTrace: boolean
       showThinkingProgress: boolean
       colors: {
-        debugNotes: string
-        activityUpdates: string
-        reasoningUpdates: string
-        operationTrace: string
-        thinkingProgress: string
+        light: {
+          debugNotes: string
+          activityUpdates: string
+          reasoningUpdates: string
+          operationTrace: string
+          thinkingProgress: string
+        }
+        dark: {
+          debugNotes: string
+          activityUpdates: string
+          reasoningUpdates: string
+          operationTrace: string
+          thinkingProgress: string
+        }
       }
     }>
     openRuntimeLog(): Promise<{
       ok: boolean
       path: string
+      error?: string
+    }>
+    openDiagnosticsPath(target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig'): Promise<{
+      ok: boolean
+      path: string
+      error?: string
+    }>
+    readDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig'): Promise<{
+      ok: boolean
+      path: string
+      content?: string
+      writable?: boolean
+      error?: string
+    }>
+    writeDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig', content: string): Promise<{
+      ok: boolean
+      path: string
+      size?: number
       error?: string
     }>
     openExternalUrl(url: string): Promise<{
@@ -137,6 +169,13 @@ interface Window {
     interrupt(agentWindowId: string): Promise<void>
     disconnect(agentWindowId: string): Promise<void>
     openFolderDialog(): Promise<string | null>
+    openTerminalInWorkspace(workspaceRoot: string): Promise<{ ok: boolean; error?: string }>
+    terminalSpawn(cwd: string): Promise<{ ok: boolean; error?: string }>
+    terminalWrite(data: string): void
+    terminalResize(cols: number, rows: number): Promise<void>
+    terminalDestroy(): Promise<void>
+    onTerminalData(cb: (data: string) => void): () => void
+    onTerminalExit(cb: () => void): () => void
     writeWorkspaceConfig(folderPath: string): Promise<boolean>
     claimWorkspace(workspaceRoot: string): Promise<WorkspaceLockAcquireResult>
     releaseWorkspace(workspaceRoot: string): Promise<boolean>
@@ -180,6 +219,11 @@ interface Window {
       checkedAt: number
       error?: string
     }>
+    gitCommit(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }>
+    gitPush(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }>
+    gitDeploy(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }>
+    gitBuild(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }>
+    gitRelease(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }>
     setRecentWorkspaces(list: string[]): void
     setEditorMenuState(enabled: boolean): void
     findInPage(text: string): Promise<void>
@@ -200,6 +244,10 @@ interface Window {
     }>
     onEvent(cb: (payload: { agentWindowId: string; evt: any }) => void): () => void
     onMenu(cb: (payload: { action: string; path?: string }) => void): () => void
+    zoomIn?(): void
+    zoomOut?(): void
+    resetZoom?(): void
+    getZoomLevel?(): number
   }
   // Back-compat alias.
   fireharness: Window['agentOrchestrator']

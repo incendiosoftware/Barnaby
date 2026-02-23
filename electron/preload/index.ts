@@ -173,6 +173,27 @@ const api = {
       error?: string
     }>
   },
+  getOrchestratorLicenseKeyState() {
+    return ipcRenderer.invoke('agentorchestrator:getOrchestratorLicenseKeyState') as Promise<{ hasKey: boolean }>
+  },
+  setOrchestratorLicenseKey(key: string) {
+    return ipcRenderer.invoke('agentorchestrator:setOrchestratorLicenseKey', key) as Promise<{ ok: boolean; hasKey: boolean }>
+  },
+  repairStartMenuShortcut() {
+    return ipcRenderer.invoke('barnaby:repairStartMenuShortcut') as Promise<{ ok: boolean; error?: string }>
+  },
+  openPluginsFolder() {
+    return ipcRenderer.invoke('agentorchestrator:openPluginsFolder') as Promise<{ ok: boolean; error?: string }>
+  },
+  installOrchestratorPlugin() {
+    return ipcRenderer.invoke('agentorchestrator:installOrchestratorPlugin') as Promise<{ ok: boolean; error?: string }>
+  },
+  uninstallOrchestratorPlugin() {
+    return ipcRenderer.invoke('agentorchestrator:uninstallOrchestratorPlugin') as Promise<{ ok: boolean; error?: string }>
+  },
+  syncOrchestratorSettings(settings: { orchestratorModel?: string; workerProvider?: string; workerModel?: string; maxParallelPanels?: number; maxTaskAttempts?: number }) {
+    return ipcRenderer.invoke('agentorchestrator:syncOrchestratorSettings', settings)
+  },
   interrupt(agentWindowId: string) {
     return ipcRenderer.invoke('agentorchestrator:interrupt', agentWindowId) as Promise<void>
   },

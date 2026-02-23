@@ -143,6 +143,15 @@ interface Window {
       ok: boolean
       error?: string
     }>
+    getOrchestratorLicenseKeyState(): Promise<{ hasKey: boolean }>
+    setOrchestratorLicenseKey(key: string): Promise<{ ok: boolean; hasKey: boolean }>
+    repairStartMenuShortcut(): Promise<{ ok: boolean; error?: string }>
+    openPluginsFolder(): Promise<{ ok: boolean; error?: string }>
+    installOrchestratorPlugin(): Promise<{ ok: boolean; error?: string }>
+    uninstallOrchestratorPlugin(): Promise<{ ok: boolean; error?: string }>
+    syncOrchestratorSettings(settings: { orchestratorModel?: string; workerProvider?: string; workerModel?: string; maxParallelPanels?: number; maxTaskAttempts?: number }): Promise<void>
+    getLoadedPlugins(): Promise<Array<{ pluginId: string; displayName: string; version: string; active: boolean }>>
+    onPluginsLoaded(cb: () => void): () => void
     interrupt(agentWindowId: string): Promise<void>
     disconnect(agentWindowId: string): Promise<void>
     openFolderDialog(): Promise<string | null>

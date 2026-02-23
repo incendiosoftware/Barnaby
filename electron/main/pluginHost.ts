@@ -24,9 +24,11 @@ import type {
   WorkspaceTreeNode,
   DockPaneProps,
 } from './pluginHostTypes'
+import { readOrchestratorSecrets, readOrchestratorSettings } from './orchestratorStorage'
 
 const PLUGIN_DISCOVERY_PATHS = [
   'node_modules/@barnaby',
+  'node_modules/@barnaby.build',
 ]
 
 const PLUGIN_HEARTBEAT_CHECK_INTERVAL_MS = 10_000
@@ -42,6 +44,7 @@ let mainWindow: BrowserWindow | null = null
 const loadedPlugins = new Map<PluginId, PluginEntry>()
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let workspaceRootGetter: (() => string) | null = null
+let appStorageDirGetter: (() => string) | null = null
 
 const panelEventHandlers = new Map<string, Set<(evt: AgentEvent) => void>>()
 const anyPanelEventHandlers = new Set<(panelId: string, evt: AgentEvent) => void>()
@@ -171,6 +174,19 @@ function buildHostApi(): BarnabyPluginHostApi {
     },
 
     getSetting(key: string): unknown {
+      const appStorageDir = appStorageDirGetter?.()
+      if (appStorageDir) {
+        const appSettings = readOrchestratorSettings(() => appStorageDir)
+        const appKeyMap: Record<string, keyof typeof appSettings> = {
+          'orchestrator.orchestratorModel': 'orchestratorModel',
+          'orchestrator.workerProvider': 'workerProvider',
+          'orchestrator.workerModel': 'workerModel',
+          'orchestrator.maxParallelPanels': 'maxParallelPanels',
+          'orchestrator.maxTaskAttempts': 'maxTaskAttempts',
+        }
+        const appKey = appKeyMap[key]
+        if (appKey && appSettings[appKey] !== undefined) return appSettings[appKey]
+      }
       try {
         const root = workspaceRootGetter?.() ?? ''
         if (!root) return undefined
@@ -199,6 +215,14 @@ function buildHostApi(): BarnabyPluginHostApi {
       } catch {
         // best-effort
       }
+    },
+
+    getOrchestratorLicenseKeyState(): { hasKey: boolean } {
+      const appStorageDir = appStorageDirGetter?.()
+      if (!appStorageDir) return { hasKey: false }
+      const secrets = readOrchestratorSecrets(() => appStorageDir)
+      const key = (secrets.licenseKey ?? '').trim()
+      return { hasKey: key.length > 0 }
     },
 
     log(pluginId: PluginId, level: 'info' | 'warn' | 'error', message: string): void {
@@ -279,10 +303,34 @@ function discoverPlugins(appRoot: string): string[] {
     }
   }
 
+  for (const scope of ['@barnaby', '@barnaby.build']) {
+    const npmScopedDir = path.join(homePluginDir, 'node_modules', scope)
+    if (!fs.existsSync(npmScopedDir)) continue
+    try {
+      const entries = fs.readdirSync(npmScopedDir, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
+        const pkgJsonPath = path.join(npmScopedDir, entry.name, 'package.json')
+        if (!fs.existsSync(pkgJsonPath)) continue
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'))
+          if (pkg.barnaby?.plugin === true) {
+            found.push(path.join(npmScopedDir, entry.name))
+          }
+        } catch {
+          // skip
+        }
+      }
+    } catch {
+      // not readable
+    }
+  }
+
   return found
 }
 
-export async function initializePluginHost(appRoot: string): Promise<void> {
+export async function initializePluginHost(appRoot: string, getAppStorageDirPath?: () => string): Promise<void> {
+  appStorageDirGetter = getAppStorageDirPath ?? null
   console.log(`[pluginHost] Initializing plugin host (appRoot: ${appRoot})`)
   const pluginPaths = discoverPlugins(appRoot)
   console.log(`[pluginHost] Discovered ${pluginPaths.length} plugin(s): ${pluginPaths.join(', ') || '(none)'}`)

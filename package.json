@@ -1,12 +1,26 @@
 {
-  "name": "barnaby",
+  "name": "@barnaby.build/barnaby",
   "productName": "Barnaby",
-  "version": "0.0.125",
+  "version": "0.0.138",
   "main": "dist-electron/main/index.js",
+  "bin": {
+    "barnaby": "bin/barnaby.cjs"
+  },
+  "files": [
+    "dist",
+    "dist-electron",
+    "public",
+    "build",
+    "bin",
+    "scripts",
+    "package.json"
+  ],
   "description": "Barnaby: local agent loops without API keys.",
   "author": "stuart",
   "license": "MIT",
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "debug": {
     "env": {
       "VITE_DEV_SERVER_URL": "http://127.0.0.1:5173/"
@@ -14,17 +28,17 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=20 <25"
+    "node": ">=20 <27"
   },
   "scripts": {
     "bump:version": "node scripts/bump-version.mjs",
-    "predev": "node -e \"const major = Number(process.versions.node.split('.')[0]); if (major < 20 || major >= 26) { console.error('\\nUnsupported Node.js version ' + process.version + '.\\nUse Node >=20 and <26 (recommended: Node 22 LTS).\\n'); process.exit(1); }\"",
+    "predev": "node -e \"const major = Number(process.versions.node.split('.')[0]); if (major < 20 || major >= 27) { console.error('\\nUnsupported Node.js version ' + process.version + '.\\nUse Node >=20 and <27 (recommended: Node 22 LTS).\\n'); process.exit(1); }\"",
     "dev": "vite",
     "dev:clean": "node scripts/dev-clean.mjs && npm run dev",
     "build:dist:raw": "tsc && vite build",
     "build:dist": "npm run bump:version && npm run build:dist:raw",
     "build:portable:raw": "npm run build:dist:raw && electron-builder --win portable",
-    "build": "npm run build:portable:raw",
+    "build": "npm run build:portable",
     "build:portable": "npm run build:dist && electron-builder --win portable",
     "package": "npm run build:portable",
     "deploy": "npm run package",
@@ -32,6 +46,8 @@
     "release:notes": "node scripts/create-release-notes.mjs",
     "release:prepare": "npm run bump:version && npm run release:notes && npm run build:portable:raw",
     "publish": "gh workflow run release.yml -f releasable=true --ref main",
+    "postinstall": "node scripts/shortcut-win.mjs",
+    "publish:npm": "npm run build && npm publish",
     "package:win": "npm run build:dist && electron-packager . Barnaby --platform=win32 --arch=x64 --out=release/0.0.1/packaged --overwrite --asar --prune=true --icon=build/icon.png",
     "preview": "vite preview",
     "pretest": "vite build --mode=test",
@@ -55,12 +71,16 @@
     "@uiw/react-codemirror": "^4.25.4",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^5.3.0",
+    "barnaby": "^0.2.0",
     "electron-updater": "^6.3.9",
     "node-pty": "^1.0.0",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.6.4",
     "react-syntax-highlighter": "^16.1.0",
     "remark-gfm": "^4.0.1"
+  },
+  "optionalDependencies": {
+    "electron": "^40.6.0"
   },
   "devDependencies": {
     "@electron/packager": "^19.0.5",

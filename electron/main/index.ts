@@ -23,6 +23,7 @@ import { ClaudeClient, type ClaudeClientEvent } from './claudeClient'
 import { OpenRouterClient, type OpenRouterClientEvent } from './openRouterClient'
 import { OpenAIClient, type OpenAIClientEvent } from './openaiClient'
 import { initializePluginHost, shutdownPluginHost, setPluginHostWindow, setWorkspaceRootGetter, notifyPluginPanelEvent, notifyPluginPanelTurnComplete, getLoadedPlugins } from './pluginHost'
+import { readOrchestratorSecrets, writeOrchestratorSecrets, writeOrchestratorSettings, type OrchestratorSettingsData } from './orchestratorStorage'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
 const WORKSPACE_LOCK_DIRNAME = '.barnaby'
@@ -607,6 +608,7 @@ function setProviderApiKey(providerId: string, apiKey: string) {
   writeProviderSecrets(secrets)
   return { ok: true, hasKey: key.length > 0 }
 }
+
 
 function importProviderApiKeyFromEnv(providerId: string) {
   const envVarByProvider: Record<string, string> = {
@@ -2192,7 +2194,7 @@ app.whenReady().then(async () => {
       for (const [root] of ownedWorkspaceLocks) return root
       return ''
     })
-    initializePluginHost(app.getAppPath())
+    initializePluginHost(app.getAppPath(), getAppStorageDirPath)
       .then(() => {
         win?.webContents.send('barnaby:plugin-host:plugins-loaded')
       })
@@ -2304,7 +2306,7 @@ ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: st
   let text = typeof payload?.text === 'string' ? payload.text : ''
   const imagePaths = Array.isArray(payload?.imagePaths) ? payload.imagePaths.filter((p): p is string => typeof p === 'string' && p.trim().length > 0) : []
   const priorMessages = Array.isArray(payload?.priorMessagesForContext) ? payload.priorMessagesForContext : []
-  if (priorMessages.length > 0) {
+  if (priorMessages.length > 0 && client instanceof CodexAppServerClient) {
     const prefix = formatPriorMessagesForContext(priorMessages.slice(-24))
     if (prefix) text = prefix + text
   }
@@ -2400,6 +2402,95 @@ ipcMain.handle('agentorchestrator:openExternalUrl', async (_evt, rawUrl: string)
     return { ok: true as const }
   } catch (err) {
     return { ok: false as const, error: errorMessage(err) }
+  }
+})
+
+ipcMain.handle('agentorchestrator:getOrchestratorLicenseKeyState', async () => {
+  const secrets = readOrchestratorSecrets(getAppStorageDirPath)
+  const key = (secrets.licenseKey ?? '').trim()
+  return { hasKey: key.length > 0 }
+})
+
+ipcMain.handle('agentorchestrator:setOrchestratorLicenseKey', async (_evt, rawKey: unknown) => {
+  const key = typeof rawKey === 'string' ? rawKey.trim() : ''
+  const secrets = readOrchestratorSecrets(getAppStorageDirPath)
+  secrets.licenseKey = key || undefined
+  writeOrchestratorSecrets(getAppStorageDirPath, secrets)
+  return { ok: true, hasKey: key.length > 0 }
+})
+
+ipcMain.handle('agentorchestrator:syncOrchestratorSettings', async (_evt, raw: unknown) => {
+  const data = raw as OrchestratorSettingsData
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return
+  const sanitized: OrchestratorSettingsData = {}
+  if (typeof data.orchestratorModel === 'string') sanitized.orchestratorModel = data.orchestratorModel
+  if (typeof data.workerProvider === 'string') sanitized.workerProvider = data.workerProvider
+  if (typeof data.workerModel === 'string') sanitized.workerModel = data.workerModel
+  if (typeof data.maxParallelPanels === 'number' && data.maxParallelPanels >= 1 && data.maxParallelPanels <= 8) sanitized.maxParallelPanels = data.maxParallelPanels
+  if (typeof data.maxTaskAttempts === 'number' && data.maxTaskAttempts >= 1 && data.maxTaskAttempts <= 10) sanitized.maxTaskAttempts = data.maxTaskAttempts
+  writeOrchestratorSettings(getAppStorageDirPath, sanitized)
+})
+
+ipcMain.handle('barnaby:repairStartMenuShortcut', async () => {
+  if (process.platform !== 'win32') return { ok: false, error: 'Windows only' }
+  try {
+    const scriptPath = path.join(app.getAppPath(), 'scripts', 'shortcut-win.mjs')
+    if (!fs.existsSync(scriptPath)) return { ok: false, error: 'Shortcut script not found' }
+    const { execSync } = await import('node:child_process')
+    execSync(`node "${scriptPath}" --force`, { stdio: 'pipe', env: { ...process.env } })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) }
+  }
+})
+
+ipcMain.handle('agentorchestrator:openPluginsFolder', async () => {
+  const pluginsDir = path.join(os.homedir(), '.barnaby', 'plugins')
+  try {
+    if (!fs.existsSync(pluginsDir)) {
+      fs.mkdirSync(pluginsDir, { recursive: true })
+    }
+    const err = await shell.openPath(pluginsDir)
+    return err ? { ok: false, error: err } : { ok: true }
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) }
+  }
+})
+
+ipcMain.handle('agentorchestrator:installOrchestratorPlugin', async () => {
+  const pluginsDir = path.join(os.homedir(), '.barnaby', 'plugins')
+  try {
+    if (!fs.existsSync(pluginsDir)) {
+      fs.mkdirSync(pluginsDir, { recursive: true })
+    }
+    const pkgPath = path.join(pluginsDir, 'package.json')
+    if (!fs.existsSync(pkgPath)) {
+      const { execSync } = await import('node:child_process')
+      execSync('npm init -y', { cwd: pluginsDir, stdio: 'pipe' })
+    }
+    const { execSync } = await import('node:child_process')
+    execSync('npm install "@barnaby.build/orchestrator"', { cwd: pluginsDir, stdio: 'pipe' })
+    await shutdownPluginHost()
+    await initializePluginHost(app.getAppPath(), getAppStorageDirPath)
+    win?.webContents.send('barnaby:plugin-host:plugins-loaded')
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) }
+  }
+})
+
+ipcMain.handle('agentorchestrator:uninstallOrchestratorPlugin', async () => {
+  const pluginsDir = path.join(os.homedir(), '.barnaby', 'plugins')
+  try {
+    if (!fs.existsSync(pluginsDir)) return { ok: true }
+    const { execSync } = await import('node:child_process')
+    execSync('npm uninstall "@barnaby.build/orchestrator"', { cwd: pluginsDir, stdio: 'pipe' })
+    await shutdownPluginHost()
+    await initializePluginHost(app.getAppPath(), getAppStorageDirPath)
+    win?.webContents.send('barnaby:plugin-host:plugins-loaded')
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) }
   }
 })
 
@@ -2930,6 +3021,7 @@ function setAppMenu() {
         { label: 'Models', click: () => sendMenuAction('openModelSetup') },
         { label: 'Preferences', accelerator: 'CmdOrCtrl+,', click: () => sendMenuAction('openPreferences') },
         { label: 'Agents', click: () => sendMenuAction('openAgents') },
+        { label: 'Orchestrator', click: () => sendMenuAction('openOrchestrator') },
         { label: 'Diagnostics', click: () => sendMenuAction('openDiagnostics') },
       ],
     },

@@ -63,21 +63,8 @@ export class PermissionManager {
       return
     }
 
-    // Extract binary names from command prefixes to allow execution
-    const allowedBinaries = new Set<string>()
-    if (this.allowedCommandPrefixes.length === 0) {
-      // If the user specified file rules but NO command rules,
-      // we can't easily "Allow All Shells" in cli.json safely.
-      // We will default to allowing common build tools if the list is empty but other rules exist.
-      allowedBinaries.add('Shell(npm)')
-      allowedBinaries.add('Shell(node)')
-      allowedBinaries.add('Shell(git)')
-    } else {
-      for (const prefix of this.allowedCommandPrefixes) {
-        const parts = prefix.trim().split(/\s+/)
-        if (parts[0]) allowedBinaries.add(`Shell(${parts[0]})`)
-      }
-    }
+    // Resolve shell permissions from explicit prefixes plus required toolchain companions.
+    const allowedBinaries = this.buildAllowedShellPermissions()
 
     // Build read/write rules
     const readRules =
@@ -95,7 +82,7 @@ export class PermissionManager {
 
     const config = {
       permissions: {
-        allow: [...Array.from(allowedBinaries), ...readRules, ...writeRules],
+        allow: [...allowedBinaries, ...readRules, ...writeRules],
         deny: [...deniedRead, ...deniedWrite],
       },
     }
@@ -109,6 +96,52 @@ export class PermissionManager {
       // Best effort
       console.error(`Failed to write permission config: ${String(err)}`)
     }
+  }
+
+  private buildAllowedShellPermissions(): string[] {
+    const binaries = new Set<string>()
+    const add = (binary: string) => {
+      const value = binary.trim()
+      if (!value) return
+      binaries.add(`Shell(${value})`)
+    }
+    const addCompanionBinaries = () => {
+      add('node')
+      add('esbuild')
+      add('esbuild.exe')
+      if (process.platform === 'win32') {
+        add('cmd')
+        add('cmd.exe')
+      } else {
+        add('sh')
+        add('bash')
+      }
+    }
+    const packageManagers = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun'])
+
+    if (this.allowedCommandPrefixes.length === 0) {
+      // With an empty command prefix list we keep command execution broadly available.
+      add('npm')
+      add('npx')
+      add('pnpm')
+      add('yarn')
+      add('bun')
+      add('git')
+      addCompanionBinaries()
+      return Array.from(binaries)
+    }
+
+    for (const prefix of this.allowedCommandPrefixes) {
+      const parts = prefix.trim().split(/\s+/)
+      const primary = parts[0]
+      if (!primary) continue
+      add(primary)
+      if (packageManagers.has(primary.toLowerCase())) {
+        addCompanionBinaries()
+      }
+    }
+
+    return Array.from(binaries)
   }
 
   checkPathAccess(pathStr: string, mode: 'read' | 'write'): { allowed: boolean; error?: string } {

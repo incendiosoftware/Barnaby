@@ -15,6 +15,9 @@ export default defineConfig(({ command }) => {
 
   return {
     base: './',
+    build: {
+      chunkSizeWarningLimit: 3000,
+    },
     resolve: {
       alias: {
         '@': path.join(__dirname, 'src')

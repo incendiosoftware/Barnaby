@@ -181,6 +181,14 @@ type ApplicationSettings = {
   editorWordWrap: boolean
 }
 
+type OrchestratorSettings = {
+  orchestratorModel: string
+  workerProvider: string
+  workerModel: string
+  maxParallelPanels: number
+  maxTaskAttempts: number
+}
+
 
 type PersistedEditorPanelState = {
   id?: unknown
@@ -323,7 +331,7 @@ type AvailableCatalogModels = {
   openrouter: { id: string; displayName: string }[]
 }
 
-type AppSettingsView = 'connectivity' | 'models' | 'preferences' | 'agents' | 'diagnostics'
+type AppSettingsView = 'connectivity' | 'models' | 'preferences' | 'agents' | 'orchestrator' | 'diagnostics'
 
 type ModelCatalogRefreshStatus = {
   kind: 'success' | 'error'
@@ -463,7 +471,7 @@ const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-w
 const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
 const STATUS_SYMBOL_ICON_CLASS = 'h-[15px] w-[15px] text-neutral-600 dark:text-neutral-300'
 const CONNECTIVITY_PROVIDERS: ConnectivityProvider[] = ['codex', 'claude', 'gemini', 'openrouter']
-const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'preferences', 'agents', 'diagnostics']
+const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'preferences', 'agents', 'orchestrator', 'diagnostics']
 const PANEL_COMPLETION_NOTICE_MS = 15000
 const ONGOING_WORK_LABELS = new Set([
   'Task step complete',
@@ -864,6 +872,7 @@ const SETUP_WIZARD_DONE_STORAGE_KEY = 'agentorchestrator.setupWizardDone'
 const EXPLORER_PREFS_STORAGE_KEY = 'agentorchestrator.explorerPrefsByWorkspace'
 const CHAT_HISTORY_STORAGE_KEY = 'agentorchestrator.chatHistory'
 const APP_SETTINGS_STORAGE_KEY = 'agentorchestrator.appSettings'
+const ORCHESTRATOR_SETTINGS_STORAGE_KEY = 'agentorchestrator.orchestratorSettings'
 const MIN_FONT_SCALE = 0.75
 const MAX_FONT_SCALE = 1.5
 const FONT_SCALE_STEP = 0.05
@@ -2108,6 +2117,11 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
     for (const [key, value] of Object.entries(parsed)) {
       const path = typeof value?.path === 'string' && value.path.trim() ? value.path : key
       if (!path) continue
+      const hasAllowedCommandPrefixes = Array.isArray((value as Partial<WorkspaceSettings>)?.allowedCommandPrefixes)
+      const hasAllowedAutoReadPrefixes = Array.isArray((value as Partial<WorkspaceSettings>)?.allowedAutoReadPrefixes)
+      const hasAllowedAutoWritePrefixes = Array.isArray((value as Partial<WorkspaceSettings>)?.allowedAutoWritePrefixes)
+      const hasDeniedAutoReadPrefixes = Array.isArray((value as Partial<WorkspaceSettings>)?.deniedAutoReadPrefixes)
+      const hasDeniedAutoWritePrefixes = Array.isArray((value as Partial<WorkspaceSettings>)?.deniedAutoWritePrefixes)
       const allowedCommandPrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedCommandPrefixes)
       const allowedAutoReadPrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedAutoReadPrefixes)
       const allowedAutoWritePrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedAutoWritePrefixes)
@@ -2121,11 +2135,11 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
           value?.sandbox === 'read-only'
             ? value.sandbox
             : 'workspace-write',
-        allowedCommandPrefixes: allowedCommandPrefixes.length > 0 ? allowedCommandPrefixes : [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
-        allowedAutoReadPrefixes: allowedAutoReadPrefixes.length > 0 ? allowedAutoReadPrefixes : [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
-        allowedAutoWritePrefixes: allowedAutoWritePrefixes.length > 0 ? allowedAutoWritePrefixes : [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
-        deniedAutoReadPrefixes: deniedAutoReadPrefixes.length > 0 ? deniedAutoReadPrefixes : [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
-        deniedAutoWritePrefixes: deniedAutoWritePrefixes.length > 0 ? deniedAutoWritePrefixes : [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
+        allowedCommandPrefixes: hasAllowedCommandPrefixes ? allowedCommandPrefixes : [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+        allowedAutoReadPrefixes: hasAllowedAutoReadPrefixes ? allowedAutoReadPrefixes : [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
+        allowedAutoWritePrefixes: hasAllowedAutoWritePrefixes ? allowedAutoWritePrefixes : [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
+        deniedAutoReadPrefixes: hasDeniedAutoReadPrefixes ? deniedAutoReadPrefixes : [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+        deniedAutoWritePrefixes: hasDeniedAutoWritePrefixes ? deniedAutoWritePrefixes : [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
       }
     }
     for (const p of list) {
@@ -2170,6 +2184,34 @@ function getInitialExplorerPrefsByWorkspace(): Record<string, ExplorerPrefs> {
     return parsed && typeof parsed === 'object' ? parsed : {}
   } catch {
     return {}
+  }
+}
+
+function getInitialOrchestratorSettings(): OrchestratorSettings {
+  const defaults: OrchestratorSettings = {
+    orchestratorModel: '',
+    workerProvider: 'codex',
+    workerModel: '',
+    maxParallelPanels: 2,
+    maxTaskAttempts: 3,
+  }
+  try {
+    const raw = globalThis.localStorage?.getItem(ORCHESTRATOR_SETTINGS_STORAGE_KEY)
+    if (!raw) return defaults
+    const parsed = JSON.parse(raw) as Partial<OrchestratorSettings>
+    return {
+      orchestratorModel: typeof parsed?.orchestratorModel === 'string' ? parsed.orchestratorModel : defaults.orchestratorModel,
+      workerProvider: typeof parsed?.workerProvider === 'string' ? parsed.workerProvider : defaults.workerProvider,
+      workerModel: typeof parsed?.workerModel === 'string' ? parsed.workerModel : defaults.workerModel,
+      maxParallelPanels: typeof parsed?.maxParallelPanels === 'number' && parsed.maxParallelPanels >= 1 && parsed.maxParallelPanels <= 8
+        ? parsed.maxParallelPanels
+        : defaults.maxParallelPanels,
+      maxTaskAttempts: typeof parsed?.maxTaskAttempts === 'number' && parsed.maxTaskAttempts >= 1 && parsed.maxTaskAttempts <= 10
+        ? parsed.maxTaskAttempts
+        : defaults.maxTaskAttempts,
+    }
+  } catch {
+    return defaults
   }
 }
 
@@ -2235,6 +2277,7 @@ export default function App() {
   const [providerAuthByName, setProviderAuthByName] = useState<Partial<Record<string, ProviderAuthStatus>>>({})
   const [providerAuthLoadingByName, setProviderAuthLoadingByName] = useState<Record<string, boolean>>({})
   const [providerAuthActionByName, setProviderAuthActionByName] = useState<Record<string, string | null>>({})
+  const [providerPanelOpenByName, setProviderPanelOpenByName] = useState<Record<string, boolean>>({})
   const [providerApiKeyDraftByName, setProviderApiKeyDraftByName] = useState<Record<string, string>>({})
   const [providerApiKeyStateByName, setProviderApiKeyStateByName] = useState<Record<string, boolean>>({})
   const [modelConfig, setModelConfig] = useState<ModelConfig>(() => getInitialModelConfig())
@@ -2253,6 +2296,11 @@ export default function App() {
   })
   const [dockTab, setDockTab] = useState<'orchestrator' | 'explorer' | 'git' | 'settings'>('explorer')
   const [loadedPlugins, setLoadedPlugins] = useState<Array<{ pluginId: string; displayName: string; version: string; active: boolean }> | null>(null)
+  const [orchestratorSettings, setOrchestratorSettings] = useState<OrchestratorSettings>(() => getInitialOrchestratorSettings())
+  const [orchestratorLicenseKeyState, setOrchestratorLicenseKeyState] = useState<{ hasKey: boolean } | null>(null)
+  const [orchestratorLicenseKeyDraft, setOrchestratorLicenseKeyDraft] = useState('')
+  const [orchestratorInstallStatus, setOrchestratorInstallStatus] = useState<string | null>(null)
+  const [repairShortcutStatus, setRepairShortcutStatus] = useState<string | null>(null)
   const [workspaceDockSide, setWorkspaceDockSide] = useState<WorkspaceDockSide>(() => getInitialWorkspaceDockSide())
   const [workspaceTree, setWorkspaceTree] = useState<WorkspaceTreeNode[]>([])
   const [workspaceTreeLoading, setWorkspaceTreeLoading] = useState(false)
@@ -2506,6 +2554,11 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(PROVIDER_REGISTRY_STORAGE_KEY, JSON.stringify(providerRegistry))
   }, [providerRegistry])
+
+  useEffect(() => {
+    localStorage.setItem(ORCHESTRATOR_SETTINGS_STORAGE_KEY, JSON.stringify(orchestratorSettings))
+    void api.syncOrchestratorSettings?.(orchestratorSettings)
+  }, [api, orchestratorSettings])
 
   useEffect(() => {
     localStorage.setItem(EXPLORER_PREFS_STORAGE_KEY, JSON.stringify(explorerPrefsByWorkspace))
@@ -2773,6 +2826,11 @@ export default function App() {
       }
     })()
   }, [api, appSettingsView, showDockedAppSettings, resolvedProviderConfigs])
+
+  useEffect(() => {
+    if (!showDockedAppSettings || appSettingsView !== 'orchestrator') return
+    void api.getOrchestratorLicenseKeyState?.().then((s) => setOrchestratorLicenseKeyState(s ?? null))
+  }, [api, appSettingsView, showDockedAppSettings])
 
   useEffect(() => {
     setCodeBlockOpenById((prev) => {
@@ -3765,14 +3823,6 @@ export default function App() {
         deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
       } as WorkspaceSettings)
 
-    const hasNoAllowlist =
-      (current.allowedCommandPrefixes ?? []).length === 0 &&
-      (current.allowedAutoReadPrefixes ?? []).length === 0 &&
-      (current.allowedAutoWritePrefixes ?? []).length === 0 &&
-      (current.deniedAutoReadPrefixes ?? []).length === 0 &&
-      (current.deniedAutoWritePrefixes ?? []).length === 0
-    const useWorkspaceDefaults = hasNoAllowlist
-
     const cmdPrefixes = normalizeAllowedCommandPrefixes(current.allowedCommandPrefixes)
     const readPrefixes = normalizeAllowedCommandPrefixes(current.allowedAutoReadPrefixes)
     const writePrefixes = normalizeAllowedCommandPrefixes(current.allowedAutoWritePrefixes)
@@ -3785,11 +3835,11 @@ export default function App() {
         defaultModel: current.defaultModel ?? DEFAULT_MODEL,
         permissionMode: current.permissionMode ?? 'verify-first',
         sandbox: current.sandbox ?? 'workspace-write',
-        allowedCommandPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES] : cmdPrefixes,
-        allowedAutoReadPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES] : readPrefixes,
-        allowedAutoWritePrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES] : writePrefixes,
-        deniedAutoReadPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES] : deniedRead,
-        deniedAutoWritePrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES] : deniedWrite,
+        allowedCommandPrefixes: cmdPrefixes,
+        allowedAutoReadPrefixes: readPrefixes,
+        allowedAutoWritePrefixes: writePrefixes,
+        deniedAutoReadPrefixes: deniedRead,
+        deniedAutoWritePrefixes: deniedWrite,
       } satisfies WorkspaceSettings
     }
 
@@ -3798,11 +3848,11 @@ export default function App() {
       defaultModel: current.defaultModel ?? DEFAULT_MODEL,
       permissionMode: current.permissionMode ?? 'verify-first',
       sandbox: current.sandbox ?? 'workspace-write',
-      allowedCommandPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES] : cmdPrefixes,
-      allowedAutoReadPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES] : readPrefixes,
-      allowedAutoWritePrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES] : writePrefixes,
-      deniedAutoReadPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES] : deniedRead,
-      deniedAutoWritePrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES] : deniedWrite,
+      allowedCommandPrefixes: cmdPrefixes,
+      allowedAutoReadPrefixes: readPrefixes,
+      allowedAutoWritePrefixes: writePrefixes,
+      deniedAutoReadPrefixes: deniedRead,
+      deniedAutoWritePrefixes: deniedWrite,
     } satisfies WorkspaceSettings
   }
 
@@ -4322,6 +4372,10 @@ export default function App() {
       }
       if (action === 'openDiagnostics') {
         openAppSettingsInRightDock('diagnostics')
+        return
+      }
+      if (action === 'openOrchestrator') {
+        openAppSettingsInRightDock('orchestrator')
         return
       }
       if (action === 'saveEditorFile') {
@@ -6222,7 +6276,7 @@ export default function App() {
     if (!w) return
     reconnectingRef.current.add(winId)
     const provider = getModelProvider(w.model)
-    if (provider === 'codex' && w.messages.length > 0) {
+    if (provider === 'codex' && !CODEX_API_MODELS.includes(w.model) && w.messages.length > 0) {
       needsContextOnNextCodexSendRef.current[winId] = true
     }
     setPanels((prev) =>
@@ -6373,7 +6427,7 @@ export default function App() {
       )
       const needContext = !w.connected && w.messages.length > 0
       const initialHistory = needContext ? panelMessagesToInitialHistory(w.messages) : undefined
-      if (needContext && provider === 'codex') {
+      if (needContext && provider === 'codex' && !CODEX_API_MODELS.includes(w.model)) {
         needsContextOnNextCodexSendRef.current[winId] = true
       }
       if (!w.connected) {
@@ -6409,6 +6463,7 @@ export default function App() {
       }
       const needsPriorMessages =
         provider === 'codex' &&
+        !CODEX_API_MODELS.includes(w.model) &&
         w.messages.length > 0 &&
         (needContext || needsContextOnNextCodexSendRef.current[winId])
       const priorMessagesForContext = needsPriorMessages
@@ -7294,7 +7349,21 @@ export default function App() {
     return (
       <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
         <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
-          <div className="font-medium text-neutral-700 dark:text-neutral-300">Agent Orchestrator</div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-medium text-neutral-700 dark:text-neutral-300">Agent Orchestrator</div>
+            <button
+              type="button"
+              className={UI_TOOLBAR_ICON_BUTTON_CLASS}
+              title="Orchestrator settings"
+              aria-label="Orchestrator settings"
+              onClick={() => openAppSettingsInRightDock('orchestrator')}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+          </div>
           <p className="mt-1.5 text-neutral-500 dark:text-neutral-400 leading-relaxed">
             Persistent goal-driven orchestration for multi-agent workflows. Install the orchestrator plugin to enable.
           </p>
@@ -7967,10 +8036,11 @@ export default function App() {
                   }`}
                   onClick={() => setAppSettingsView(view)}
                 >
-                  {view === 'connectivity' && 'Darryl'}
+                  {view === 'connectivity' && 'Connectivity'}
                   {view === 'models' && 'Models'}
                   {view === 'preferences' && 'Preferences'}
                   {view === 'agents' && 'Agents'}
+                  {view === 'orchestrator' && 'Orchestrator'}
                   {view === 'diagnostics' && 'Diagnostics'}
                 </button>
               ))}
@@ -8214,6 +8284,36 @@ export default function App() {
 
               {appSettingsView === 'preferences' && (
                 <>
+              {typeof navigator !== 'undefined' && /Win/i.test(navigator.userAgent) && (
+              <section className="space-y-2">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Windows shortcut</div>
+                <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                  Repair or recreate the Start menu shortcut (with icon). Pin the shortcut to taskbar for the correct icon—do not pin the running window.
+                </p>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                  onClick={async () => {
+                    try {
+                      const result = await api.repairStartMenuShortcut?.()
+                      if (result?.ok) {
+                        setRepairShortcutStatus('Shortcut repaired.')
+                      } else {
+                        setRepairShortcutStatus(result?.error ?? 'Failed')
+                      }
+                    } catch (e) {
+                      setRepairShortcutStatus(String(e))
+                    }
+                    setTimeout(() => setRepairShortcutStatus(null), 4000)
+                  }}
+                >
+                  Repair Start menu shortcut
+                </button>
+                {repairShortcutStatus && (
+                  <div className="text-xs text-neutral-600 dark:text-neutral-400">{repairShortcutStatus}</div>
+                )}
+              </section>
+              )}
               <section className="space-y-2">
                 <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Startup</div>
                 <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
@@ -8419,14 +8519,6 @@ export default function App() {
                 <p className="text-xs text-neutral-500 dark:text-neutral-400 italic">
                   Fallback connectivity is used only when the primary method has reached its usage limits.
                 </p>
-                <ul className="list-none space-y-1.5 text-xs text-neutral-600 dark:text-neutral-400 border border-neutral-200 dark:border-neutral-800 rounded-lg p-3 bg-white/60 dark:bg-neutral-950/40">
-                  <li className="font-medium text-neutral-700 dark:text-neutral-300 uppercase tracking-wide pb-1">Provider coverage</li>
-                  <li>OPENAI — Codex CLI (primary) + OpenAI API (fallback when limits reached).</li>
-                  <li>CLAUDE — full support (connectivity checks + model routing in panels).</li>
-                  <li>GEMINI — full support (connectivity checks + model routing in panels).</li>
-                  <li>OPENROUTER — full support (API key; check manually to avoid rate limits).</li>
-                  <li>Other providers — possible if they support CLI or API adapters (not implemented).</li>
-                </ul>
                 <div className="flex flex-col gap-4">
                   {resolvedProviderConfigs.map((config) => {
                     const status = providerAuthByName[config.id]
@@ -8442,27 +8534,67 @@ export default function App() {
                     const needsApi = !isDual
                       ? config.type === 'api'
                       : primary === 'api' || (fallbackEnabled && fallback === 'api')
-                    const statusLabel = !status
-                      ? 'Unknown'
-                      : !status.installed
-                        ? 'Not installed'
-                        : status.authenticated
-                          ? 'Connected'
-                          : 'Login required'
-                    const statusClass = !status
-                      ? 'border-neutral-300 text-neutral-700 dark:border-neutral-700 dark:text-neutral-300'
-                      : !status.installed
-                        ? 'border-red-300 text-red-700 dark:border-red-800 dark:text-red-300'
-                        : status.authenticated
-                          ? 'border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300'
-                          : 'border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300'
+                    const providerEnabled = Boolean(config.enabled)
+                    const statusLabel = !providerEnabled
+                      ? 'Disabled'
+                      : !status
+                        ? 'Unknown'
+                        : !status.installed
+                          ? 'Not installed'
+                          : status.authenticated
+                            ? 'Connected'
+                            : 'Login required'
+                    const rawStatusDetail = status?.detail?.trim() ?? ''
+                    const detailLooksLikeConnected = /^connected[.!]?$/i.test(rawStatusDetail)
+                    const statusDetail = !providerEnabled
+                      ? 'Provider disabled.'
+                      : rawStatusDetail && !detailLooksLikeConnected
+                        ? rawStatusDetail
+                        : (needsApi && !needsCli ? 'Click Test API to validate.' : 'No status yet.')
+                    const statusClass = !providerEnabled
+                      ? 'border-neutral-300 text-neutral-600 dark:border-neutral-700 dark:text-neutral-400'
+                      : !status
+                        ? 'border-neutral-300 text-neutral-700 dark:border-neutral-700 dark:text-neutral-300'
+                        : !status.installed
+                          ? 'border-red-300 text-red-700 dark:border-red-800 dark:text-red-300'
+                          : status.authenticated
+                            ? 'border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300'
+                            : 'border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300'
                     const isBuiltIn = config.isBuiltIn ?? CONNECTIVITY_PROVIDERS.includes(config.id as ConnectivityProvider)
                     const override = providerRegistry.overrides[config.id]
+                    const panelOpen = providerPanelOpenByName[config.id] ?? false
                     return (
-                      <div
+                      <details
                         key={config.id}
-                        className={`rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-2 bg-white/60 dark:bg-neutral-950/40 ${!config.enabled ? 'opacity-60' : ''}`}
+                        open={panelOpen}
+                        onToggle={(e) => {
+                          const next = e.currentTarget.open
+                          setProviderPanelOpenByName((prev) => (prev[config.id] === next ? prev : { ...prev, [config.id]: next }))
+                        }}
+                        className={`group rounded-lg border border-neutral-300 dark:border-neutral-700 p-3 bg-neutral-100 dark:bg-neutral-900/60 shadow-sm ${!config.enabled ? 'opacity-60' : ''}`}
                       >
+                        <summary className="list-none cursor-pointer flex items-center justify-between gap-3 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/80 hover:bg-neutral-50 dark:hover:bg-neutral-800 px-2.5 py-2">
+                          <div className="flex items-center gap-2 flex-wrap min-w-0">
+                            <span className="font-medium text-sm text-neutral-800 dark:text-neutral-200 truncate">
+                              {config.displayName}
+                              {!isBuiltIn && (
+                                <span className="text-[10px] text-neutral-500 dark:text-neutral-400 ml-1">(custom)</span>
+                              )}
+                            </span>
+                            <div className={`px-2 py-0.5 rounded-full text-[11px] border ${statusClass}`}>{statusLabel}</div>
+                          </div>
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 12 12"
+                            fill="none"
+                            className="text-neutral-500 dark:text-neutral-400 transition-transform group-open:rotate-180"
+                            aria-hidden
+                          >
+                            <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </summary>
+                        <div className="mt-2 pt-2 border-t border-neutral-200 dark:border-neutral-700 space-y-2 rounded-md bg-white/80 dark:bg-neutral-950/60 px-2.5 pb-2">
                         <div className="flex items-center justify-between gap-3 flex-wrap">
                           <div className="flex items-center gap-3 flex-wrap">
                             <label className="flex items-center gap-1.5">
@@ -8490,14 +8622,8 @@ export default function App() {
                                 }}
                                 className="rounded border-neutral-300"
                               />
-                              <span className="font-medium text-sm text-neutral-800 dark:text-neutral-200">
-                                {config.displayName}
-                                {!isBuiltIn && (
-                                  <span className="text-[10px] text-neutral-500 dark:text-neutral-400 ml-1">(custom)</span>
-                                )}
-                              </span>
+                              <span className="text-sm text-neutral-700 dark:text-neutral-300">Enabled</span>
                             </label>
-                            <div className={`px-2 py-0.5 rounded-full text-[11px] border ${statusClass}`}>{statusLabel}</div>
                           </div>
                           {!isBuiltIn && (
                             <div className="flex gap-1">
@@ -8722,9 +8848,7 @@ export default function App() {
                         {(needsCli || needsApi) && (
                           <>
                             <div className="text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap break-words">
-                              {loading
-                                ? `Checking ${config.displayName}...`
-                                : status?.detail || (needsApi && !needsCli ? 'Click Test API to validate.' : 'No status yet.')}
+                              {loading ? `Checking ${config.displayName}...` : statusDetail}
                             </div>
                             <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
                               Checked: {status?.checkedAt ? formatCheckedAt(status.checkedAt) : 'Never'}
@@ -8804,7 +8928,8 @@ export default function App() {
                             {action && <span className="text-xs text-neutral-600 dark:text-neutral-400">{action}</span>}
                           </div>
                         )}
-                      </div>
+                        </div>
+                      </details>
                     )
                   })}
                 </div>
@@ -8885,6 +9010,199 @@ export default function App() {
                       <span className="block text-xs text-neutral-500 dark:text-neutral-400">Show all progress and intermediary reasoning updates.</span>
                     </span>
                   </label>
+                </div>
+              </section>
+                </>
+              )}
+
+              {appSettingsView === 'orchestrator' && (
+                <>
+              <section className="space-y-3">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Installation</div>
+                <div className="space-y-2 text-sm text-neutral-700 dark:text-neutral-300">
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+                        loadedPlugins?.some((p) => p.pluginId === 'orchestrator' && p.active)
+                          ? 'bg-green-500 dark:bg-green-600'
+                          : 'bg-neutral-300 dark:bg-neutral-600'
+                      }`}
+                    />
+                    <span className="text-neutral-500 dark:text-neutral-400">
+                      {loadedPlugins?.some((p) => p.pluginId === 'orchestrator' && p.active)
+                        ? `Plugin: ${loadedPlugins.find((p) => p.pluginId === 'orchestrator')?.displayName ?? 'Orchestrator'} v${loadedPlugins.find((p) => p.pluginId === 'orchestrator')?.version ?? '?'}`
+                        : 'Plugin: not installed'}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                      onClick={async () => {
+                        setOrchestratorInstallStatus('Installing...')
+                        try {
+                          const result = await api.installOrchestratorPlugin?.()
+                          setOrchestratorInstallStatus(result?.ok ? 'Installed successfully' : result?.error ?? 'Install failed')
+                        } catch (e) {
+                          setOrchestratorInstallStatus(String(e))
+                        }
+                        setTimeout(() => setOrchestratorInstallStatus(null), 4000)
+                      }}
+                    >
+                      Install from npm
+                    </button>
+                    {loadedPlugins?.some((p) => p.pluginId === 'orchestrator' && p.active) && (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                      onClick={async () => {
+                        setOrchestratorInstallStatus('Uninstalling...')
+                        try {
+                          const result = await api.uninstallOrchestratorPlugin?.()
+                          setOrchestratorInstallStatus(result?.ok ? 'Uninstalled' : result?.error ?? 'Uninstall failed')
+                        } catch (e) {
+                          setOrchestratorInstallStatus(String(e))
+                        }
+                        setTimeout(() => setOrchestratorInstallStatus(null), 4000)
+                      }}
+                    >
+                      Uninstall
+                    </button>
+                    )}
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                      onClick={async () => {
+                        const result = await api.openPluginsFolder?.()
+                        if (!result?.ok && result?.error) {
+                          setOrchestratorInstallStatus(result.error)
+                          setTimeout(() => setOrchestratorInstallStatus(null), 4000)
+                        }
+                      }}
+                    >
+                      Open plugins folder
+                    </button>
+                  </div>
+                  {orchestratorInstallStatus && (
+                    <div className="text-xs text-neutral-600 dark:text-neutral-400">{orchestratorInstallStatus}</div>
+                  )}
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">License</div>
+                <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                  The Orchestrator is a paid add-on. Enter your license code to enable it.
+                </p>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300">License code</label>
+                  <input
+                    type="password"
+                    className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
+                    placeholder={orchestratorLicenseKeyState?.hasKey ? '****************' : 'Enter license code'}
+                    value={orchestratorLicenseKeyDraft}
+                    onChange={(e) => setOrchestratorLicenseKeyDraft(e.target.value)}
+                    onBlur={async () => {
+                      if (orchestratorLicenseKeyDraft.trim()) {
+                        await api.setOrchestratorLicenseKey?.(orchestratorLicenseKeyDraft.trim())
+                        setOrchestratorLicenseKeyState({ hasKey: true })
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className={UI_BUTTON_PRIMARY_CLASS}
+                    onClick={async () => {
+                      await api.setOrchestratorLicenseKey?.(orchestratorLicenseKeyDraft.trim())
+                      const state = await api.getOrchestratorLicenseKeyState?.()
+                      setOrchestratorLicenseKeyState(state ?? null)
+                    }}
+                  >
+                    Save license
+                  </button>
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Models</div>
+                <div className="space-y-2 text-sm">
+                  <div>
+                    <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">Orchestrator model</label>
+                    <select
+                      className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
+                      value={orchestratorSettings.orchestratorModel}
+                      onChange={(e) => setOrchestratorSettings((p) => ({ ...p, orchestratorModel: e.target.value }))}
+                    >
+                      <option value="">Default</option>
+                      {getModelOptions().map((id) => (
+                        <option key={id} value={id}>{id}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">Worker provider</label>
+                    <select
+                      className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
+                      value={orchestratorSettings.workerProvider}
+                      onChange={(e) => setOrchestratorSettings((p) => ({ ...p, workerProvider: e.target.value }))}
+                    >
+                      <option value="codex">Codex</option>
+                      <option value="claude">Claude</option>
+                      <option value="gemini">Gemini</option>
+                      <option value="openrouter">OpenRouter</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">Worker model</label>
+                    <select
+                      className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
+                      value={orchestratorSettings.workerModel}
+                      onChange={(e) => setOrchestratorSettings((p) => ({ ...p, workerModel: e.target.value }))}
+                    >
+                      <option value="">Default</option>
+                      {getModelOptions().map((id) => (
+                        <option key={id} value={id}>{id}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Execution</div>
+                <div className="space-y-2 text-sm">
+                  <div>
+                    <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">Max parallel panels (1–8)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={8}
+                      className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
+                      value={orchestratorSettings.maxParallelPanels}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10)
+                        if (!Number.isNaN(v) && v >= 1 && v <= 8) {
+                          setOrchestratorSettings((p) => ({ ...p, maxParallelPanels: v }))
+                        }
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">Max task attempts (1–10)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
+                      value={orchestratorSettings.maxTaskAttempts}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10)
+                        if (!Number.isNaN(v) && v >= 1 && v <= 10) {
+                          setOrchestratorSettings((p) => ({ ...p, maxTaskAttempts: v }))
+                        }
+                      }}
+                    />
+                  </div>
                 </div>
               </section>
                 </>
@@ -8974,14 +9292,6 @@ export default function App() {
               </section>
                 </>
               )}
-            </div>
-            <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end">
-              <button
-                className={UI_BUTTON_PRIMARY_CLASS}
-                onClick={() => closeAppSettings()}
-              >
-                Done
-              </button>
             </div>
           </div>
         )
@@ -9168,13 +9478,22 @@ export default function App() {
                     if (!config) return null
                     const status = providerAuthByName[providerId]
                     const loading = providerAuthLoadingByName[providerId]
-                    const statusText = !status
+                    const providerEnabled = Boolean(config.enabled)
+                    const statusText = !providerEnabled
+                      ? 'Disabled'
+                      : !status
                       ? 'Unknown'
                       : !status.installed
                         ? 'Not installed'
                         : status.authenticated
                           ? 'Connected'
                           : 'Setup required'
+                    const rawStatusDetail = status?.detail?.trim() ?? ''
+                    const statusDetail = !providerEnabled
+                      ? 'Provider disabled.'
+                      : /^connected[.!]?$/i.test(rawStatusDetail)
+                        ? 'Ready.'
+                        : (rawStatusDetail || 'No status yet.')
                     return (
                       <div key={providerId} className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-2">
                         <div className="flex items-center justify-between">
@@ -9214,7 +9533,7 @@ export default function App() {
                             {config.type === 'api' ? 'Open keys page' : status?.authenticated ? 'Re-authenticate' : 'Open login'}
                           </button>
                         </div>
-                        <div className="text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap">{status?.detail || 'No status yet.'}</div>
+                        <div className="text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap">{statusDetail}</div>
                       </div>
                     )
                   })}
@@ -10421,25 +10740,52 @@ export default function App() {
           <div className="mb-1 px-0.5 min-w-0 text-[11px]" style={{ color: timelineMessageColor }}>
             <span className="break-words [overflow-wrap:anywhere]">{w.status}</span>
           </div>
-          {contextUsage && contextUsagePercent !== null && (
-            <div
-              className="mb-2 px-0.5 inline-flex items-center gap-2"
-              title={`${contextUsagePercent.toFixed(1)}% used
+          <div className="mb-1.5 px-0.5 flex items-center gap-3 flex-wrap min-w-0">
+            {contextUsage && contextUsagePercent !== null && (
+              <div
+                className="inline-flex items-center gap-2"
+                title={`${contextUsagePercent.toFixed(1)}% used
 Estimated context usage
 Model window: ${contextUsage.modelContextTokens.toLocaleString()} tokens
 Reserved output: ${contextUsage.outputReserveTokens.toLocaleString()} tokens
 Safe input budget: ${contextUsage.safeInputBudgetTokens.toLocaleString()} tokens
 Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
+              >
+                <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
+                  <span
+                    className={`block h-full ${contextUsageBarClass}`}
+                    style={{ width: `${Math.max(0, Math.min(100, contextUsagePercent))}%` }}
+                  />
+                </span>
+                <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{contextUsagePercent.toFixed(1)}%</span>
+              </div>
+            )}
+            <span
+              className="inline-flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-300"
+              title={activityTitle}
+              aria-label={`Panel activity ${activityLabel}`}
             >
-              <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
-                <span
-                  className={`block h-full ${contextUsageBarClass}`}
-                  style={{ width: `${Math.max(0, Math.min(100, contextUsagePercent))}%` }}
-                />
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${activityDotClass} ${isRunning ? 'animate-pulse' : ''}`}
+                aria-hidden
+              />
+              {activityLabel}
+            </span>
+            {showCompletionNotice && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/35 dark:text-emerald-200"
+                aria-live="polite"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
+                complete
               </span>
-              <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{contextUsagePercent.toFixed(1)}%</span>
-            </div>
-          )}
+            )}
+            {livePromptDurationLabel && (
+              <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400" title="Response duration">
+                t+{livePromptDurationLabel}
+              </span>
+            )}
+          </div>
           <div className="flex items-end gap-2 min-w-0">
             <textarea
               ref={(el) => registerTextarea(w.id, el)}
@@ -10515,35 +10861,8 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
         </div>
 
         <div className="relative z-20 border-t border-neutral-200/80 dark:border-neutral-800 px-3 py-2 text-xs min-w-0 overflow-visible bg-white/90 dark:bg-neutral-950">
-          <div className="flex flex-wrap items-start justify-between gap-2 min-w-0">
+          <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
             <div className="min-w-0 flex-1 text-neutral-600 dark:text-neutral-300">
-              <div className="min-w-0 flex items-center gap-2 flex-wrap">
-                <span
-                  className="inline-flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-300"
-                  title={activityTitle}
-                  aria-label={`Panel activity ${activityLabel}`}
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${activityDotClass} ${isRunning ? 'animate-pulse' : ''}`}
-                    aria-hidden
-                  />
-                  {activityLabel}
-                </span>
-                {showCompletionNotice && (
-                  <span
-                    className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/35 dark:text-emerald-200"
-                    aria-live="polite"
-                  >
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-                    complete
-                  </span>
-                )}
-                {livePromptDurationLabel && (
-                  <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400" title="Response duration">
-                    t+{livePromptDurationLabel}
-                  </span>
-                )}
-              </div>
               {(() => {
                 const pct = getRateLimitPercent(w.usage)
                 const label = formatRateLimitLabel(w.usage)
@@ -10551,7 +10870,7 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                   return null
                 }
                 return (
-                  <div className="mt-1 inline-flex items-center gap-2">
+                  <div className="inline-flex items-center gap-2">
                     <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
                       <span className="block h-full bg-blue-600" style={{ width: `${100 - pct}%` }} />
                     </span>
@@ -10759,3 +11078,4 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
     )
   }
 }
+

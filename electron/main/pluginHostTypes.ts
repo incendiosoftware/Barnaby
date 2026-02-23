@@ -97,6 +97,9 @@ export interface BarnabyPluginHostApi {
   getSetting(key: string): unknown
   setSetting(key: string, value: unknown): void
 
+  /** Returns whether a valid orchestrator license key is stored. */
+  getOrchestratorLicenseKeyState(): { hasKey: boolean }
+
   // --- Logging ---
   log(pluginId: PluginId, level: 'info' | 'warn' | 'error', message: string): void
 }

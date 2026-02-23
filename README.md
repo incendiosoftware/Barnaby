@@ -8,7 +8,7 @@ Barnaby is a desktop AI agent orchestrator for **agentic coordination** — conn
 - **UI experience**: Split layouts (horizontal, vertical, grid), workspace window, dark/light themes, zoom, activity timeline
 
 Latest Binary Release  
-[Download Barnaby v0.0.98](https://github.com/incendiosoftware/Barnaby/releases/tag/v0.0.98)
+[Download Barnaby v0.0.125](https://github.com/incendiosoftware/Barnaby/releases/tag/v0.0.125)
 
 Website: https://barnaby.build  
 Written By: Stuart Mackereth  

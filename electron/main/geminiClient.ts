@@ -16,6 +16,8 @@ function getGeminiSpawnEnv(): NodeJS.ProcessEnv {
 }
 
 import { resolveAtFileReferences } from './atFileResolver'
+import { generateWorkspaceTreeText } from './fileTree'
+import { buildSystemPrompt } from './systemPrompt'
 
 export type GeminiClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
@@ -29,12 +31,18 @@ const INITIAL_HISTORY_MAX_MESSAGES = 24
 export type GeminiConnectOptions = {
   model: string
   cwd: string
+  permissionMode?: 'verify-first' | 'proceed-always'
+  sandbox?: 'read-only' | 'workspace-write'
+  interactionMode?: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
 export class GeminiClient extends EventEmitter {
   private model: string = 'gemini-2.0-flash'
   private cwd: string = process.cwd()
+  private permissionMode: 'verify-first' | 'proceed-always' = 'verify-first'
+  private sandbox: 'read-only' | 'workspace-write' = 'workspace-write'
+  private interactionMode: string = 'agent'
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeProc: ChildProcessWithoutNullStreams | null = null
 
@@ -95,6 +103,9 @@ export class GeminiClient extends EventEmitter {
     const normalized = this.normalizeModelId(requestedModel)
     this.model = normalized
     this.cwd = options.cwd || process.cwd()
+    this.permissionMode = options.permissionMode ?? 'verify-first'
+    this.sandbox = options.sandbox ?? 'workspace-write'
+    this.interactionMode = options.interactionMode ?? 'agent'
     if (normalized !== requestedModel) {
       this.emitEvent({
         type: 'status',
@@ -112,7 +123,7 @@ export class GeminiClient extends EventEmitter {
     return { threadId: 'gemini' }
   }
 
-  async sendUserMessageWithImages(text: string, localImagePaths: string[]) {
+  async sendUserMessageWithImages(text: string, localImagePaths: string[], options?: { interactionMode?: string; gitStatus?: string }) {
     const trimmed = text.trim()
     const imagePaths = (localImagePaths ?? []).filter((p) => typeof p === 'string' && p.trim())
     if (!trimmed && imagePaths.length === 0) return
@@ -123,11 +134,11 @@ export class GeminiClient extends EventEmitter {
     const fullMessage = userText + fileContext
     this.history.push({ role: 'user', text: fullMessage })
 
-    const prompt = this.buildGeminiPrompt(fullMessage)
+    const prompt = this.buildGeminiPrompt(fullMessage, options?.interactionMode, options?.gitStatus)
     await this.runTurn(prompt)
   }
 
-  async sendUserMessage(text: string) {
+  async sendUserMessage(text: string, options?: { interactionMode?: string; gitStatus?: string }) {
     const trimmed = text.trim()
     if (!trimmed) return
 
@@ -135,7 +146,7 @@ export class GeminiClient extends EventEmitter {
     const fullMessage = trimmed + fileContext
     this.history.push({ role: 'user', text: fullMessage })
 
-    const prompt = this.buildGeminiPrompt(fullMessage)
+    const prompt = this.buildGeminiPrompt(fullMessage, options?.interactionMode, options?.gitStatus)
     await this.runTurn(prompt)
   }
 
@@ -366,13 +377,24 @@ export class GeminiClient extends EventEmitter {
     this.history = []
   }
 
-  private buildGeminiPrompt(userMessage: string): string {
+  private buildGeminiPrompt(userMessage: string, interactionMode?: string, gitStatus?: string): string {
+    const tree = generateWorkspaceTreeText(this.cwd)
+    const mode = interactionMode ?? this.interactionMode
+    const systemPrompt = buildSystemPrompt({
+      workspaceTree: tree,
+      cwd: this.cwd,
+      permissionMode: this.permissionMode,
+      sandbox: this.sandbox,
+      interactionMode: mode,
+      gitStatus,
+    })
+
     const lastAssistant = [...this.history].reverse().find((m) => m.role === 'assistant')
     const continuationHint = lastAssistant
       ? `\n\nFor context, your previous response was:\n${lastAssistant.text.slice(0, 1200)}\n\n`
       : ''
 
-    return `${continuationHint}${userMessage}`
+    return `${systemPrompt}\n\n---\n\n${continuationHint}${userMessage}`
   }
 
   private async assertGeminiCliAvailable() {

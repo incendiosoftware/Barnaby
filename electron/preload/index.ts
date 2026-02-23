@@ -15,6 +15,7 @@ export type CodexConnectOptions = {
   permissionMode?: 'verify-first' | 'proceed-always'
   approvalPolicy?: 'on-request' | 'never'
   sandbox?: 'read-only' | 'workspace-write'
+  interactionMode?: string
   allowedCommandPrefixes?: string[]
   allowedAutoReadPrefixes?: string[]
   allowedAutoWritePrefixes?: string[]
@@ -90,11 +91,13 @@ const api = {
     text: string,
     imagePaths?: string[],
     priorMessagesForContext?: Array<{ role: string; content: string }>,
+    interactionMode?: string,
   ) {
     return ipcRenderer.invoke('agentorchestrator:sendMessageEx', agentWindowId, {
       text,
       imagePaths: imagePaths ?? [],
       priorMessagesForContext,
+      interactionMode,
     }) as Promise<void>
   },
   loadChatHistory() {

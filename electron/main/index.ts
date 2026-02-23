@@ -118,6 +118,7 @@ type WorkspaceLockAcquireResult =
 type ConnectOptions = CodexConnectOptions & {
   provider?: 'codex' | 'claude' | 'gemini' | 'openrouter'
   modelConfig?: Record<string, string>
+  interactionMode?: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 type ContextMenuKind = 'input-selection' | 'chat-selection'
@@ -220,6 +221,8 @@ let waitForRendererStartup = false
 let mainWindowRevealed = false
 
 const agentClients = new Map<string, AgentClient>()
+const agentClientCwds = new Map<string, string>()
+const MAX_GIT_STATUS_FILES_IN_PROMPT = 60
 const workspaceLockInstanceId = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 let terminalPtyProcess: import('node-pty').IPty | null = null
 const ownedWorkspaceLocks = new Map<string, { lockFilePath: string; acquiredAt: number }>()
@@ -1685,6 +1688,7 @@ async function getAvailableModels(): Promise<ModelsByProvider> {
   let claude: { id: string; displayName: string }[] = [
     { id: 'sonnet', displayName: 'sonnet' },
     { id: 'opus', displayName: 'opus' },
+    { id: 'claude-opus-4-6', displayName: 'opus 4.6' },
     { id: 'haiku', displayName: 'haiku' },
   ]
   let gemini = await getGeminiAvailableModels().catch(() => [])
@@ -2017,6 +2021,46 @@ async function getGitStatus(workspaceRoot: string): Promise<GitStatusResult> {
   }
 }
 
+function formatGitStatusForPrompt(status: GitStatusResult): string {
+  if (!status.ok) return `Git status unavailable: ${status.error ?? 'Unknown error.'}`
+
+  const lines: string[] = []
+  lines.push(`Branch: ${status.branch}`)
+  if (status.ahead > 0 || status.behind > 0) {
+    lines.push(`Divergence: ahead ${status.ahead}, behind ${status.behind}`)
+  }
+  lines.push(`Summary: ${status.clean ? 'clean working tree' : `${status.stagedCount} staged, ${status.unstagedCount} changed, ${status.untrackedCount} untracked`}`)
+
+  if (!status.clean) {
+    lines.push('Changed files:')
+    const visibleEntries = status.entries.slice(0, MAX_GIT_STATUS_FILES_IN_PROMPT)
+    for (const entry of visibleEntries) {
+      const statusCode = `${entry.indexStatus}${entry.workingTreeStatus}`
+      if (entry.renamedFrom) {
+        lines.push(`- ${statusCode} ${entry.renamedFrom} -> ${entry.relativePath}`)
+      } else {
+        lines.push(`- ${statusCode} ${entry.relativePath}`)
+      }
+    }
+    if (status.entries.length > visibleEntries.length) {
+      lines.push(`- ...and ${status.entries.length - visibleEntries.length} more`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
+async function getGitStatusPromptForAgent(agentWindowId: string): Promise<string | undefined> {
+  const cwd = agentClientCwds.get(agentWindowId)
+  if (!cwd) return undefined
+  try {
+    const status = await getGitStatus(cwd)
+    return formatGitStatusForPrompt(status)
+  } catch (err) {
+    return `Git status unavailable: ${errorMessage(err)}`
+  }
+}
+
 function forwardEvent(agentWindowId: string, evt: AgentEvent) {
   win?.webContents.send('agentorchestrator:event', { agentWindowId, evt })
   win?.webContents.send('fireharness:event', { agentWindowId, evt })
@@ -2033,6 +2077,7 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
   if (existing) {
     await (existing as { close: () => Promise<void> }).close()
     agentClients.delete(agentWindowId)
+    agentClientCwds.delete(agentWindowId)
   }
 
   if (provider === 'gemini') {
@@ -2041,9 +2086,13 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
     const result = await client.connect({
       model: options.model,
       cwd: options.cwd,
+      permissionMode: options.permissionMode,
+      sandbox: options.sandbox,
+      interactionMode: options.interactionMode,
       initialHistory: options.initialHistory,
     }) as { threadId: string }
     agentClients.set(agentWindowId, client)
+    agentClientCwds.set(agentWindowId, path.resolve(options.cwd || process.cwd()))
     return { client, result }
   }
 
@@ -2054,9 +2103,12 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
       cwd: options.cwd,
       model: options.model,
       permissionMode: options.permissionMode,
+      sandbox: options.sandbox,
+      interactionMode: options.interactionMode,
       initialHistory: options.initialHistory,
     }) as { threadId: string }
     agentClients.set(agentWindowId, client)
+    agentClientCwds.set(agentWindowId, path.resolve(options.cwd || process.cwd()))
     return { client, result }
   }
 
@@ -2070,9 +2122,13 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
       model: options.model,
       apiKey,
       baseUrl: options.modelConfig?.openrouterBaseUrl,
+      permissionMode: options.permissionMode,
+      sandbox: options.sandbox,
+      interactionMode: options.interactionMode,
       initialHistory: options.initialHistory,
     }) as { threadId: string }
     agentClients.set(agentWindowId, client)
+    agentClientCwds.set(agentWindowId, path.resolve(options.cwd || process.cwd()))
     return { client, result }
   }
 
@@ -2091,10 +2147,12 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
         baseUrl: options.modelConfig?.openaiBaseUrl ?? 'https://api.openai.com/v1',
         permissionMode: options.permissionMode,
         sandbox: options.sandbox,
+        interactionMode: options.interactionMode,
         allowedCommandPrefixes: options.allowedCommandPrefixes,
         initialHistory: options.initialHistory,
       }) as { threadId: string }
       agentClients.set(agentWindowId, client)
+      agentClientCwds.set(agentWindowId, path.resolve(options.cwd || process.cwd()))
       return { client, result }
     }
   }
@@ -2104,10 +2162,12 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
     forwardEvent(agentWindowId, evt)
     if (evt?.type === 'status' && evt.status === 'closed') {
       agentClients.delete(agentWindowId)
+      agentClientCwds.delete(agentWindowId)
     }
   })
   const result = await client.connect(options)
   agentClients.set(agentWindowId, client)
+  agentClientCwds.set(agentWindowId, path.resolve(options.cwd || process.cwd()))
   return { client, result }
 }
 
@@ -2261,7 +2321,11 @@ ipcMain.handle('fireharness:connect', async (_evt, options: ConnectOptions) => {
 
 ipcMain.handle('fireharness:sendMessage', async (_evt, text: string) => {
   const client = agentClients.get('default')
-  if (client) await (client as { sendUserMessage: (t: string) => Promise<void> }).sendUserMessage(text)
+  if (client) {
+    const gitStatus = await getGitStatusPromptForAgent('default')
+    const sendOptions = gitStatus ? { gitStatus } : undefined
+    await (client as { sendUserMessage: (t: string, opts?: { gitStatus?: string }) => Promise<void> }).sendUserMessage(text, sendOptions)
+  }
   return {}
 })
 
@@ -2276,6 +2340,7 @@ ipcMain.handle('fireharness:disconnect', async () => {
   if (!client) return {}
   await (client as { close: () => Promise<void> }).close()
   agentClients.delete('default')
+  agentClientCwds.delete('default')
   return {}
 })
 
@@ -2286,7 +2351,11 @@ ipcMain.handle('agentorchestrator:connect', async (_evt, agentWindowId: string, 
 
 ipcMain.handle('agentorchestrator:sendMessage', async (_evt, agentWindowId: string, text: string) => {
   const client = agentClients.get(agentWindowId)
-  if (client) await (client as { sendUserMessage: (t: string) => Promise<void> }).sendUserMessage(text)
+  if (client) {
+    const gitStatus = await getGitStatusPromptForAgent(agentWindowId)
+    const sendOptions = gitStatus ? { gitStatus } : undefined
+    await (client as { sendUserMessage: (t: string, opts?: { gitStatus?: string }) => Promise<void> }).sendUserMessage(text, sendOptions)
+  }
   return {}
 })
 
@@ -2300,25 +2369,28 @@ function formatPriorMessagesForContext(messages: Array<{ role: string; content: 
   return transcript ? `Previous conversation:\n\n${transcript}\n\nUser continues: ` : ''
 }
 
-ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: string, payload: { text: string; imagePaths?: string[]; priorMessagesForContext?: Array<{ role: string; content: string }> }) => {
+ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: string, payload: { text: string; imagePaths?: string[]; priorMessagesForContext?: Array<{ role: string; content: string }>; interactionMode?: string }) => {
   const client = agentClients.get(agentWindowId)
   if (!client) return {}
   let text = typeof payload?.text === 'string' ? payload.text : ''
   const imagePaths = Array.isArray(payload?.imagePaths) ? payload.imagePaths.filter((p): p is string => typeof p === 'string' && p.trim().length > 0) : []
   const priorMessages = Array.isArray(payload?.priorMessagesForContext) ? payload.priorMessagesForContext : []
+  const interactionMode = typeof payload?.interactionMode === 'string' ? payload.interactionMode : undefined
+  const gitStatus = await getGitStatusPromptForAgent(agentWindowId)
+  const sendOptions = (interactionMode || gitStatus) ? { interactionMode, gitStatus } : undefined
   if (priorMessages.length > 0 && client instanceof CodexAppServerClient) {
     const prefix = formatPriorMessagesForContext(priorMessages.slice(-24))
     if (prefix) text = prefix + text
   }
   if (imagePaths.length > 0) {
-    const withImages = client as { sendUserMessageWithImages?: (t: string, paths: string[]) => Promise<void> }
+    const withImages = client as { sendUserMessageWithImages?: (t: string, paths: string[], opts?: { interactionMode?: string; gitStatus?: string }) => Promise<void> }
     if (typeof withImages.sendUserMessageWithImages !== 'function') {
       throw new Error('Selected provider does not support image attachments in this app yet.')
     }
-    await withImages.sendUserMessageWithImages(text, imagePaths)
+    await withImages.sendUserMessageWithImages(text, imagePaths, sendOptions)
     return {}
   }
-  await (client as { sendUserMessage: (t: string) => Promise<void> }).sendUserMessage(text)
+  await (client as { sendUserMessage: (t: string, opts?: { interactionMode?: string; gitStatus?: string }) => Promise<void> }).sendUserMessage(text, sendOptions)
   return {}
 })
 
@@ -2506,6 +2578,7 @@ ipcMain.handle('agentorchestrator:disconnect', async (_evt, agentWindowId: strin
   if (!client) return {}
   await (client as { close: () => Promise<void> }).close()
   agentClients.delete(agentWindowId)
+  agentClientCwds.delete(agentWindowId)
   return {}
 })
 

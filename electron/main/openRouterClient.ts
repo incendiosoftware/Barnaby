@@ -2,6 +2,8 @@ import { EventEmitter } from 'node:events'
 
 import { generateWorkspaceTreeText } from './fileTree'
 import { resolveAtFileReferences } from './atFileResolver'
+import { buildSystemPrompt } from './systemPrompt'
+import { AgentToolRunner, AGENT_MAX_TOOL_ROUNDS } from './agentTools'
 
 export type OpenRouterClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
@@ -15,15 +17,29 @@ export type OpenRouterConnectOptions = {
   model: string
   apiKey: string
   baseUrl?: string
+  permissionMode?: 'verify-first' | 'proceed-always'
+  sandbox?: 'read-only' | 'workspace-write'
+  interactionMode?: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
 const INITIAL_HISTORY_MAX_MESSAGES = 24
 const TURN_TIMEOUT_MS = 120_000
 
+type OpenRouterToolCall = {
+  id?: string
+  type?: string
+  function?: {
+    name?: string
+    arguments?: string
+  }
+}
+
 type OpenRouterMessage = {
-  role: 'system' | 'user' | 'assistant'
-  content: string
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string | null
+  tool_call_id?: string
+  tool_calls?: OpenRouterToolCall[]
 }
 
 export class OpenRouterClient extends EventEmitter {
@@ -31,8 +47,12 @@ export class OpenRouterClient extends EventEmitter {
   private cwd = process.cwd()
   private apiKey = ''
   private baseUrl = 'https://openrouter.ai/api/v1'
+  private permissionMode: 'verify-first' | 'proceed-always' = 'verify-first'
+  private sandbox: 'read-only' | 'workspace-write' = 'workspace-write'
+  private interactionMode = 'agent'
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeController: AbortController | null = null
+  private toolRunner!: AgentToolRunner
 
   emitEvent(evt: OpenRouterClientEvent) {
     this.emit('event', evt)
@@ -43,16 +63,24 @@ export class OpenRouterClient extends EventEmitter {
     this.cwd = options.cwd || process.cwd()
     this.apiKey = (options.apiKey || '').trim()
     this.baseUrl = (options.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
+    this.permissionMode = options.permissionMode ?? 'verify-first'
+    this.sandbox = options.sandbox ?? 'workspace-write'
+    this.interactionMode = options.interactionMode ?? 'agent'
     this.history =
       (options.initialHistory?.length ?? 0) > 0
         ? options.initialHistory!.slice(-INITIAL_HISTORY_MAX_MESSAGES)
         : []
+    this.toolRunner = new AgentToolRunner({
+      cwd: this.cwd,
+      sandbox: this.sandbox,
+      permissionMode: this.permissionMode,
+    })
     if (!this.apiKey) throw new Error('OpenRouter API key is missing. Configure it in Settings -> Connectivity.')
     this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })
     return { threadId: 'openrouter' }
   }
 
-  async sendUserMessage(text: string) {
+  async sendUserMessage(text: string, options?: { interactionMode?: string; gitStatus?: string }) {
     const trimmed = text.trim()
     if (!trimmed) return
 
@@ -61,21 +89,112 @@ export class OpenRouterClient extends EventEmitter {
     this.history.push({ role: 'user', text: fullUser })
 
     const tree = generateWorkspaceTreeText(this.cwd)
-    const system = `You are a coding assistant running inside Barnaby.
-Workspace root: ${this.cwd}
-
-${tree}`
+    const mode = options?.interactionMode ?? this.interactionMode
+    const system = buildSystemPrompt({
+      workspaceTree: tree,
+      cwd: this.cwd,
+      permissionMode: this.permissionMode,
+      sandbox: this.sandbox,
+      interactionMode: mode,
+      gitStatus: options?.gitStatus,
+    })
     const recent = this.history.slice(-12)
     const messages: OpenRouterMessage[] = [
       { role: 'system', content: system },
-      ...recent.map((m) => ({ role: m.role, content: m.text })),
+      ...recent.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.text })),
     ]
 
     const controller = new AbortController()
     this.activeController = controller
     const timer = setTimeout(() => controller.abort('timeout'), TURN_TIMEOUT_MS)
-    this.emitEvent({ type: 'status', status: 'starting', message: 'Sending request to OpenRouter...' })
+    this.emitEvent({ type: 'status', status: 'starting', message: 'Running OpenRouter agent turn...' })
     try {
+      const textOut = await this.runAgentLoop(messages, controller)
+      this.history.push({ role: 'assistant', text: textOut })
+      this.emitEvent({ type: 'assistantDelta', delta: textOut })
+      this.emitEvent({ type: 'assistantCompleted' })
+      this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })
+    } catch (err) {
+      const aborted = controller.signal.aborted
+      const reason = String(controller.signal.reason ?? '')
+      const msg =
+        err instanceof Error
+          ? aborted && reason === 'interrupted'
+            ? 'OpenRouter request interrupted.'
+            : aborted && reason === 'timeout'
+              ? 'OpenRouter request timed out.'
+              : err.message
+          : String(err)
+      this.emitEvent({ type: 'status', status: 'error', message: msg })
+      this.emitEvent({ type: 'assistantCompleted' })
+    } finally {
+      clearTimeout(timer)
+      if (this.activeController === controller) this.activeController = null
+    }
+  }
+
+  private async runAgentLoop(initialMessages: OpenRouterMessage[], controller: AbortController): Promise<string> {
+    const messages = [...initialMessages]
+    let lastAssistantText = ''
+
+    for (let round = 0; round < AGENT_MAX_TOOL_ROUNDS; round++) {
+      const data = (await this.fetchCompletionWithRetries(messages, controller)) as {
+        choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }>; tool_calls?: OpenRouterToolCall[] } }>
+        usage?: unknown
+      }
+      if (data?.usage) this.emitEvent({ type: 'usageUpdated', usage: data.usage })
+
+      const message = data?.choices?.[0]?.message
+      const assistantContent = this.extractAssistantText(message?.content)
+      if (assistantContent) lastAssistantText = assistantContent
+      const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : []
+
+      if (toolCalls.length === 0) {
+        return assistantContent || 'No response content returned by OpenRouter.'
+      }
+
+      const normalizedToolCalls: OpenRouterToolCall[] = toolCalls.map((call, i) => ({
+        ...call,
+        id: call.id || `tool_${round}_${i}`,
+        type: call.type || 'function',
+      }))
+
+      const assistantMessage: OpenRouterMessage = {
+        role: 'assistant',
+        content: assistantContent || null,
+        tool_calls: normalizedToolCalls,
+      }
+      messages.push(assistantMessage)
+
+      for (let i = 0; i < normalizedToolCalls.length; i++) {
+        const toolCall = normalizedToolCalls[i]
+        const callId = toolCall.id as string
+        const toolName = toolCall.function?.name || 'unknown_tool'
+        const argsPreview = this.safeToolArgsPreview(toolCall.function?.arguments)
+        this.emitEvent({
+          type: 'thinking',
+          message: argsPreview
+            ? `Using ${toolName}(${argsPreview})`
+            : `Using ${toolName}`,
+        })
+        const toolResult = await this.toolRunner.executeTool(toolName, toolCall.function?.arguments)
+        messages.push({
+          role: 'tool',
+          tool_call_id: callId,
+          content: toolResult,
+        })
+      }
+    }
+
+    return lastAssistantText || 'Stopped after too many tool steps without a final answer.'
+  }
+
+  private async fetchCompletionWithRetries(
+    messages: OpenRouterMessage[],
+    controller: AbortController,
+  ): Promise<unknown> {
+    const maxRateLimitRetries = 3
+    for (let attempt = 0; attempt <= maxRateLimitRetries; attempt++) {
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -87,45 +206,92 @@ ${tree}`
         body: JSON.stringify({
           model: this.model,
           messages,
+          tools: this.toolRunner.getToolDefinitions(),
+          tool_choice: 'auto',
           temperature: 0.2,
           stream: false,
         }),
         signal: controller.signal,
       })
-      if (!response.ok) {
-        const body = await response.text().catch(() => '')
-        const hint = body ? ` ${body.slice(0, 400)}` : ''
-        throw new Error(`OpenRouter request failed (${response.status}).${hint}`)
-      }
-      const data = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>
-        usage?: unknown
-      }
-      const content = data?.choices?.[0]?.message?.content
-      const textOut = Array.isArray(content)
-        ? content.map((item) => (typeof item?.text === 'string' ? item.text : '')).join('')
-        : typeof content === 'string'
-          ? content
-          : ''
 
-      this.history.push({ role: 'assistant', text: textOut })
-      if (data?.usage) this.emitEvent({ type: 'usageUpdated', usage: data.usage })
-      this.emitEvent({ type: 'assistantDelta', delta: textOut })
-      this.emitEvent({ type: 'assistantCompleted' })
-      this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.name === 'AbortError'
-            ? 'OpenRouter request timed out.'
-            : err.message
-          : String(err)
-      this.emitEvent({ type: 'status', status: 'error', message: msg })
-      this.emitEvent({ type: 'assistantCompleted' })
-    } finally {
-      clearTimeout(timer)
-      if (this.activeController === controller) this.activeController = null
+      if (response.ok) {
+        return response.json()
+      }
+
+      const retryAfterHeader = response.headers.get('retry-after')
+      const body = await response.text().catch(() => '')
+      const retryDelayMs = this.getRetryDelayMs(response.status, retryAfterHeader, body, attempt)
+      const canRetry = retryDelayMs > 0 && attempt < maxRateLimitRetries
+      if (canRetry) {
+        const retrySeconds = (retryDelayMs / 1000).toFixed(1).replace(/\.0$/, '')
+        this.emitEvent({
+          type: 'thinking',
+          message: `OpenRouter rate limited — retrying in ${retrySeconds}s...`,
+        })
+        await this.sleepWithAbort(retryDelayMs, controller.signal)
+        continue
+      }
+
+      const hint = body ? ` ${body.slice(0, 500)}` : ''
+      throw new Error(`OpenRouter request failed (${response.status}).${hint}`)
     }
+    throw new Error('OpenRouter request failed after retries.')
+  }
+
+  private getRetryDelayMs(status: number, retryAfterHeader: string | null, body: string, attempt: number): number {
+    if (status !== 429) return 0
+
+    if (retryAfterHeader) {
+      const asSeconds = Number(retryAfterHeader)
+      if (Number.isFinite(asSeconds) && asSeconds > 0) {
+        return Math.max(250, Math.round(asSeconds * 1000))
+      }
+      const asDate = Date.parse(retryAfterHeader)
+      if (!Number.isNaN(asDate)) {
+        const delay = asDate - Date.now()
+        if (delay > 0) return delay
+      }
+    }
+
+    const bodySecondsMatch = body.match(/try again in\s*([\d.]+)\s*s/i)
+    if (bodySecondsMatch) {
+      const seconds = Number(bodySecondsMatch[1])
+      if (Number.isFinite(seconds) && seconds > 0) {
+        return Math.max(250, Math.round(seconds * 1000))
+      }
+    }
+
+    return Math.min(12000, 2000 * 2 ** attempt)
+  }
+
+  private async sleepWithAbort(delayMs: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) throw new Error('aborted')
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort)
+        resolve()
+      }, delayMs)
+      const onAbort = () => {
+        clearTimeout(timer)
+        signal.removeEventListener('abort', onAbort)
+        reject(new Error('aborted'))
+      }
+      signal.addEventListener('abort', onAbort)
+    })
+  }
+
+  private extractAssistantText(content: string | Array<{ type?: string; text?: string }> | undefined): string {
+    if (typeof content === 'string') return content
+    if (!Array.isArray(content)) return ''
+    return content
+      .map((item) => (typeof item?.text === 'string' ? item.text : ''))
+      .join('')
+  }
+
+  private safeToolArgsPreview(rawArgs: string | undefined): string {
+    if (!rawArgs || !rawArgs.trim()) return ''
+    const compact = rawArgs.replace(/\s+/g, ' ').trim()
+    return compact.length > 120 ? compact.slice(0, 120) + '...' : compact
   }
 
   async interruptActiveTurn() {

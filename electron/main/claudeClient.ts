@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events'
 
 import { generateWorkspaceTreeText } from './fileTree'
 import { resolveAtFileReferences } from './atFileResolver'
+import { buildSystemPrompt } from './systemPrompt'
 
 /** Ensure npm global bin is in PATH so Electron can find claude CLI. */
 function getClaudeSpawnEnv(): NodeJS.ProcessEnv {
@@ -30,6 +31,8 @@ export type ClaudeConnectOptions = {
   cwd: string
   model: string
   permissionMode?: 'verify-first' | 'proceed-always'
+  sandbox?: 'read-only' | 'workspace-write'
+  interactionMode?: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
@@ -37,18 +40,22 @@ export class ClaudeClient extends EventEmitter {
   private model: string = 'sonnet'
   private cwd: string = process.cwd()
   private permissionMode: 'verify-first' | 'proceed-always' = 'verify-first'
+  private sandbox: 'read-only' | 'workspace-write' = 'workspace-write'
+  private interactionMode: string = 'agent'
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeProc: ChildProcessWithoutNullStreams | null = null
 
   private normalizeModelId(model: string) {
-    const normalized = model.trim().toLowerCase()
+    const trimmed = model.trim()
+    if (!trimmed) return 'sonnet'
+    const normalized = trimmed.toLowerCase()
     const aliasMap: Record<string, string> = {
       'claude-sonnet-4-5-20250929': 'sonnet',
+      'claude-sonnet-4-6': 'sonnet',
       'claude-opus-4-1-20250805': 'opus',
       'claude-haiku-3-5-20241022': 'haiku',
     }
-    if (!normalized) return 'sonnet'
-    return aliasMap[normalized] ?? normalized
+    return aliasMap[normalized] ?? trimmed
   }
 
   private isModelNotFoundError(message: string) {
@@ -76,6 +83,8 @@ export class ClaudeClient extends EventEmitter {
     this.model = normalized
     this.cwd = options.cwd || process.cwd()
     this.permissionMode = options.permissionMode ?? 'verify-first'
+    this.sandbox = options.sandbox ?? 'workspace-write'
+    this.interactionMode = options.interactionMode ?? 'agent'
     if (normalized !== requestedModel) {
       this.emitEvent({
         type: 'status',
@@ -93,7 +102,7 @@ export class ClaudeClient extends EventEmitter {
     return { threadId: 'claude' }
   }
 
-  async sendUserMessage(text: string) {
+  async sendUserMessage(text: string, options?: { interactionMode?: string; gitStatus?: string }) {
     const trimmed = text.trim()
     if (!trimmed) return
 
@@ -101,11 +110,17 @@ export class ClaudeClient extends EventEmitter {
     this.history.push({ role: 'user', text: trimmed + fileContext })
 
     const tree = generateWorkspaceTreeText(this.cwd)
-    const COMPLETION_SYSTEM = `You are a coding assistant running inside Barnaby. I have provided the workspace structure below. I will provide file contents when you ask or when I reference them (e.g. @filename).
-
-${tree}`
+    const mode = options?.interactionMode ?? this.interactionMode
+    const COMPLETION_SYSTEM = buildSystemPrompt({
+      workspaceTree: tree,
+      cwd: this.cwd,
+      permissionMode: this.permissionMode,
+      sandbox: this.sandbox,
+      interactionMode: mode,
+      gitStatus: options?.gitStatus,
+    })
     const prompt = this.buildPrompt()
-    const permissionMode = this.permissionMode === 'proceed-always' ? 'acceptEdits' : 'default'
+    const permissionMode = this.permissionMode === 'proceed-always' ? 'bypassPermissions' : 'default'
 
     const runWithModel = async (modelId: string) => {
       let full = ''

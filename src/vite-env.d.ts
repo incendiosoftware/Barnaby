@@ -75,6 +75,7 @@ interface Window {
         permissionMode?: 'verify-first' | 'proceed-always'
         approvalPolicy?: 'on-request' | 'never'
         sandbox?: 'read-only' | 'workspace-write'
+        interactionMode?: string
         allowedCommandPrefixes?: string[]
         allowedAutoReadPrefixes?: string[]
         allowedAutoWritePrefixes?: string[]
@@ -90,6 +91,7 @@ interface Window {
       text: string,
       imagePaths?: string[],
       priorMessagesForContext?: Array<{ role: string; content: string }>,
+      interactionMode?: string,
     ): Promise<void>
     loadChatHistory(): Promise<unknown[]>
     saveChatHistory(entries: unknown[]): Promise<{

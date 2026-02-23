@@ -22,6 +22,7 @@ import { GeminiClient, type GeminiClientEvent } from './geminiClient'
 import { ClaudeClient, type ClaudeClientEvent } from './claudeClient'
 import { OpenRouterClient, type OpenRouterClientEvent } from './openRouterClient'
 import { OpenAIClient, type OpenAIClientEvent } from './openaiClient'
+import { initializePluginHost, shutdownPluginHost, setPluginHostWindow, setWorkspaceRootGetter, notifyPluginPanelEvent, notifyPluginPanelTurnComplete } from './pluginHost'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
 const WORKSPACE_LOCK_DIRNAME = '.barnaby'
@@ -2017,6 +2018,10 @@ async function getGitStatus(workspaceRoot: string): Promise<GitStatusResult> {
 function forwardEvent(agentWindowId: string, evt: AgentEvent) {
   win?.webContents.send('agentorchestrator:event', { agentWindowId, evt })
   win?.webContents.send('fireharness:event', { agentWindowId, evt })
+  notifyPluginPanelEvent(agentWindowId, evt as any)
+  if (evt?.type === 'assistantCompleted') {
+    notifyPluginPanelTurnComplete(agentWindowId)
+  }
 }
 
 async function getOrCreateClient(agentWindowId: string, options: ConnectOptions): Promise<{ client: AgentClient; result: { threadId: string } }> {
@@ -2181,6 +2186,16 @@ app.whenReady().then(async () => {
   appendRuntimeLog('app-start', { version: app.getVersion(), platform: process.platform, electron: process.versions.electron })
   migrateLegacyLocalStorageIfNeeded()
   await createWindow()
+  if (win) {
+    setPluginHostWindow(win)
+    setWorkspaceRootGetter(() => {
+      for (const [root] of ownedWorkspaceLocks) return root
+      return ''
+    })
+    initializePluginHost(app.getAppPath()).catch((e) => {
+      console.error('[pluginHost] Initialization failed:', e)
+    })
+  }
 })
 
 app.on('window-all-closed', () => {
@@ -2188,6 +2203,7 @@ app.on('window-all-closed', () => {
   closeSplashWindow()
   clearStartupRevealTimer()
   releaseAllWorkspaceLocks()
+  shutdownPluginHost().catch(() => {})
   for (const client of agentClients.values()) {
     (client as { close: () => Promise<void> }).close().catch(() => {})
   }
@@ -2199,6 +2215,7 @@ app.on('before-quit', () => {
   closeSplashWindow()
   clearStartupRevealTimer()
   releaseAllWorkspaceLocks()
+  shutdownPluginHost().catch(() => {})
   for (const client of agentClients.values()) {
     (client as { close: () => Promise<void> }).close().catch(() => {})
   }

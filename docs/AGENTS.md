@@ -17,6 +17,14 @@ This repository builds a local desktop executable (Electron). It is not a web de
 - **publish** = release to GitHub. Run after package + commit + push.
 - Do not assume publish unless user explicitly asks.
 
+## Incremental Semantics
+
+Each instruction includes all prior steps. Do not repeat work:
+- **package** = bump + build (do not run build separately first).
+- **release** = package → commit → push → publish
+
+When user says "build and package", treat as **package** (package includes build; do not run build twice).
+
 ## Reporting Requirements
 
 After any build, report:

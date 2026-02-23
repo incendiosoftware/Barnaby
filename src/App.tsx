@@ -9,6 +9,7 @@ import { buildTimelineForPanel } from './chat/timelineParser'
 import type { TimelineUnit } from './chat/timelineTypes'
 import { EmbeddedTerminal } from './components/Terminal'
 import { CodeMirrorEditor } from './components/CodeMirrorEditor'
+import { registerPluginHostCallbacks, unregisterPluginHostCallbacks } from './pluginHostRenderer'
 
 type Theme = 'light' | 'dark'
 
@@ -83,6 +84,14 @@ type WorkspaceSettings = {
   allowedAutoWritePrefixes: string[]
   deniedAutoReadPrefixes: string[]
   deniedAutoWritePrefixes: string[]
+}
+
+type WorkspaceSettingsTextDraft = {
+  allowedCommandPrefixes: string
+  allowedAutoReadPrefixes: string
+  allowedAutoWritePrefixes: string
+  deniedAutoReadPrefixes: string
+  deniedAutoWritePrefixes: string
 }
 
 type WorkspaceTreeNode = {
@@ -452,7 +461,7 @@ const CODE_WINDOW_TOOLBAR_BUTTON_SM = 'h-7 w-9 inline-flex items-center justify-
 const UI_INPUT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 placeholder:text-neutral-500 dark:placeholder:text-neutral-400'
 const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100'
 const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
-const STATUS_SYMBOL_ICON_CLASS = 'h-[13px] w-[13px] text-neutral-600 dark:text-neutral-300'
+const STATUS_SYMBOL_ICON_CLASS = 'h-[15px] w-[15px] text-neutral-600 dark:text-neutral-300'
 const CONNECTIVITY_PROVIDERS: ConnectivityProvider[] = ['codex', 'claude', 'gemini', 'openrouter']
 const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'preferences', 'agents', 'diagnostics']
 const PANEL_COMPLETION_NOTICE_MS = 15000
@@ -879,18 +888,26 @@ const DEFAULT_THEME_ID = 'default-dark'
 const THEME_ID_STORAGE_KEY = 'agentorchestrator.themeId'
 const THEME_OVERRIDES_STORAGE_KEY = 'agentorchestrator.themeOverrides'
 
-/** Default command prefixes for builds/deployments when workspace has no allowlist. */
-const DEFAULT_BUILD_DEPLOY_COMMAND_PREFIXES = [
-  'npm',
-  'npx',
-  'node',
-  'git',
-  'pnpm',
-  'yarn',
-  'tsc',
-  'vite',
-  'dotnet',
-  'gh',
+/** Default workspace safety policy values for fresh workspaces. */
+const DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES = [
+  'npm run build:dist:raw',
+  'npx vite build',
+]
+const DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES = [
+  'src/',
+  'package.json',
+]
+const DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES = [
+  'src/',
+  'package.json',
+]
+const DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES = [
+  '../',
+  '.env',
+]
+const DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES = [
+  '../',
+  '.env',
 ]
 
 type BaseStandaloneTheme = Omit<StandaloneTheme, keyof DiagnosticsMessageColors>
@@ -1446,7 +1463,38 @@ function normalizeAllowedCommandPrefixes(raw: unknown): string[] {
 }
 
 function parseAllowedCommandPrefixesInput(raw: string): string[] {
-  return normalizeAllowedCommandPrefixes(raw.split(/\r?\n/g))
+  return raw.split(/\r?\n/g)
+}
+
+function workspaceSettingsToTextDraft(settings: WorkspaceSettings): WorkspaceSettingsTextDraft {
+  return {
+    allowedCommandPrefixes: settings.allowedCommandPrefixes.join('\n'),
+    allowedAutoReadPrefixes: settings.allowedAutoReadPrefixes.join('\n'),
+    allowedAutoWritePrefixes: settings.allowedAutoWritePrefixes.join('\n'),
+    deniedAutoReadPrefixes: settings.deniedAutoReadPrefixes.join('\n'),
+    deniedAutoWritePrefixes: settings.deniedAutoWritePrefixes.join('\n'),
+  }
+}
+
+function applyWorkspaceTextDraftField(
+  form: WorkspaceSettings,
+  field: keyof WorkspaceSettingsTextDraft,
+  raw: string,
+): WorkspaceSettings {
+  const parsed = parseAllowedCommandPrefixesInput(raw)
+  if (field === 'allowedCommandPrefixes') {
+    return { ...form, allowedCommandPrefixes: parsed }
+  }
+  if (field === 'allowedAutoReadPrefixes') {
+    return { ...form, allowedAutoReadPrefixes: parsed }
+  }
+  if (field === 'allowedAutoWritePrefixes') {
+    return { ...form, allowedAutoWritePrefixes: parsed }
+  }
+  if (field === 'deniedAutoReadPrefixes') {
+    return { ...form, deniedAutoReadPrefixes: parsed }
+  }
+  return { ...form, deniedAutoWritePrefixes: parsed }
 }
 
 function parsePersistedAgentPanel(raw: unknown, fallbackWorkspaceRoot: string): AgentPanelState | null {
@@ -2060,6 +2108,11 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
     for (const [key, value] of Object.entries(parsed)) {
       const path = typeof value?.path === 'string' && value.path.trim() ? value.path : key
       if (!path) continue
+      const allowedCommandPrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedCommandPrefixes)
+      const allowedAutoReadPrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedAutoReadPrefixes)
+      const allowedAutoWritePrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedAutoWritePrefixes)
+      const deniedAutoReadPrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.deniedAutoReadPrefixes)
+      const deniedAutoWritePrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.deniedAutoWritePrefixes)
       result[path] = {
         path,
         defaultModel: typeof value?.defaultModel === 'string' && value.defaultModel ? value.defaultModel : DEFAULT_MODEL,
@@ -2068,11 +2121,11 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
           value?.sandbox === 'read-only'
             ? value.sandbox
             : 'workspace-write',
-        allowedCommandPrefixes: normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedCommandPrefixes),
-        allowedAutoReadPrefixes: normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedAutoReadPrefixes),
-        allowedAutoWritePrefixes: normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedAutoWritePrefixes),
-        deniedAutoReadPrefixes: normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.deniedAutoReadPrefixes),
-        deniedAutoWritePrefixes: normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.deniedAutoWritePrefixes),
+        allowedCommandPrefixes: allowedCommandPrefixes.length > 0 ? allowedCommandPrefixes : [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+        allowedAutoReadPrefixes: allowedAutoReadPrefixes.length > 0 ? allowedAutoReadPrefixes : [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
+        allowedAutoWritePrefixes: allowedAutoWritePrefixes.length > 0 ? allowedAutoWritePrefixes : [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
+        deniedAutoReadPrefixes: deniedAutoReadPrefixes.length > 0 ? deniedAutoReadPrefixes : [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+        deniedAutoWritePrefixes: deniedAutoWritePrefixes.length > 0 ? deniedAutoWritePrefixes : [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
       }
     }
     for (const p of list) {
@@ -2082,11 +2135,11 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
           defaultModel: DEFAULT_MODEL,
           permissionMode: 'verify-first',
           sandbox: 'workspace-write',
-          allowedCommandPrefixes: [],
-          allowedAutoReadPrefixes: [],
-          allowedAutoWritePrefixes: [],
-          deniedAutoReadPrefixes: [],
-          deniedAutoWritePrefixes: [],
+          allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+          allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
+          allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
+          deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+          deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
         }
       }
     }
@@ -2099,11 +2152,11 @@ function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSe
         defaultModel: DEFAULT_MODEL,
         permissionMode: 'verify-first',
         sandbox: 'workspace-write',
-        allowedCommandPrefixes: [],
-        allowedAutoReadPrefixes: [],
-        allowedAutoWritePrefixes: [],
-        deniedAutoReadPrefixes: [],
-        deniedAutoWritePrefixes: [],
+        allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+        allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
+        allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
+        deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+        deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
       }
     }
     return result
@@ -2144,12 +2197,25 @@ export default function App() {
     defaultModel: DEFAULT_MODEL,
     permissionMode: 'verify-first',
     sandbox: 'workspace-write',
-    allowedCommandPrefixes: [],
-    allowedAutoReadPrefixes: [],
-    allowedAutoWritePrefixes: [],
-    deniedAutoReadPrefixes: [],
-    deniedAutoWritePrefixes: [],
+    allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+    allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
+    allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
+    deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+    deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
   })
+  const [workspaceFormTextDraft, setWorkspaceFormTextDraft] = useState<WorkspaceSettingsTextDraft>(() =>
+    workspaceSettingsToTextDraft({
+      path: getInitialWorkspaceRoot(),
+      defaultModel: DEFAULT_MODEL,
+      permissionMode: 'verify-first',
+      sandbox: 'workspace-write',
+      allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+      allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
+      allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
+      deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+      deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
+    }),
+  )
   const [showThemeModal, setShowThemeModal] = useState(false)
   const [appSettingsView, setAppSettingsView] = useState<AppSettingsView>('connectivity')
   const [applicationSettings, setApplicationSettings] = useState<ApplicationSettings>(() => getInitialApplicationSettings())
@@ -3666,7 +3732,21 @@ export default function App() {
   async function browseForWorkspaceIntoForm() {
     const path = await api.openFolderDialog?.()
     if (!path) return
-    setWorkspaceForm((prev) => ({ ...prev, path }))
+    setWorkspaceForm((prev) => {
+      const nextForm = { ...prev, path }
+      if (showWorkspaceModal) {
+        const normalized = normalizeWorkspaceSettingsForm(nextForm)
+        queueMicrotask(() => {
+          void persistWorkspaceSettings(normalized, { requestSwitch: true })
+        })
+      } else if (dockTab === 'settings') {
+        const normalized = normalizeWorkspaceSettingsForm(nextForm)
+        queueMicrotask(() => {
+          void persistWorkspaceSettings(normalized, { requestSwitch: true })
+        })
+      }
+      return nextForm
+    })
   }
 
   function buildWorkspaceForm(mode: 'new' | 'edit') {
@@ -3677,21 +3757,20 @@ export default function App() {
         defaultModel: DEFAULT_MODEL,
         permissionMode: 'verify-first',
         sandbox: 'workspace-write',
-        allowedCommandPrefixes: [],
-        allowedAutoReadPrefixes: [],
-        allowedAutoWritePrefixes: [],
-        deniedAutoReadPrefixes: [],
-        deniedAutoWritePrefixes: [],
+        allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+        allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
+        allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
+        deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+        deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
       } as WorkspaceSettings)
 
-    const isProceedAlways = (current.permissionMode ?? 'verify-first') === 'proceed-always'
     const hasNoAllowlist =
       (current.allowedCommandPrefixes ?? []).length === 0 &&
       (current.allowedAutoReadPrefixes ?? []).length === 0 &&
       (current.allowedAutoWritePrefixes ?? []).length === 0 &&
       (current.deniedAutoReadPrefixes ?? []).length === 0 &&
       (current.deniedAutoWritePrefixes ?? []).length === 0
-    const useBuildDefaults = isProceedAlways && hasNoAllowlist
+    const useWorkspaceDefaults = hasNoAllowlist
 
     const cmdPrefixes = normalizeAllowedCommandPrefixes(current.allowedCommandPrefixes)
     const readPrefixes = normalizeAllowedCommandPrefixes(current.allowedAutoReadPrefixes)
@@ -3705,11 +3784,11 @@ export default function App() {
         defaultModel: current.defaultModel ?? DEFAULT_MODEL,
         permissionMode: current.permissionMode ?? 'verify-first',
         sandbox: current.sandbox ?? 'workspace-write',
-        allowedCommandPrefixes: useBuildDefaults ? [...DEFAULT_BUILD_DEPLOY_COMMAND_PREFIXES] : cmdPrefixes,
-        allowedAutoReadPrefixes: readPrefixes,
-        allowedAutoWritePrefixes: writePrefixes,
-        deniedAutoReadPrefixes: deniedRead,
-        deniedAutoWritePrefixes: deniedWrite,
+        allowedCommandPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES] : cmdPrefixes,
+        allowedAutoReadPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES] : readPrefixes,
+        allowedAutoWritePrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES] : writePrefixes,
+        deniedAutoReadPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES] : deniedRead,
+        deniedAutoWritePrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES] : deniedWrite,
       } satisfies WorkspaceSettings
     }
 
@@ -3718,11 +3797,11 @@ export default function App() {
       defaultModel: current.defaultModel ?? DEFAULT_MODEL,
       permissionMode: current.permissionMode ?? 'verify-first',
       sandbox: current.sandbox ?? 'workspace-write',
-      allowedCommandPrefixes: useBuildDefaults ? [...DEFAULT_BUILD_DEPLOY_COMMAND_PREFIXES] : cmdPrefixes,
-      allowedAutoReadPrefixes: readPrefixes,
-      allowedAutoWritePrefixes: writePrefixes,
-      deniedAutoReadPrefixes: deniedRead,
-      deniedAutoWritePrefixes: deniedWrite,
+      allowedCommandPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES] : cmdPrefixes,
+      allowedAutoReadPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES] : readPrefixes,
+      allowedAutoWritePrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES] : writePrefixes,
+      deniedAutoReadPrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES] : deniedRead,
+      deniedAutoWritePrefixes: useWorkspaceDefaults ? [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES] : deniedWrite,
     } satisfies WorkspaceSettings
   }
 
@@ -3760,30 +3839,100 @@ export default function App() {
 
   function openWorkspaceSettings(mode: 'new' | 'edit') {
     setWorkspaceModalMode(mode)
-    setWorkspaceForm(buildWorkspaceForm(mode))
+    const nextForm = buildWorkspaceForm(mode)
+    setWorkspaceForm(nextForm)
+    setWorkspaceFormTextDraft(workspaceSettingsToTextDraft(nextForm))
     setShowWorkspaceModal(true)
   }
 
   function openWorkspaceSettingsTab() {
-    setWorkspaceForm(buildWorkspaceForm('edit'))
+    const nextForm = buildWorkspaceForm('edit')
+    setWorkspaceForm(nextForm)
+    setWorkspaceFormTextDraft(workspaceSettingsToTextDraft(nextForm))
     setShowWorkspaceModal(false)
     setDockTab('settings')
   }
 
-  async function saveWorkspaceSettings() {
-    const next = normalizeWorkspaceSettingsForm(workspaceForm)
+  async function persistWorkspaceSettings(
+    next: WorkspaceSettings,
+    options?: { closeModal?: boolean; requestSwitch?: boolean },
+  ) {
     if (!next.path) return
+
+    setWorkspaceSettingsByPath((prev) => {
+      const existing = prev[next.path]
+      if (existing && workspaceFormsEqual(existing, next)) return prev
+      return { ...prev, [next.path]: next }
+    })
+    setWorkspaceList((prev) => (prev.includes(next.path) ? prev : [next.path, ...prev]))
+    if (options?.closeModal) setShowWorkspaceModal(false)
+    if (options?.requestSwitch) {
+      const normalizedCurrentRoot = normalizeWorkspacePathForCompare(workspaceRootRef.current || '')
+      const normalizedNextPath = normalizeWorkspacePathForCompare(next.path)
+      if (normalizedCurrentRoot !== normalizedNextPath) {
+        requestWorkspaceSwitch(next.path, 'workspace-create')
+      }
+    }
 
     try {
       await api.writeWorkspaceConfig?.(next.path)
     } catch {
       // best-effort only
     }
+  }
 
-    setWorkspaceSettingsByPath((prev) => ({ ...prev, [next.path]: next }))
-    setWorkspaceList((prev) => (prev.includes(next.path) ? prev : [next.path, ...prev]))
-    setShowWorkspaceModal(false)
-    requestWorkspaceSwitch(next.path, 'workspace-create')
+  function updateDockedWorkspaceForm(updater: (prev: WorkspaceSettings) => WorkspaceSettings) {
+    setWorkspaceForm((prev) => {
+      const nextForm = updater(prev)
+      const normalized = normalizeWorkspaceSettingsForm(nextForm)
+      queueMicrotask(() => {
+        const normalizedCurrentRoot = normalizeWorkspacePathForCompare(workspaceRootRef.current || '')
+        const normalizedFormPath = normalizeWorkspacePathForCompare(normalized.path)
+        if (normalizedCurrentRoot !== normalizedFormPath) return
+        void persistWorkspaceSettings(normalized)
+      })
+      return nextForm
+    })
+  }
+
+  function updateWorkspaceModalForm(
+    updater: (prev: WorkspaceSettings) => WorkspaceSettings,
+    options?: { requestSwitch?: boolean },
+  ) {
+    setWorkspaceForm((prev) => {
+      const nextForm = updater(prev)
+      const normalized = normalizeWorkspaceSettingsForm(nextForm)
+      queueMicrotask(() => {
+        void persistWorkspaceSettings(normalized, options?.requestSwitch ? { requestSwitch: true } : undefined)
+      })
+      return nextForm
+    })
+  }
+
+  function updateDockedWorkspaceTextDraft(
+    field: keyof WorkspaceSettingsTextDraft,
+    raw: string,
+  ) {
+    setWorkspaceFormTextDraft((prev) => ({ ...prev, [field]: raw }))
+    setWorkspaceForm((prev) => {
+      const nextForm = applyWorkspaceTextDraftField(prev, field, raw)
+      const normalized = normalizeWorkspaceSettingsForm(nextForm)
+      queueMicrotask(() => {
+        const normalizedCurrentRoot = normalizeWorkspacePathForCompare(workspaceRootRef.current || '')
+        const normalizedFormPath = normalizeWorkspacePathForCompare(normalized.path)
+        if (normalizedCurrentRoot !== normalizedFormPath) return
+        void persistWorkspaceSettings(normalized)
+      })
+      return nextForm
+    })
+  }
+
+  function updateWorkspaceModalTextDraft(
+    field: keyof WorkspaceSettingsTextDraft,
+    raw: string,
+  ) {
+    setWorkspaceFormTextDraft((prev) => ({ ...prev, [field]: raw }))
+    updateWorkspaceModalForm((prev) => applyWorkspaceTextDraftField(prev, field, raw))
   }
 
   async function deleteWorkspace(pathToDelete: string) {
@@ -4213,6 +4362,51 @@ export default function App() {
       unsubMenu?.()
     }
   }, [api, workspaceList, workspaceRoot])
+
+  useEffect(() => {
+    const cleanup = registerPluginHostCallbacks({
+      async createPanel(options) {
+        const id = newId()
+        const panelWorkspace = options.workspace || workspaceRoot
+        const ws = workspaceSettingsByPath[panelWorkspace] ?? workspaceSettingsByPath[workspaceRoot]
+        const p = makeDefaultPanel(id, panelWorkspace)
+        if (options.model) p.model = options.model
+        else if (ws?.defaultModel) p.model = ws.defaultModel
+        p.messages = withModelBanner(p.messages, p.model)
+        if (options.interactionMode) p.interactionMode = parseInteractionMode(options.interactionMode as any)
+        if (options.permissionMode) p.permissionMode = options.permissionMode as any
+        if (options.sandbox) p.sandbox = options.sandbox as any
+        const clampedSecurity = clampPanelSecurityForWorkspace(panelWorkspace, p.sandbox, p.permissionMode)
+        p.sandbox = clampedSecurity.sandbox
+        p.permissionMode = clampedSecurity.permissionMode
+        setPanels((prev) => {
+          if (prev.length >= MAX_PANELS) return prev
+          return [...prev, p]
+        })
+        return id
+      },
+      async closePanel(panelId) {
+        const panel = panelsRef.current.find((w) => w.id === panelId)
+        if (panel) upsertPanelToHistory(panel)
+        setPanels((prev) => prev.filter((w) => w.id !== panelId))
+        try { await api.disconnect(panelId) } catch { /* best-effort */ }
+      },
+      async sendMessage(panelId, message, _attachments) {
+        void sendToAgent(panelId, message)
+      },
+      async interruptPanel(panelId) {
+        try { await api.interrupt(panelId) } catch { /* best-effort */ }
+      },
+      async listFiles(options) {
+        const tree = await api.listWorkspaceTree(workspaceRoot, { includeHidden: options.includeHidden })
+        return tree
+      },
+    })
+    return () => {
+      cleanup()
+      unregisterPluginHostCallbacks()
+    }
+  }, [workspaceRoot])
 
   function estimateTokenCountFromText(text: string) {
     const trimmed = text.trim()
@@ -5426,7 +5620,7 @@ export default function App() {
               }`}
               onClick={() => setDockTab('orchestrator')}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <rect x="2.5" y="2.5" width="11" height="11" rx="1.8" stroke="currentColor" strokeWidth="1.1" />
                 <circle cx="6" cy="6" r="1.2" fill="currentColor" />
                 <circle cx="10" cy="6" r="1.2" fill="currentColor" />
@@ -5447,7 +5641,7 @@ export default function App() {
               }`}
               onClick={() => setDockTab('explorer')}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M2.5 4.5C2.5 3.95 2.95 3.5 3.5 3.5H6.2L7 4.5H12.5C13.05 4.5 13.5 4.95 13.5 5.5V11.5C13.5 12.05 13.05 12.5 12.5 12.5H3.5C2.95 12.5 2.5 12.05 2.5 11.5V4.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
               </svg>
             </button>
@@ -5462,7 +5656,7 @@ export default function App() {
               }`}
               onClick={() => setDockTab('git')}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <circle cx="4" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.2" />
                 <circle cx="12" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.2" />
                 <circle cx="8" cy="12" r="1.5" stroke="currentColor" strokeWidth="1.2" />
@@ -5482,7 +5676,7 @@ export default function App() {
               }`}
               onClick={openWorkspaceSettingsTab}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M8 2.2L9 3.1L10.4 2.8L11.2 4.1L12.6 4.4L12.5 5.9L13.6 6.8L12.8 8L13.6 9.2L12.5 10.1L12.6 11.6L11.2 11.9L10.4 13.2L9 12.9L8 13.8L7 12.9L5.6 13.2L4.8 11.9L3.4 11.6L3.5 10.1L2.4 9.2L3.2 8L2.4 6.8L3.5 5.9L3.4 4.4L4.8 4.1L5.6 2.8L7 3.1L8 2.2Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
                 <circle cx="8" cy="8" r="1.9" stroke="currentColor" strokeWidth="1.1" />
               </svg>
@@ -5495,7 +5689,7 @@ export default function App() {
             className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
             onClick={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
           >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <rect x="2.2" y="2.3" width="11.6" height="11.4" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
               {workspaceDockSide === 'right' ? (
                 <>
@@ -5519,7 +5713,7 @@ export default function App() {
             className="h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
             onClick={() => setShowWorkspaceWindow(false)}
           >
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <svg width="12" height="12" viewBox="0 0 10 10" fill="none" aria-hidden="true">
               <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
               <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
             </svg>
@@ -5612,7 +5806,7 @@ export default function App() {
               className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
               onClick={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <rect x="2.2" y="2.3" width="11.6" height="11.4" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
                 {workspaceDockSide === 'right' ? (
                   <>
@@ -5636,7 +5830,7 @@ export default function App() {
               className="h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
               onClick={() => setShowCodeWindow(false)}
             >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+              <svg width="12" height="12" viewBox="0 0 10 10" fill="none" aria-hidden="true">
                 <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
               </svg>
@@ -5689,7 +5883,7 @@ export default function App() {
               aria-label={applicationSettings.editorWordWrap ? 'Word wrap on' : 'Word wrap off'}
               title={applicationSettings.editorWordWrap ? 'Word wrap on (click to turn off)' : 'Word wrap off (click to turn on)'}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M5 4L2 8l3 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
                 <path d="M11 4l3 4-3 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
                 <path d="M9 6L7 10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
@@ -5708,7 +5902,7 @@ export default function App() {
               aria-label="Save"
               title="Save (Ctrl+S)"
             >
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
                 <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
                 <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
                 <path d="M5.2 9.5H10.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
@@ -5727,7 +5921,7 @@ export default function App() {
               aria-label="Save As"
               title="Save As (Ctrl+Shift+S)"
             >
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
                 <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
                 <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
                 <path d="M8 8.4V12.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
@@ -5745,7 +5939,7 @@ export default function App() {
               }}
               title="Close tab"
             >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                 <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
               </svg>
@@ -5854,7 +6048,7 @@ export default function App() {
               aria-label="Save"
               title="Save (Ctrl+S)"
             >
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
                 <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
                 <path d="M5.2 9.5H10.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
@@ -5868,7 +6062,7 @@ export default function App() {
               aria-label="Save As"
               title="Save As (Ctrl+Shift+S)"
             >
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
                 <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
                 <path d="M8 8.4V12.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
@@ -5881,7 +6075,7 @@ export default function App() {
               onClick={() => closeEditorPanel(panel.id)}
               title="Close editor"
             >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                 <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
               </svg>
@@ -6652,7 +6846,7 @@ export default function App() {
                 title="Refresh workspace folder"
                 aria-label="Refresh workspace folder"
               >
-                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 12 12" fill="none" aria-hidden="true">
                   <path d="M10 6A4 4 0 1 1 8.83 3.17" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                   <path d="M10 2.5V4.5H8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
@@ -6664,7 +6858,7 @@ export default function App() {
                 title="Expand all"
                 aria-label="Expand all"
               >
-                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 12 12" fill="none" aria-hidden="true">
                   <path d="M3 2.5L6 5.5L9 2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
                   <path d="M3 5.5L6 8.5L9 5.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
@@ -6676,7 +6870,7 @@ export default function App() {
                 title="Collapse all"
                 aria-label="Collapse all"
               >
-                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 12 12" fill="none" aria-hidden="true">
                   <path d="M3 6.5L6 3.5L9 6.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
                   <path d="M3 9.5L6 6.5L9 9.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
@@ -6735,7 +6929,7 @@ export default function App() {
               disabled={!canCommit || busy}
               onClick={() => void runGitOperation('commit')}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.2" />
                 <path d="M5 8l2 2 4-4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
@@ -6748,7 +6942,7 @@ export default function App() {
               disabled={busy || !gitStatus?.ok}
               onClick={() => void runGitOperation('push')}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M8 11V3M8 3L5 6M8 3l3 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
                 <path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
               </svg>
@@ -6761,7 +6955,7 @@ export default function App() {
               disabled={busy || !workspaceRoot}
               onClick={() => void runGitOperation('deploy')}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M8 2L2 6l6 4 6-4-6-4z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
                 <path d="M2 10l6 4 6-4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
@@ -6774,7 +6968,7 @@ export default function App() {
               disabled={busy || !workspaceRoot}
               onClick={() => void runGitOperation('build')}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M3 4h4l2 3 2-3h4v8H3V4z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
                 <path d="M6 7v4M10 7v4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
               </svg>
@@ -6787,7 +6981,7 @@ export default function App() {
               disabled={busy || !workspaceRoot}
               onClick={() => void runGitOperation('release')}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M8 2l1.2 3.6 3.8.1-2.9 2.2 1.1 3.7L8 9.8l-3.2 1.8 1.1-3.7-2.9-2.2 3.8-.1L8 2z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
               </svg>
             </button>
@@ -6799,7 +6993,7 @@ export default function App() {
               disabled={busy}
               onClick={() => void refreshGitStatus()}
             >
-              <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 12 12" fill="none" aria-hidden="true">
                 <path d="M10.5 6A4.5 4.5 0 116 1.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 <path d="M10.5 1.5v3h-3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
@@ -6918,9 +7112,6 @@ export default function App() {
   }
 
   function renderWorkspaceSettingsPane() {
-    const baselineForm = buildWorkspaceForm('edit')
-    const isWorkspaceSettingsDirty = !workspaceFormsEqual(workspaceForm, baselineForm)
-    const canSaveWorkspaceSettings = isWorkspaceSettingsDirty && Boolean(workspaceForm.path.trim())
     return (
       <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
         <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
@@ -6935,6 +7126,11 @@ export default function App() {
                   className={`w-full ${UI_INPUT_CLASS} font-mono text-xs`}
                   value={workspaceForm.path}
                   onChange={(e) => setWorkspaceForm((prev) => ({ ...prev, path: e.target.value }))}
+                  onBlur={(e) => {
+                    const next = normalizeWorkspaceSettingsForm({ ...workspaceForm, path: e.target.value })
+                    if (!next.path) return
+                    void persistWorkspaceSettings(next, { requestSwitch: true })
+                  }}
                 />
                 <button
                   type="button"
@@ -6956,7 +7152,7 @@ export default function App() {
                 className={`w-full ${UI_SELECT_CLASS}`}
                 value={workspaceForm.defaultModel}
                 onChange={(e) =>
-                  setWorkspaceForm((prev) => ({ ...prev, defaultModel: e.target.value }))
+                  updateDockedWorkspaceForm((prev) => ({ ...prev, defaultModel: e.target.value }))
                 }
               >
                 {getModelOptions(workspaceForm.defaultModel).map((id) => {
@@ -6975,7 +7171,7 @@ export default function App() {
                 className={`w-full ${UI_SELECT_CLASS}`}
                 value={workspaceForm.sandbox}
                 onChange={(e) =>
-                  setWorkspaceForm((prev) => {
+                  updateDockedWorkspaceForm((prev) => {
                     const nextSandbox = e.target.value as SandboxMode
                     return {
                       ...prev,
@@ -6999,7 +7195,7 @@ export default function App() {
                   className={`w-full ${UI_SELECT_CLASS}`}
                   value={workspaceForm.permissionMode}
                   onChange={(e) =>
-                    setWorkspaceForm((prev) => ({
+                    updateDockedWorkspaceForm((prev) => ({
                       ...prev,
                       permissionMode: e.target.value as PermissionMode,
                     }))
@@ -7016,14 +7212,10 @@ export default function App() {
                 <label className="text-neutral-600 dark:text-neutral-300">Allowed command prefixes</label>
                   <textarea
                     className={`w-full min-h-[96px] ${UI_INPUT_CLASS} font-mono text-xs`}
-                    value={workspaceForm.allowedCommandPrefixes.join('\n')}
+                    value={workspaceFormTextDraft.allowedCommandPrefixes}
                     onChange={(e) =>
-                      setWorkspaceForm((prev) => ({
-                        ...prev,
-                        allowedCommandPrefixes: parseAllowedCommandPrefixesInput(e.target.value),
-                      }))
+                      updateDockedWorkspaceTextDraft('allowedCommandPrefixes', e.target.value)
                     }
-                    onKeyDown={(e) => { if (e.key === 'Enter') e.stopPropagation() }}
                     placeholder={'npm run build:dist:raw\nnpx vite build'}
                   />
                   <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
@@ -7034,14 +7226,10 @@ export default function App() {
                   <label className="text-neutral-600 dark:text-neutral-300">Allowed auto-read paths</label>
                   <textarea
                     className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
-                    value={workspaceForm.allowedAutoReadPrefixes.join('\n')}
+                    value={workspaceFormTextDraft.allowedAutoReadPrefixes}
                     onChange={(e) =>
-                      setWorkspaceForm((prev) => ({
-                        ...prev,
-                        allowedAutoReadPrefixes: parseAllowedCommandPrefixesInput(e.target.value),
-                      }))
+                      updateDockedWorkspaceTextDraft('allowedAutoReadPrefixes', e.target.value)
                     }
-                    onKeyDown={(e) => { if (e.key === 'Enter') e.stopPropagation() }}
                     placeholder={'src/\npackage.json'}
                   />
                 </div>
@@ -7049,14 +7237,10 @@ export default function App() {
                   <label className="text-neutral-600 dark:text-neutral-300">Allowed auto-write paths</label>
                   <textarea
                     className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
-                    value={workspaceForm.allowedAutoWritePrefixes.join('\n')}
+                    value={workspaceFormTextDraft.allowedAutoWritePrefixes}
                     onChange={(e) =>
-                      setWorkspaceForm((prev) => ({
-                        ...prev,
-                        allowedAutoWritePrefixes: parseAllowedCommandPrefixesInput(e.target.value),
-                      }))
+                      updateDockedWorkspaceTextDraft('allowedAutoWritePrefixes', e.target.value)
                     }
-                    onKeyDown={(e) => { if (e.key === 'Enter') e.stopPropagation() }}
                     placeholder={'src/\npackage.json'}
                   />
                 </div>
@@ -7064,14 +7248,10 @@ export default function App() {
                   <label className="text-neutral-600 dark:text-neutral-300">Denied auto-read paths</label>
                   <textarea
                     className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
-                    value={workspaceForm.deniedAutoReadPrefixes.join('\n')}
+                    value={workspaceFormTextDraft.deniedAutoReadPrefixes}
                     onChange={(e) =>
-                      setWorkspaceForm((prev) => ({
-                        ...prev,
-                        deniedAutoReadPrefixes: parseAllowedCommandPrefixesInput(e.target.value),
-                      }))
+                      updateDockedWorkspaceTextDraft('deniedAutoReadPrefixes', e.target.value)
                     }
-                    onKeyDown={(e) => { if (e.key === 'Enter') e.stopPropagation() }}
                     placeholder={'../\n.env'}
                   />
                 </div>
@@ -7079,50 +7259,18 @@ export default function App() {
                   <label className="text-neutral-600 dark:text-neutral-300">Denied auto-write paths</label>
                   <textarea
                     className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
-                    value={workspaceForm.deniedAutoWritePrefixes.join('\n')}
+                    value={workspaceFormTextDraft.deniedAutoWritePrefixes}
                     onChange={(e) =>
-                      setWorkspaceForm((prev) => ({
-                        ...prev,
-                        deniedAutoWritePrefixes: parseAllowedCommandPrefixesInput(e.target.value),
-                      }))
+                      updateDockedWorkspaceTextDraft('deniedAutoWritePrefixes', e.target.value)
                     }
-                    onKeyDown={(e) => { if (e.key === 'Enter') e.stopPropagation() }}
                   placeholder={'../\n.env'}
                 />
               </div>
             </>
             )}
-            <div className="space-y-1.5">
-              <div className="pt-1 flex items-center gap-1.5">
-                <button
-                  type="button"
-                  className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                  onClick={() => void saveWorkspaceSettings()}
-                  disabled={!canSaveWorkspaceSettings}
-                  title="Save workspace settings"
-                  aria-label="Save workspace settings"
-                >
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M3 3.2H11.6L13 4.6V12.8H3V3.2Z" stroke="currentColor" strokeWidth="1.1" />
-                    <path d="M5 3.2V6.6H10.7V3.2" stroke="currentColor" strokeWidth="1.1" />
-                    <rect x="5" y="9.2" width="6" height="2.6" stroke="currentColor" strokeWidth="1.1" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                  onClick={() => setWorkspaceForm(baselineForm)}
-                  disabled={!isWorkspaceSettingsDirty}
-                  title="Revert unsaved changes"
-                  aria-label="Revert unsaved changes"
-                >
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M5.2 5.1H2.8V2.7" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-                    <path d="M2.8 5.1C3.8 3.8 5.3 3 7 3C9.9 3 12.2 5.3 12.2 8.2C12.2 11.1 9.9 13.4 7 13.4C5.4 13.4 4 12.7 3.1 11.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-                  </svg>
-                </button>
-              </div>
-            </div>
+            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+              Changes in this panel are saved immediately.
+            </p>
           </div>
         </div>
       </div>
@@ -7134,13 +7282,22 @@ export default function App() {
       <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
         <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
           <div className="font-medium text-neutral-700 dark:text-neutral-300">Agent Orchestrator</div>
-          <button
-            type="button"
-            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-[11px] text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-            onClick={() => window.open('https://barnaby.build/orchestrator', '_blank', 'noopener,noreferrer')}
-          >
-            More Informatin
-          </button>
+          <p className="mt-1.5 text-neutral-500 dark:text-neutral-400 leading-relaxed">
+            Persistent goal-driven orchestration for multi-agent workflows. Install the orchestrator plugin to enable.
+          </p>
+          <div className="mt-2.5 flex flex-col gap-2">
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-neutral-300 dark:bg-neutral-600" />
+              <span className="text-neutral-500 dark:text-neutral-400">Plugin: not installed</span>
+            </div>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-[11px] text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+              onClick={() => window.open('https://barnaby.build/orchestrator', '_blank', 'noopener,noreferrer')}
+            >
+              Learn more
+            </button>
+          </div>
         </div>
       </div>
     )
@@ -7167,7 +7324,7 @@ export default function App() {
       title={showWorkspaceWindow ? 'Hide workspace window' : 'Show workspace window'}
       aria-label={showWorkspaceWindow ? 'Hide workspace window' : 'Show workspace window'}
     >
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 16 16" fill="none" aria-hidden="true">
         <path
           d="M2.5 5.1c0-.6.5-1.1 1.1-1.1h3.2l1.2 1.2h4.9c.6 0 1.1.5 1.1 1.1v6.2c0 .6-.5 1.1-1.1 1.1H3.6c-.6 0-1.1-.5-1.1-1.1V5.1Z"
           stroke="currentColor"
@@ -7187,7 +7344,7 @@ export default function App() {
       title={showCodeWindow && codeWindowTab === 'code' ? 'Hide code window' : 'Show code window'}
       aria-label={showCodeWindow && codeWindowTab === 'code' ? 'Hide code window' : 'Show code window'}
     >
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 16 16" fill="none" aria-hidden="true">
         <path d="M6 5L3.5 8 6 11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
         <path d="M10 5L12.5 8 10 11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
         <path d="M9 5.7L7 10.3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
@@ -7203,7 +7360,7 @@ export default function App() {
       title={showCodeWindow && codeWindowTab === 'settings' ? 'Hide settings window' : 'Show settings window'}
       aria-label={showCodeWindow && codeWindowTab === 'settings' ? 'Hide settings window' : 'Show settings window'}
     >
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 16 16" fill="none" aria-hidden="true">
         <path d="M8 5.8A2.2 2.2 0 1 1 8 10.2A2.2 2.2 0 0 1 8 5.8Z" stroke="currentColor" strokeWidth="1.2" />
         <path d="M13.1 8.7V7.3L11.8 6.9C11.7 6.6 11.6 6.4 11.4 6.1L12 4.9L11.1 4L9.9 4.6C9.6 4.4 9.4 4.3 9.1 4.2L8.7 2.9H7.3L6.9 4.2C6.6 4.3 6.4 4.4 6.1 4.6L4.9 4L4 4.9L4.6 6.1C4.4 6.4 4.3 6.6 4.2 6.9L2.9 7.3V8.7L4.2 9.1C4.3 9.4 4.4 9.6 4.6 9.9L4 11.1L4.9 12L6.1 11.4C6.4 11.6 6.6 11.7 6.9 11.8L7.3 13.1H8.7L9.1 11.8C9.4 11.7 9.6 11.6 9.9 11.4L11.1 12L12 11.1L11.4 9.9C11.6 9.6 11.7 9.4 11.8 9.1L13.1 8.7Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
       </svg>
@@ -7301,7 +7458,7 @@ export default function App() {
                 title={showTerminalBar ? 'Hide terminal' : 'Show terminal'}
                 aria-label={showTerminalBar ? 'Hide terminal' : 'Show terminal'}
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2">
+                <svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2">
                   <rect x="2" y="2" width="12" height="12" rx="1" />
                   <rect x="2" y="9" width="12" height="5" rx="0.5" fill="currentColor" fillOpacity="0.6" />
                 </svg>
@@ -7330,7 +7487,7 @@ export default function App() {
               onClick={() => openWorkspaceSettings('new')}
               title="New workspace"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
                 <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
               </svg>
             </button>
@@ -7340,7 +7497,7 @@ export default function App() {
               onClick={() => openWorkspaceSettings('edit')}
               title="Edit selected workspace"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
                 <path d="M3 11.5L3.6 9.2L10.6 2.2L12.8 4.4L5.8 11.4L3 12Z" stroke="currentColor" strokeWidth="1.2" />
                 <path d="M8.5 3.9L11.1 6.5" stroke="currentColor" strokeWidth="1.2" />
               </svg>
@@ -7354,7 +7511,7 @@ export default function App() {
                 onClick={() => setHistoryDropdownOpen((o) => !o)}
               >
                 <span className="truncate">Open chat...</span>
-                <svg width="10" height="10" viewBox="0 0 10 10" className={`shrink-0 transition-transform ${historyDropdownOpen ? 'rotate-180' : ''}`}>
+                <svg width="12" height="12" viewBox="0 0 10 10" className={`shrink-0 transition-transform ${historyDropdownOpen ? 'rotate-180' : ''}`}>
                   <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
                 </svg>
               </button>
@@ -7401,7 +7558,7 @@ export default function App() {
               aria-label="New chat"
               disabled={panels.length >= MAX_PANELS}
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
               </svg>
             </button>
@@ -7422,7 +7579,7 @@ export default function App() {
                 title="Tile Vertical"
                 aria-label="Tile Vertical"
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
                   <rect x="2.5" y="3" width="5.5" height="10" rx="1" stroke="currentColor" />
                   <rect x="8" y="3" width="5.5" height="10" rx="1" stroke="currentColor" />
                 </svg>
@@ -7435,7 +7592,7 @@ export default function App() {
                 title="Tile Horizontal"
                 aria-label="Tile Horizontal"
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
                   <rect x="2.5" y="3" width="11" height="5" rx="1" stroke="currentColor" />
                   <rect x="2.5" y="8" width="11" height="5" rx="1" stroke="currentColor" />
                 </svg>
@@ -7448,7 +7605,7 @@ export default function App() {
                 title="Tile Grid"
                 aria-label="Tile Grid"
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
                   <rect x="2.5" y="2.5" width="5" height="5" rx="1" stroke="currentColor" />
                   <rect x="8.5" y="2.5" width="5" height="5" rx="1" stroke="currentColor" />
                   <rect x="2.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor" />
@@ -7576,7 +7733,7 @@ export default function App() {
                 title="Close terminal"
                 aria-label="Close terminal"
               >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                   <path d="M2 2L8 8M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
               </button>
@@ -7717,7 +7874,7 @@ export default function App() {
                 onClick={() => setShowThemeModal(false)}
                 title="Close"
               >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                   <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                   <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
@@ -7771,7 +7928,7 @@ export default function App() {
                 onClick={() => closeAppSettings()}
                 title="Close"
               >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                   <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                   <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
@@ -8826,7 +8983,7 @@ export default function App() {
                 }}
                 title="Close"
               >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                   <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                   <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
@@ -8948,7 +9105,7 @@ export default function App() {
                 }}
                 title="Skip setup"
               >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                   <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                   <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
@@ -9118,7 +9275,7 @@ export default function App() {
                 }}
                 title="Close"
               >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                   <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                   <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
@@ -9182,7 +9339,7 @@ export default function App() {
                 onClick={() => setPendingWorkspaceSwitch(null)}
                 title="Close"
               >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                   <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                   <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
@@ -9227,7 +9384,7 @@ export default function App() {
                   onClick={closeWorkspacePicker}
                   title="Close"
                 >
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                     <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                     <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                   </svg>
@@ -9288,11 +9445,11 @@ export default function App() {
                       defaultModel: DEFAULT_MODEL,
                       permissionMode: 'verify-first',
                       sandbox: 'workspace-write',
-                      allowedCommandPrefixes: [],
-                      allowedAutoReadPrefixes: [],
-                      allowedAutoWritePrefixes: [],
-                      deniedAutoReadPrefixes: [],
-                      deniedAutoWritePrefixes: [],
+                      allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+                      allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
+                      allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
+                      deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+                      deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
                     },
                   }))
                   requestWorkspaceSwitch(selected, 'picker')
@@ -9321,7 +9478,7 @@ export default function App() {
                 onClick={() => setShowWorkspaceModal(false)}
                 title="Close"
               >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                   <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                   <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
@@ -9334,6 +9491,11 @@ export default function App() {
                   className={`w-full ${UI_INPUT_CLASS} font-mono`}
                   value={workspaceForm.path}
                   onChange={(e) => setWorkspaceForm((prev) => ({ ...prev, path: e.target.value }))}
+                  onBlur={(e) => {
+                    const next = normalizeWorkspaceSettingsForm({ ...workspaceForm, path: e.target.value })
+                    if (!next.path) return
+                    void persistWorkspaceSettings(next, { requestSwitch: true })
+                  }}
                 />
                 <button
                   type="button"
@@ -9354,7 +9516,7 @@ export default function App() {
                   className={UI_SELECT_CLASS}
                   value={workspaceForm.defaultModel}
                   onChange={(e) =>
-                    setWorkspaceForm((prev) => ({ ...prev, defaultModel: e.target.value }))
+                    updateWorkspaceModalForm((prev) => ({ ...prev, defaultModel: e.target.value }))
                   }
                 >
                   {getModelOptions(workspaceForm.defaultModel).map((id) => {
@@ -9374,7 +9536,7 @@ export default function App() {
                     className={`w-full ${UI_SELECT_CLASS}`}
                     value={workspaceForm.sandbox}
                     onChange={(e) =>
-                      setWorkspaceForm((prev) => {
+                      updateWorkspaceModalForm((prev) => {
                         const nextSandbox = e.target.value as SandboxMode
                         return {
                           ...prev,
@@ -9400,7 +9562,7 @@ export default function App() {
                     className={UI_SELECT_CLASS}
                     value={workspaceForm.permissionMode}
                     onChange={(e) =>
-                      setWorkspaceForm((prev) => ({
+                      updateWorkspaceModalForm((prev) => ({
                         ...prev,
                         permissionMode: e.target.value as PermissionMode,
                       }))
@@ -9417,14 +9579,8 @@ export default function App() {
                   <div className="space-y-1">
                     <textarea
                       className={`w-full min-h-[96px] ${UI_INPUT_CLASS} font-mono text-xs`}
-                      value={workspaceForm.allowedCommandPrefixes.join('\n')}
-                      onChange={(e) =>
-                        setWorkspaceForm((prev) => ({
-                          ...prev,
-                          allowedCommandPrefixes: parseAllowedCommandPrefixesInput(e.target.value),
-                        }))
-                      }
-                      onKeyDown={(e) => { if (e.key === 'Enter') e.stopPropagation() }}
+                      value={workspaceFormTextDraft.allowedCommandPrefixes}
+                      onChange={(e) => updateWorkspaceModalTextDraft('allowedCommandPrefixes', e.target.value)}
                       placeholder={'npm run build:dist:raw\nnpx vite build'}
                     />
                     <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
@@ -9440,7 +9596,7 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-between">
+            <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-2">
               <div>
                 {workspaceModalMode === 'edit' && workspaceList.includes(workspaceForm.path) && (
                   <button
@@ -9455,18 +9611,13 @@ export default function App() {
                   </button>
                 )}
               </div>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-neutral-500 dark:text-neutral-400">Changes save automatically.</span>
                 <button
                   className="px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                   onClick={() => setShowWorkspaceModal(false)}
                 >
-                  Cancel
-                </button>
-                <button
-                  className={UI_BUTTON_PRIMARY_CLASS}
-                  onClick={saveWorkspaceSettings}
-                >
-                  Save
+                  Close
                 </button>
               </div>
             </div>
@@ -9644,7 +9795,7 @@ export default function App() {
               onClick={() => closePanel(w.id)}
               title="Close"
             >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
                 <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
               </svg>
@@ -10249,6 +10400,25 @@ export default function App() {
           <div className="mb-1 px-0.5 min-w-0 text-[11px]" style={{ color: timelineMessageColor }}>
             <span className="break-words [overflow-wrap:anywhere]">{w.status}</span>
           </div>
+          {contextUsage && contextUsagePercent !== null && (
+            <div
+              className="mb-2 px-0.5 inline-flex items-center gap-2"
+              title={`${contextUsagePercent.toFixed(1)}% used
+Estimated context usage
+Model window: ${contextUsage.modelContextTokens.toLocaleString()} tokens
+Reserved output: ${contextUsage.outputReserveTokens.toLocaleString()} tokens
+Safe input budget: ${contextUsage.safeInputBudgetTokens.toLocaleString()} tokens
+Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
+            >
+              <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
+                <span
+                  className={`block h-full ${contextUsageBarClass}`}
+                  style={{ width: `${Math.max(0, Math.min(100, contextUsagePercent))}%` }}
+                />
+              </span>
+              <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{contextUsagePercent.toFixed(1)}%</span>
+            </div>
+          )}
           <div className="flex items-end gap-2 min-w-0">
             <textarea
               ref={(el) => registerTextarea(w.id, el)}
@@ -10325,50 +10495,34 @@ export default function App() {
 
         <div className="relative z-20 border-t border-neutral-200/80 dark:border-neutral-800 px-3 py-2 text-xs min-w-0 overflow-visible bg-white/90 dark:bg-neutral-950">
           <div className="flex flex-wrap items-start justify-between gap-2 min-w-0">
-            <div className="min-w-0 flex-1 text-neutral-600 dark:text-neutral-300 flex items-center gap-2 flex-wrap">
-              <span
-                className="inline-flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-300"
-                title={activityTitle}
-                aria-label={`Panel activity ${activityLabel}`}
-              >
+            <div className="min-w-0 flex-1 text-neutral-600 dark:text-neutral-300">
+              <div className="min-w-0 flex items-center gap-2 flex-wrap">
                 <span
-                  className={`h-1.5 w-1.5 rounded-full ${activityDotClass} ${isRunning ? 'animate-pulse' : ''}`}
-                  aria-hidden
-                />
-                {activityLabel}
-              </span>
-              {showCompletionNotice && (
-                <span
-                  className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/35 dark:text-emerald-200"
-                  aria-live="polite"
+                  className="inline-flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-300"
+                  title={activityTitle}
+                  aria-label={`Panel activity ${activityLabel}`}
                 >
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-                  complete
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${activityDotClass} ${isRunning ? 'animate-pulse' : ''}`}
+                    aria-hidden
+                  />
+                  {activityLabel}
                 </span>
-              )}
-              {livePromptDurationLabel && (
-                <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400" title="Response duration">
-                  t+{livePromptDurationLabel}
-                </span>
-              )}
-              {contextUsage && contextUsagePercent !== null && (
-                <span
-                  className="inline-flex basis-full items-center gap-2 sm:basis-auto"
-                  title={`${contextUsagePercent.toFixed(1)}% used
-Estimated context usage
-Model window: ${contextUsage.modelContextTokens.toLocaleString()} tokens
-Reserved output: ${contextUsage.outputReserveTokens.toLocaleString()} tokens
-Safe input budget: ${contextUsage.safeInputBudgetTokens.toLocaleString()} tokens
-Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
-                >
-                  <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
-                    <span
-                      className={`block h-full ${contextUsageBarClass}`}
-                      style={{ width: `${Math.max(0, Math.min(100, contextUsagePercent))}%` }}
-                    />
+                {showCompletionNotice && (
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/35 dark:text-emerald-200"
+                    aria-live="polite"
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
+                    complete
                   </span>
-                </span>
-              )}
+                )}
+                {livePromptDurationLabel && (
+                  <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400" title="Response duration">
+                    t+{livePromptDurationLabel}
+                  </span>
+                )}
+              </div>
               {(() => {
                 const pct = getRateLimitPercent(w.usage)
                 const label = formatRateLimitLabel(w.usage)
@@ -10376,12 +10530,12 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                   return null
                 }
                 return (
-                  <span className="inline-flex basis-full items-center gap-2 sm:basis-auto">
+                  <div className="mt-1 inline-flex items-center gap-2">
                     <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
                       <span className="block h-full bg-blue-600" style={{ width: `${100 - pct}%` }} />
                     </span>
                     <span className="text-neutral-500 dark:text-neutral-400">{label}</span>
-                  </span>
+                  </div>
                 )
               })()}
             </div>

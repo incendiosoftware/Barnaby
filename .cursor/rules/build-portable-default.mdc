@@ -3,6 +3,11 @@ description: Portable-only build workflow defaults
 alwaysApply: true
 ---
 
+# Critical: package vs build
+
+- **"package"** or **"package and run"** → use `npm run package` (bumps version). NEVER use `npm run build`.
+- **"build"** or **"build and run"** → use `npm run build` (no version bump).
+
 # Build Defaults
 
 - This project is a local desktop executable workflow.
@@ -14,6 +19,11 @@ alwaysApply: true
 
 - Build commands that include `build:dist` auto-increment version.
 - After build, always mention the new version and artifact path.
+
+# Incremental Semantics
+
+- Each instruction includes prior steps. "build and package" = package (do not run build twice).
+- **release** = package → commit → push → publish.
 
 # Build + Run
 

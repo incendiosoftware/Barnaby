@@ -357,6 +357,19 @@ const api = {
     ipcRenderer.on('agentorchestrator:menu', listener)
     return () => ipcRenderer.off('agentorchestrator:menu', listener)
   },
+  onPluginHostRequest(cb: (payload: { channel: string; responseChannel: string; args: unknown[] }) => void) {
+    const listener = (_event: IpcRendererEvent, payload: { channel: string; responseChannel: string; args: unknown[] }) => cb(payload)
+    ipcRenderer.on('barnaby:plugin-host:request', listener)
+    return () => ipcRenderer.off('barnaby:plugin-host:request', listener)
+  },
+  pluginHostRespond(responseChannel: string, result: { ok: boolean; data?: unknown; error?: string }) {
+    return ipcRenderer.invoke(responseChannel, result) as Promise<void>
+  },
+  onPluginHostRecovery(cb: (payload: { pluginId: string; recoveryPrompt: string; stateFilePath: string; staleness: number }) => void) {
+    const listener = (_event: IpcRendererEvent, payload: { pluginId: string; recoveryPrompt: string; stateFilePath: string; staleness: number }) => cb(payload)
+    ipcRenderer.on('barnaby:plugin-host:recovery', listener)
+    return () => ipcRenderer.off('barnaby:plugin-host:recovery', listener)
+  },
   zoomIn() {
     const level = webFrame.getZoomLevel()
     webFrame.setZoomLevel(level + 1)

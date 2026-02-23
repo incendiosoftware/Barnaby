@@ -2423,6 +2423,7 @@ export default function App() {
   const stickToBottomByPanelRef = useRef(new Map<string, boolean>())
   const codeBlockViewportRefs = useRef(new Map<string, HTMLPreElement>())
   const stickToBottomByCodeBlockRef = useRef(new Map<string, boolean>())
+  const autoCollapsedCompletedCodeUnitIdsRef = useRef(new Set<string>())
   const activityLatestRef = useRef(new Map<string, PanelActivityState>())
   const activityFlushTimers = useRef(new Map<string, any>())
   const panelsRef = useRef<AgentPanelState[]>([])
@@ -2853,15 +2854,25 @@ export default function App() {
   }, [api, appSettingsView, showDockedAppSettings])
 
   useEffect(() => {
-    setCodeBlockOpenById((prev) => {
-      const keys = Object.keys(prev)
-      if (keys.length === 0) return prev
-      let changed = false
-      const next = { ...prev }
-      for (const units of Object.values(panelTimelineById)) {
-        for (const unit of units) {
-          if (unit.kind !== 'code' || unit.status !== 'completed' || timelinePinnedCodeByUnitId[unit.id]) continue
-          const prefix = `${unit.id}:`
+    const liveCodeUnitIds = new Set<string>()
+    const unitsToAutoCollapse = new Set<string>()
+    for (const units of Object.values(panelTimelineById)) {
+      for (const unit of units) {
+        if (unit.kind !== 'code') continue
+        liveCodeUnitIds.add(unit.id)
+        if (unit.status !== 'completed' || timelinePinnedCodeByUnitId[unit.id]) continue
+        if (autoCollapsedCompletedCodeUnitIdsRef.current.has(unit.id)) continue
+        unitsToAutoCollapse.add(unit.id)
+      }
+    }
+    if (unitsToAutoCollapse.size > 0) {
+      setCodeBlockOpenById((prev) => {
+        const keys = Object.keys(prev)
+        if (keys.length === 0) return prev
+        let changed = false
+        const next = { ...prev }
+        for (const unitId of unitsToAutoCollapse) {
+          const prefix = `${unitId}:`
           for (const key of keys) {
             if (key.startsWith(prefix) && next[key]) {
               next[key] = false
@@ -2869,9 +2880,17 @@ export default function App() {
             }
           }
         }
+        return changed ? next : prev
+      })
+      for (const unitId of unitsToAutoCollapse) {
+        autoCollapsedCompletedCodeUnitIdsRef.current.add(unitId)
       }
-      return changed ? next : prev
-    })
+    }
+    for (const unitId of Array.from(autoCollapsedCompletedCodeUnitIdsRef.current)) {
+      if (!liveCodeUnitIds.has(unitId)) {
+        autoCollapsedCompletedCodeUnitIdsRef.current.delete(unitId)
+      }
+    }
   }, [panelTimelineById, timelinePinnedCodeByUnitId])
 
   useEffect(() => {
@@ -10486,7 +10505,7 @@ export default function App() {
                                   <div className="group my-2 rounded-lg border border-neutral-300/80 dark:border-neutral-700/80 bg-neutral-100/80 dark:bg-neutral-900/65">
                                     <button
                                       type="button"
-                                      className="w-full text-left cursor-pointer px-3 py-1.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between gap-2 bg-transparent border-0 outline-none hover:opacity-80"
+                                      className="w-full text-left cursor-pointer px-3 py-2.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between gap-2 bg-transparent border-0 outline-none hover:opacity-80"
                                       onClick={() => setCodeBlockOpenById((prev) => ({ ...prev, [codeBlockId]: !isOpen }))}
                                     >
                                       <span className="inline-flex items-center gap-1.5">
@@ -10615,7 +10634,7 @@ export default function App() {
                             <div className="group my-2 rounded-lg border border-neutral-300/80 dark:border-neutral-700/80 bg-neutral-100/80 dark:bg-neutral-900/65">
                               <button
                                 type="button"
-                                className="w-full text-left cursor-pointer px-3 py-1.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between gap-2 bg-transparent border-0 outline-none hover:opacity-80"
+                                className="w-full text-left cursor-pointer px-3 py-2.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between gap-2 bg-transparent border-0 outline-none hover:opacity-80"
                                 onClick={() => setCodeBlockOpenById((prev) => ({ ...prev, [codeBlockId]: !isOpen }))}
                               >
                                 <span className="inline-flex items-center gap-1.5">

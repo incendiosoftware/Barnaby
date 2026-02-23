@@ -115,48 +115,25 @@ interface Window {
       chatHistoryPath: string
       appStatePath: string
       runtimeLogPath: string
-      diagnosticsConfigPath: string
-    }>
-    loadDiagnosticsConfig(): Promise<{
-      showActivityUpdates: boolean
-      showReasoningUpdates: boolean
-      showOperationTrace: boolean
-      showThinkingProgress: boolean
-      colors: {
-        light: {
-          debugNotes: string
-          activityUpdates: string
-          reasoningUpdates: string
-          operationTrace: string
-          thinkingProgress: string
-        }
-        dark: {
-          debugNotes: string
-          activityUpdates: string
-          reasoningUpdates: string
-          operationTrace: string
-          thinkingProgress: string
-        }
-      }
     }>
     openRuntimeLog(): Promise<{
       ok: boolean
       path: string
       error?: string
     }>
-    openDiagnosticsPath(target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig'): Promise<{
+    openDiagnosticsPath(target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog'): Promise<{
       ok: boolean
       path: string
       error?: string
     }>
-    readDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig'): Promise<{
+    readDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog'): Promise<{
       ok: boolean
       path: string
       content?: string
       writable?: boolean
       error?: string
     }>
-    writeDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig', content: string): Promise<{
+    writeDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog', content: string): Promise<{
       ok: boolean
       path: string
       size?: number

@@ -17,4 +17,5 @@ alwaysApply: true
 
 # Build + Run
 
-- For "build and run", run `npm run build` first, then launch app.
+- For "build and run" (no version bump): run `npm run build` first, then launch app.
+- For "package and run" (version bump + distributable): run `npm run package` first, then launch app.

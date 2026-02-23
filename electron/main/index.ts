@@ -193,11 +193,17 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   ? path.join(process.env.APP_ROOT, 'public')
   : RENDERER_DIST
 
+const WINDOWS_APP_USER_MODEL_ID = 'com.agentorchestrator.app'
+const WINDOWS_DISPLAY_NAME = 'Barnaby'
+
 // Disable GPU Acceleration for Windows 7
 if (os.release().startsWith('6.1')) app.disableHardwareAcceleration()
 
 // Set application name for Windows 10+ notifications
-if (process.platform === 'win32') app.setAppUserModelId(app.getName())
+if (process.platform === 'win32') {
+  app.setName(WINDOWS_DISPLAY_NAME)
+  app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID)
+}
 
 let win: BrowserWindow | null = null
 let splashWin: BrowserWindow | null = null
@@ -618,68 +624,6 @@ function importProviderApiKeyFromEnv(providerId: string) {
   return { ok: true as const, hasKey: saved.hasKey, imported: true as const, detail: `Imported API key from ${envVar}.` }
 }
 
-function getDiagnosticsConfigPath(): string {
-  return path.join(getAppStorageDirPath(), 'diagnostics.json')
-}
-
-const DEFAULT_DIAGNOSTICS_CONFIG = {
-  showActivityUpdates: false,
-  showReasoningUpdates: false,
-  showOperationTrace: true,
-  showThinkingProgress: true,
-  colors: {
-    light: {
-      debugNotes: '#b91c1c',
-      activityUpdates: '#b45309',
-      reasoningUpdates: '#047857',
-      operationTrace: '#1e3a8a',
-      thinkingProgress: '#737373',
-    },
-    dark: {
-      debugNotes: '#fca5a5',
-      activityUpdates: '#fcd34d',
-      reasoningUpdates: '#6ee7b7',
-      operationTrace: '#93c5fd',
-      thinkingProgress: '#a3a3a3',
-    },
-  },
-}
-
-function loadDiagnosticsConfig(): typeof DEFAULT_DIAGNOSTICS_CONFIG {
-  try {
-    const configPath = getDiagnosticsConfigPath()
-    if (!fs.existsSync(configPath)) {
-      fs.mkdirSync(path.dirname(configPath), { recursive: true })
-      fs.writeFileSync(configPath, JSON.stringify(DEFAULT_DIAGNOSTICS_CONFIG, null, 2), 'utf8')
-      return { ...DEFAULT_DIAGNOSTICS_CONFIG, colors: { ...DEFAULT_DIAGNOSTICS_CONFIG.colors } }
-    }
-    const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'))
-    const legacyColors = raw?.colors && typeof raw.colors === 'object' ? raw.colors : null
-    const parseColorSet = (setRaw: any, fallback: (typeof DEFAULT_DIAGNOSTICS_CONFIG.colors)['light']) => ({
-      debugNotes: typeof setRaw?.debugNotes === 'string' ? setRaw.debugNotes : fallback.debugNotes,
-      activityUpdates: typeof setRaw?.activityUpdates === 'string' ? setRaw.activityUpdates : fallback.activityUpdates,
-      reasoningUpdates: typeof setRaw?.reasoningUpdates === 'string' ? setRaw.reasoningUpdates : fallback.reasoningUpdates,
-      operationTrace: typeof setRaw?.operationTrace === 'string' ? setRaw.operationTrace : fallback.operationTrace,
-      thinkingProgress: typeof setRaw?.thinkingProgress === 'string' ? setRaw.thinkingProgress : fallback.thinkingProgress,
-    })
-    const lightColors = parseColorSet(legacyColors?.light ?? legacyColors, DEFAULT_DIAGNOSTICS_CONFIG.colors.light)
-    const darkColors = parseColorSet(legacyColors?.dark ?? legacyColors, DEFAULT_DIAGNOSTICS_CONFIG.colors.dark)
-
-    return {
-      showActivityUpdates: typeof raw?.showActivityUpdates === 'boolean' ? raw.showActivityUpdates : DEFAULT_DIAGNOSTICS_CONFIG.showActivityUpdates,
-      showReasoningUpdates: typeof raw?.showReasoningUpdates === 'boolean' ? raw.showReasoningUpdates : DEFAULT_DIAGNOSTICS_CONFIG.showReasoningUpdates,
-      showOperationTrace: typeof raw?.showOperationTrace === 'boolean' ? raw.showOperationTrace : DEFAULT_DIAGNOSTICS_CONFIG.showOperationTrace,
-      showThinkingProgress: typeof raw?.showThinkingProgress === 'boolean' ? raw.showThinkingProgress : DEFAULT_DIAGNOSTICS_CONFIG.showThinkingProgress,
-      colors: {
-        light: lightColors,
-        dark: darkColors,
-      },
-    }
-  } catch {
-    return { ...DEFAULT_DIAGNOSTICS_CONFIG, colors: { ...DEFAULT_DIAGNOSTICS_CONFIG.colors } }
-  }
-}
-
 function getDiagnosticsInfo() {
   return {
     userDataPath: app.getPath('userData'),
@@ -687,12 +631,11 @@ function getDiagnosticsInfo() {
     chatHistoryPath: getChatHistoryFilePath(),
     appStatePath: getAppStateFilePath(),
     runtimeLogPath: getRuntimeLogFilePath(),
-    diagnosticsConfigPath: getDiagnosticsConfigPath(),
   }
 }
 
-type DiagnosticsPathTarget = 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig'
-type DiagnosticsFileTarget = 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig'
+type DiagnosticsPathTarget = 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog'
+type DiagnosticsFileTarget = 'chatHistory' | 'appState' | 'runtimeLog'
 
 function resolveDiagnosticsPathTarget(target: DiagnosticsPathTarget) {
   const info = getDiagnosticsInfo()
@@ -707,8 +650,6 @@ function resolveDiagnosticsPathTarget(target: DiagnosticsPathTarget) {
       return { path: info.appStatePath, kind: 'file' as const }
     case 'runtimeLog':
       return { path: info.runtimeLogPath, kind: 'file' as const }
-    case 'diagnosticsConfig':
-      return { path: info.diagnosticsConfigPath, kind: 'file' as const }
   }
 }
 
@@ -719,8 +660,7 @@ async function openDiagnosticsPath(rawTarget: unknown) {
     target !== 'storage' &&
     target !== 'chatHistory' &&
     target !== 'appState' &&
-    target !== 'runtimeLog' &&
-    target !== 'diagnosticsConfig'
+    target !== 'runtimeLog'
   ) {
     return {
       ok: false as const,
@@ -741,7 +681,7 @@ async function openDiagnosticsPath(rawTarget: unknown) {
   try {
     if (resolved.kind === 'directory') {
       fs.mkdirSync(resolved.path, { recursive: true })
-    } else if (target === 'runtimeLog' || target === 'diagnosticsConfig') {
+    } else if (target === 'runtimeLog') {
       fs.mkdirSync(path.dirname(resolved.path), { recursive: true })
       if (!fs.existsSync(resolved.path)) {
         fs.writeFileSync(resolved.path, '', 'utf8')
@@ -764,17 +704,13 @@ async function openDiagnosticsPath(rawTarget: unknown) {
 }
 
 function isDiagnosticsFileTarget(target: unknown): target is DiagnosticsFileTarget {
-  return target === 'chatHistory' || target === 'appState' || target === 'runtimeLog' || target === 'diagnosticsConfig'
+  return target === 'chatHistory' || target === 'appState' || target === 'runtimeLog'
 }
 
 function ensureDiagnosticsFileExists(target: DiagnosticsFileTarget, absolutePath: string) {
   fs.mkdirSync(path.dirname(absolutePath), { recursive: true })
   if (!fs.existsSync(absolutePath)) {
-    const initial =
-      target === 'diagnosticsConfig'
-        ? JSON.stringify(DEFAULT_DIAGNOSTICS_CONFIG, null, 2)
-        : ''
-    fs.writeFileSync(absolutePath, initial, 'utf8')
+    fs.writeFileSync(absolutePath, '', 'utf8')
   }
 }
 
@@ -793,32 +729,18 @@ async function readDiagnosticsFile(rawTarget: unknown) {
       ok: true as const,
       path: resolved.path,
       content,
-      writable: rawTarget === 'diagnosticsConfig',
+      writable: false,
     }
   } catch (err) {
     return { ok: false as const, path: resolved.path, error: errorMessage(err) }
   }
 }
 
-async function writeDiagnosticsFile(rawTarget: unknown, rawContent: unknown) {
+async function writeDiagnosticsFile(rawTarget: unknown, _rawContent: unknown) {
   if (!isDiagnosticsFileTarget(rawTarget)) {
     return { ok: false as const, path: '', error: 'Unknown diagnostics file target.' }
   }
-  if (rawTarget !== 'diagnosticsConfig') {
-    return { ok: false as const, path: '', error: 'Only diagnostics config is writable from the editor.' }
-  }
-  const resolved = resolveDiagnosticsPathTarget(rawTarget)
-  if (!resolved || resolved.kind !== 'file') {
-    return { ok: false as const, path: '', error: 'Diagnostics target is not a file.' }
-  }
-  const content = typeof rawContent === 'string' ? rawContent : ''
-  try {
-    ensureDiagnosticsFileExists(rawTarget, resolved.path)
-    fs.writeFileSync(resolved.path, content, 'utf8')
-    return { ok: true as const, path: resolved.path, size: Buffer.byteLength(content, 'utf8') }
-  } catch (err) {
-    return { ok: false as const, path: resolved.path, error: errorMessage(err) }
-  }
+  return { ok: false as const, path: '', error: 'Diagnostics files are read-only in this view.' }
 }
 
 async function openAgentHistoryFolder() {
@@ -2160,6 +2082,9 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
         model: options.model,
         apiKey,
         baseUrl: options.modelConfig?.openaiBaseUrl ?? 'https://api.openai.com/v1',
+        permissionMode: options.permissionMode,
+        sandbox: options.sandbox,
+        allowedCommandPrefixes: options.allowedCommandPrefixes,
         initialHistory: options.initialHistory,
       }) as { threadId: string }
       agentClients.set(agentWindowId, client)
@@ -2202,8 +2127,9 @@ async function createWindow() {
   const startupWidth = Math.floor(workAreaWidth / 5)
   const startupHeight = Math.floor(workAreaHeight * 0.9)
 
+  const titleSuffix = VITE_DEV_SERVER_URL ? '(DEV)' : `(V${app.getVersion()})`
   win = new BrowserWindow({
-    title: 'Barnaby',
+    title: `Barnaby ${titleSuffix}`,
     icon: path.join(process.env.VITE_PUBLIC, 'appicon.png'),
     show: false,
     width: startupWidth,
@@ -2226,6 +2152,10 @@ async function createWindow() {
   } else {
     win.loadFile(indexHtml)
   }
+
+  win.webContents.on('did-finish-load', () => {
+    win?.setTitle(`Barnaby ${titleSuffix}`)
+  })
 
   win.once('ready-to-show', () => {
     mainWindowReadyToShow = true
@@ -2403,10 +2333,6 @@ ipcMain.handle('agentorchestrator:rendererReady', async () => {
 
 ipcMain.handle('agentorchestrator:getDiagnosticsInfo', async () => {
   return getDiagnosticsInfo()
-})
-
-ipcMain.handle('agentorchestrator:loadDiagnosticsConfig', async () => {
-  return loadDiagnosticsConfig()
 })
 
 ipcMain.handle('agentorchestrator:openRuntimeLog', async () => {
@@ -2758,13 +2684,11 @@ function sendMenuAction(action: string, payload?: Record<string, unknown>) {
 }
 
 function createAboutWindow() {
-  const publicRoot = process.env.VITE_PUBLIC
-  if (!publicRoot) return
-
-  const splashImagePath = path.join(publicRoot, 'splash.png')
+  const publicRoot = process.env.VITE_PUBLIC ?? ''
+  const splashImagePath = publicRoot ? path.join(publicRoot, 'splash.png') : ''
   let splashImageUrl = ''
   try {
-    if (fs.existsSync(splashImagePath)) {
+    if (splashImagePath && fs.existsSync(splashImagePath)) {
       const splashImageBase64 = fs.readFileSync(splashImagePath).toString('base64')
       splashImageUrl = `data:image/png;base64,${splashImageBase64}`
     }

@@ -2,20 +2,20 @@
 
 This repository builds a local desktop executable (Electron). It is not a web deployment target.
 
-## Default Commands
+## Default Commands (Standard Nomenclature)
 
 - Install deps: `npm install`
-- Dev run: `npm run dev`
-- Standard build (default): `npm run build` (portable-only artifact)
-- Dist-only build: `npm run build:dist` (no release artifact)
-- Full release build (only when explicitly requested): `npm run build:release`
+- **run dev**: `npm run dev`
+- **build**: `npm run build` (portable artifact, no version bump)
+- **package**: `npm run package` (bump version + distributable)
+- **publish**: `npm run publish` (release to GitHub)
 
 ## Build Policy
 
-- Every build command that uses `build:dist` auto-bumps app version.
-- For generic requests like "build", "build app", or "build and run", use `npm run build`.
-- Do not assume publish/deploy. Treat build as local artifact generation.
-- Only run `build:release` when user explicitly asks for release/installer/full publish artifacts.
+- **build** = artifact only, uses current version. Use for testing or CI.
+- **package** = bump version + distributable. Use when preparing a new release.
+- **publish** = release to GitHub. Run after package + commit + push.
+- Do not assume publish unless user explicitly asks.
 
 ## Reporting Requirements
 
@@ -28,25 +28,18 @@ After any build, report:
 
 ## Run After Build
 
-For "build and run":
-
-1. Run `npm run build`
-2. Launch app (typically `npx electron .` unless user explicitly requests running the portable exe directly)
+- **build and run** (no version bump): `npm run build` → launch app
+- **package and run** (version bump + distributable): `npm run package` → launch app
 
 ## Release Automation Shortcuts
 
 Use these exact flows when the user asks:
 
-- **Local build only**: `npm run build:dist:raw`
-- **Local releasable build (bumps version + creates notes + builds portable)**: `npm run release:prepare`
-- **Push only**: `git add -A && git commit -m "<message>" && git push origin main`
-- **Push with release**:
-  1. `git push origin main`
-  2. Trigger release workflow: `gh workflow run release.yml -f releasable=true --ref main`
-  3. GitHub Action `release.yml` builds portable and publishes release/tag `v<package.json version>`
-- **Build with release (no push trigger needed)**:
-  - Run workflow manually: GitHub Actions -> `Release` -> `Run workflow` -> `releasable=true`
-  - Or with CLI: `gh workflow run release.yml -f releasable=true`
+- **build** (no bump): `npm run build`
+- **package** (bump + distributable): `npm run package`
+- **publish** (release to GitHub): `npm run publish` (or `gh workflow run release.yml -f releasable=true --ref main`)
+- **Full prep** (bump + notes + build): `npm run release:prepare`
+- **Push with publish**: package → commit → push → `npm run publish`
 
 ### Release Notes Rules
 

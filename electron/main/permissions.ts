@@ -117,7 +117,7 @@ export class PermissionManager {
     
     if (list.length === 0 && denied.length === 0) return { allowed: true }
 
-    const p = pathStr.trim().replace(/\/g, '/')
+    const p = pathStr.trim().replace(/\\/g, '/')
 
     // Check denials first
     for (const prefix of denied) {

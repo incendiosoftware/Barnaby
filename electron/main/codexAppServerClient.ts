@@ -340,16 +340,16 @@ export class CodexAppServerClient extends EventEmitter {
     }
 
     if (method === 'item/completed') {
-      // When the agent message item completes, consider the assistant message finalized.
+      // Agent message items can complete multiple times within a single turn.
+      // Keep streaming state open until turn/completed so duration and completion
+      // are measured once for the whole turn.
       const itemType = params?.item?.type
-      if (itemType === 'agentMessage') this.emitEvent({ type: 'assistantCompleted' })
-      // For non-agent items (tool calls, command activity, etc.), fall through so the
-      // renderer can decide what to surface.
       if (itemType === 'agentMessage') return
     }
 
     if (method === 'turn/completed') {
       this.activeTurnId = null
+      this.emitEvent({ type: 'assistantCompleted' })
       return
     }
 

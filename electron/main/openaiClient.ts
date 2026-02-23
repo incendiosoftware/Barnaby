@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 
 import { generateWorkspaceTreeText } from './fileTree'
 import { resolveAtFileReferences } from './atFileResolver'
@@ -17,6 +18,9 @@ export type OpenAIConnectOptions = {
   model: string
   apiKey: string
   baseUrl?: string
+  permissionMode?: 'verify-first' | 'proceed-always'
+  sandbox?: 'read-only' | 'workspace-write'
+  allowedCommandPrefixes?: string[]
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
@@ -28,6 +32,8 @@ const AGENT_MAX_FILE_BYTES = 350_000
 const AGENT_MAX_SEARCH_RESULTS = 60
 const AGENT_MAX_SEARCH_FILES = 1200
 const AGENT_MAX_IMAGE_ATTACHMENTS = 4
+const AGENT_DEFAULT_SHELL_TIMEOUT_MS = 120_000
+const AGENT_MAX_SHELL_TIMEOUT_MS = 300_000
 
 type OpenAIMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -50,6 +56,9 @@ export class OpenAIClient extends EventEmitter {
   private cwd = process.cwd()
   private apiKey = ''
   private baseUrl = 'https://api.openai.com/v1'
+  private permissionMode: 'verify-first' | 'proceed-always' = 'verify-first'
+  private sandbox: 'read-only' | 'workspace-write' = 'workspace-write'
+  private allowedCommandPrefixes: string[] = []
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeController: AbortController | null = null
 
@@ -62,6 +71,14 @@ export class OpenAIClient extends EventEmitter {
     this.cwd = options.cwd || process.cwd()
     this.apiKey = (options.apiKey || '').trim()
     this.baseUrl = (options.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')
+    this.permissionMode = options.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
+    this.sandbox = options.sandbox === 'read-only' ? 'read-only' : 'workspace-write'
+    this.allowedCommandPrefixes = Array.isArray(options.allowedCommandPrefixes)
+      ? options.allowedCommandPrefixes
+        .filter((x): x is string => typeof x === 'string')
+        .map((x) => x.trim())
+        .filter(Boolean)
+      : []
     this.history =
       (options.initialHistory?.length ?? 0) > 0
         ? options.initialHistory!.slice(-INITIAL_HISTORY_MAX_MESSAGES)
@@ -116,14 +133,19 @@ export class OpenAIClient extends EventEmitter {
     const tree = generateWorkspaceTreeText(this.cwd)
     const system = `You are Barnaby's OpenAI API coding agent.
 Workspace root: ${this.cwd}
+Permission mode: ${this.permissionMode}
+Sandbox mode: ${this.sandbox}
 
 ${tree}
 
 Rules:
-- Use tools when asked about repository contents, functions, files, behavior, or implementation details.
+- If the user asks for code/config changes, implement them directly using tools in this turn whenever possible.
+- Prefer action over deferral: locate files, apply edits, and report what changed.
+- Use tools for repository contents, symbols, behavior, implementation details, and file edits.
+- If the user asks to run build/test/dev commands, use run_shell_command instead of returning a checklist.
 - Never invent file names, symbols, or behavior. If not verified via tool output, say so.
 - Cite concrete evidence in your answer (file path and line numbers when available).
-- Keep working until you have enough evidence to answer accurately.`
+- Keep working until you have either completed the requested change or can clearly explain the precise blocker.`
 
     const recent = this.history.slice(-12)
     const messages: OpenAIMessage[] = [
@@ -168,29 +190,7 @@ Rules:
     let lastAssistantText = ''
 
     for (let round = 0; round < AGENT_MAX_TOOL_ROUNDS; round++) {
-      const response = await fetch(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: this.model,
-          messages,
-          tools: this.agentTools(),
-          tool_choice: 'auto',
-          temperature: 0.1,
-          stream: false,
-        }),
-        signal: controller.signal,
-      })
-      if (!response.ok) {
-        const body = await response.text().catch(() => '')
-        const hint = body ? ` ${body.slice(0, 500)}` : ''
-        throw new Error(`OpenAI request failed (${response.status}).${hint}`)
-      }
-
-      const data = (await response.json()) as {
+      const data = (await this.fetchCompletionWithRetries(messages, controller)) as {
         choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }>; tool_calls?: OpenAIToolCall[] } }>
         usage?: unknown
       }
@@ -229,7 +229,7 @@ Rules:
             ? `Using ${toolName}(${argsPreview})`
             : `Using ${toolName}`,
         })
-        const toolResult = this.runTool(toolName, toolCall.function?.arguments)
+        const toolResult = await this.runTool(toolName, toolCall.function?.arguments)
         messages.push({
           role: 'tool',
           tool_call_id: callId,
@@ -239,6 +239,96 @@ Rules:
     }
 
     return lastAssistantText || 'Stopped after too many tool steps without a final answer.'
+  }
+
+  private async fetchCompletionWithRetries(
+    messages: OpenAIMessage[],
+    controller: AbortController,
+  ): Promise<unknown> {
+    const maxRateLimitRetries = 3
+    for (let attempt = 0; attempt <= maxRateLimitRetries; attempt++) {
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages,
+          tools: this.agentTools(),
+          tool_choice: 'auto',
+          temperature: 0.1,
+          stream: false,
+        }),
+        signal: controller.signal,
+      })
+
+      if (response.ok) {
+        return response.json()
+      }
+
+      const retryAfterHeader = response.headers.get('retry-after')
+      const body = await response.text().catch(() => '')
+      const retryDelayMs = this.getRetryDelayMs(response.status, retryAfterHeader, body, attempt)
+      const canRetry = retryDelayMs > 0 && attempt < maxRateLimitRetries
+      if (canRetry) {
+        const retrySeconds = (retryDelayMs / 1000).toFixed(1).replace(/\.0$/, '')
+        this.emitEvent({
+          type: 'thinking',
+          message: `OpenAI rate limited — retrying in ${retrySeconds}s...`,
+        })
+        await this.sleepWithAbort(retryDelayMs, controller.signal)
+        continue
+      }
+
+      const hint = body ? ` ${body.slice(0, 500)}` : ''
+      throw new Error(`OpenAI request failed (${response.status}).${hint}`)
+    }
+    throw new Error('OpenAI request failed after retries.')
+  }
+
+  private getRetryDelayMs(status: number, retryAfterHeader: string | null, body: string, attempt: number): number {
+    if (status !== 429) return 0
+
+    if (retryAfterHeader) {
+      const asSeconds = Number(retryAfterHeader)
+      if (Number.isFinite(asSeconds) && asSeconds > 0) {
+        return Math.max(250, Math.round(asSeconds * 1000))
+      }
+      const asDate = Date.parse(retryAfterHeader)
+      if (!Number.isNaN(asDate)) {
+        const delay = asDate - Date.now()
+        if (delay > 0) return delay
+      }
+    }
+
+    const bodySecondsMatch = body.match(/try again in\s*([\d.]+)\s*s/i)
+    if (bodySecondsMatch) {
+      const seconds = Number(bodySecondsMatch[1])
+      if (Number.isFinite(seconds) && seconds > 0) {
+        return Math.max(250, Math.round(seconds * 1000))
+      }
+    }
+
+    // Fallback exponential backoff if server didn't provide a retry window.
+    return Math.min(12000, 2000 * 2 ** attempt)
+  }
+
+  private async sleepWithAbort(delayMs: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) throw new Error('aborted')
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort)
+        resolve()
+      }, delayMs)
+      const onAbort = () => {
+        clearTimeout(timer)
+        signal.removeEventListener('abort', onAbort)
+        reject(new Error('aborted'))
+      }
+      signal.addEventListener('abort', onAbort)
+    })
   }
 
   private extractAssistantText(content: string | Array<{ type?: string; text?: string }> | undefined): string {
@@ -296,10 +386,42 @@ Rules:
           },
         },
       },
+      {
+        type: 'function',
+        function: {
+          name: 'write_workspace_file',
+          description: 'Write UTF-8 text to a workspace file path. Use this to apply requested code changes.',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              path: { type: 'string', description: 'Relative path from workspace root.' },
+              content: { type: 'string', description: 'Full file content to write.' },
+            },
+            required: ['path', 'content'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'run_shell_command',
+          description: 'Run a shell command in the workspace root (subject to permission mode and allowed command prefixes).',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              command: { type: 'string', description: 'Command line to execute.' },
+              timeoutMs: { type: 'integer', description: 'Optional timeout in milliseconds.' },
+            },
+            required: ['command'],
+          },
+        },
+      },
     ]
   }
 
-  private runTool(name: string, rawArgs: string | undefined): string {
+  private async runTool(name: string, rawArgs: string | undefined): Promise<string> {
     let args: Record<string, unknown> = {}
     if (typeof rawArgs === 'string' && rawArgs.trim()) {
       try {
@@ -319,6 +441,15 @@ Rules:
 
     if (name === 'read_workspace_file') {
       return this.limitToolOutput(this.readWorkspaceFile(args))
+    }
+
+    if (name === 'write_workspace_file') {
+      return this.limitToolOutput(this.writeWorkspaceFile(args))
+    }
+
+    if (name === 'run_shell_command') {
+      const output = await this.runShellCommand(args)
+      return this.limitToolOutput(output)
     }
 
     return `Tool error: Unknown tool "${name}".`
@@ -375,6 +506,124 @@ Rules:
       .map((line, i) => `${startLine + i}: ${line}`)
       .join('\n')
     return `File: ${resolved.relative}\nLines: ${startLine}-${endLine} of ${total}\n\n${numbered}`
+  }
+
+  private writeWorkspaceFile(args: Record<string, unknown>): string {
+    if (this.sandbox === 'read-only') {
+      return 'Tool error: Workspace is read-only (sandbox mode).'
+    }
+    if (this.permissionMode !== 'proceed-always') {
+      return 'Tool error: Write denied in verify-first mode. Set permissions to Proceed always for autonomous edits.'
+    }
+
+    const resolved = this.resolveWorkspacePath(args.path)
+    if (!resolved.ok) return `Tool error: ${resolved.error}`
+
+    if (typeof args.content !== 'string') {
+      return 'Tool error: content must be a string.'
+    }
+
+    const content = args.content
+    if (content.length > AGENT_MAX_FILE_BYTES) {
+      return `Tool error: Refusing to write large payload (${content.length} chars).`
+    }
+
+    try {
+      const parentDir = path.dirname(resolved.absolute)
+      if (!fs.existsSync(parentDir)) {
+        return `Tool error: Parent directory does not exist: ${path.relative(this.cwd, parentDir).replace(/\\/g, '/')}`
+      }
+
+      fs.writeFileSync(resolved.absolute, content, 'utf8')
+      const lineCount = content.length === 0 ? 0 : content.split(/\r?\n/).length
+      return `Wrote file: ${resolved.relative} (${content.length} chars, ${lineCount} lines).`
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return `Tool error: Failed writing ${resolved.relative}: ${message}`
+    }
+  }
+
+  private async runShellCommand(args: Record<string, unknown>): Promise<string> {
+    if (this.sandbox === 'read-only') {
+      return 'Tool error: Workspace is read-only (sandbox mode).'
+    }
+    if (this.permissionMode !== 'proceed-always') {
+      return 'Tool error: Command execution denied in verify-first mode. Set permissions to Proceed always.'
+    }
+
+    const command = typeof args.command === 'string' ? args.command.trim() : ''
+    if (!command) return 'Tool error: command is required.'
+
+    if (this.allowedCommandPrefixes.length > 0) {
+      const allowed = this.allowedCommandPrefixes.some((prefix) => command.startsWith(prefix))
+      if (!allowed) {
+        return `Tool error: Command not in allowlist. Allowed prefixes: ${this.allowedCommandPrefixes.join(', ')}`
+      }
+    }
+
+    const timeoutRaw = typeof args.timeoutMs === 'number' ? Math.floor(args.timeoutMs) : AGENT_DEFAULT_SHELL_TIMEOUT_MS
+    const timeoutMs = Math.max(500, Math.min(AGENT_MAX_SHELL_TIMEOUT_MS, timeoutRaw))
+
+    return this.runShellCommandAsync(command, timeoutMs)
+  }
+
+  private async runShellCommandAsync(command: string, timeoutMs: number): Promise<string> {
+    const shell = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh'
+    const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-lc', command]
+
+    try {
+      const child = spawn(shell, shellArgs, {
+        cwd: this.cwd,
+        env: process.env,
+        windowsHide: true,
+      })
+
+      let stdout = ''
+      let stderr = ''
+      let timedOut = false
+
+      if (child.stdout) {
+        child.stdout.setEncoding('utf8')
+        child.stdout.on('data', (chunk: string) => {
+          stdout += chunk
+        })
+      }
+      if (child.stderr) {
+        child.stderr.setEncoding('utf8')
+        child.stderr.on('data', (chunk: string) => {
+          stderr += chunk
+        })
+      }
+
+      const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        child.on('exit', (code, signal) => resolve({ code, signal }))
+      })
+
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null
+      const timeout = new Promise<{ timeout: true }>((resolve) => {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true
+          try {
+            child.kill('SIGTERM')
+          } catch {
+            // ignore
+          }
+          resolve({ timeout: true })
+        }, timeoutMs)
+      })
+
+      const result = await Promise.race([exit, timeout])
+      if (timeoutHandle) clearTimeout(timeoutHandle)
+      if ('timeout' in result) {
+        return `Command timed out after ${timeoutMs}ms.\n\nstdout:\n${stdout || '(empty)'}\n\nstderr:\n${stderr || '(empty)'}`
+      }
+      const code = result.code ?? -1
+      const signal = result.signal ?? ''
+      const meta = `exit_code=${code}${signal ? ` signal=${signal}` : ''}${timedOut ? ' timeout=true' : ''}`
+      return `${meta}\n\nstdout:\n${stdout || '(empty)'}\n\nstderr:\n${stderr || '(empty)'}`
+    } catch (err) {
+      return `Tool error: Failed to run command: ${err instanceof Error ? err.message : String(err)}`
+    }
   }
 
   private searchWorkspace(args: Record<string, unknown>): string {

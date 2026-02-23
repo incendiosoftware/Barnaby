@@ -134,31 +134,6 @@ const api = {
       chatHistoryPath: string
       appStatePath: string
       runtimeLogPath: string
-      diagnosticsConfigPath: string
-    }>
-  },
-  loadDiagnosticsConfig() {
-    return ipcRenderer.invoke('agentorchestrator:loadDiagnosticsConfig') as Promise<{
-      showActivityUpdates: boolean
-      showReasoningUpdates: boolean
-      showOperationTrace: boolean
-      showThinkingProgress: boolean
-      colors: {
-        light: {
-          debugNotes: string
-          activityUpdates: string
-          reasoningUpdates: string
-          operationTrace: string
-          thinkingProgress: string
-        }
-        dark: {
-          debugNotes: string
-          activityUpdates: string
-          reasoningUpdates: string
-          operationTrace: string
-          thinkingProgress: string
-        }
-      }
     }>
   },
   openRuntimeLog() {
@@ -168,14 +143,14 @@ const api = {
       error?: string
     }>
   },
-  openDiagnosticsPath(target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig') {
+  openDiagnosticsPath(target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog') {
     return ipcRenderer.invoke('agentorchestrator:openDiagnosticsPath', target) as Promise<{
       ok: boolean
       path: string
       error?: string
     }>
   },
-  readDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig') {
+  readDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog') {
     return ipcRenderer.invoke('agentorchestrator:readDiagnosticsFile', target) as Promise<{
       ok: boolean
       path: string
@@ -184,7 +159,7 @@ const api = {
       error?: string
     }>
   },
-  writeDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog' | 'diagnosticsConfig', content: string) {
+  writeDiagnosticsFile(target: 'chatHistory' | 'appState' | 'runtimeLog', content: string) {
     return ipcRenderer.invoke('agentorchestrator:writeDiagnosticsFile', target, content) as Promise<{
       ok: boolean
       path: string

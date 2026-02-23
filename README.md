@@ -95,21 +95,24 @@ npm install
 npm run dev
 ```
 
-## Build Commands
+## Build Commands (Standard Nomenclature)
 
-- Standard local build (portable-only artifact): `npm run build`
-- Dist-only build (no release artifact): `npm run build:dist`
-- Full release build (installer + portable): `npm run build:release`
-- Portable build without version bump (for CI/release workflow): `npm run build:portable:raw`
-- Releasable prep (bump + notes scaffold + portable build): `npm run release:prepare`
+| Command | Meaning | Script |
+|---------|---------|--------|
+| **run dev** | Run in dev mode | `npm run dev` |
+| **build** | Build without version bump | `npm run build` |
+| **package** | Build + bump version + create distributable | `npm run package` |
+| **publish** | Release to GitHub with release notes | `npm run publish` |
 
-`build:dist` automatically increments the app version on every run.
+Flow: dev → build → package → publish
 
-## GitHub Release Automation
+- **build** = portable `.exe` in `release/<version>/` (uses current version)
+- **package** = bump patch version, build, artifact in `release/<new-version>/`
+- **publish** = trigger GitHub Actions to publish the current version (commit & push first)
 
-- Trigger release workflow manually: `gh workflow run release.yml -f releasable=true --ref main`
-- Release notes source: `RELEASE_NOTES_<version>.md` (generate with `npm run release:notes`)
-- The release workflow updates the latest release link in this README automatically
+Other scripts: `build:dist`, `build:portable:raw`, `build:release`, `release:notes`, `release:prepare`
+
+Release notes: `RELEASE_NOTES_<version>.md` (generate with `npm run release:notes`). The release workflow updates the latest release link in this README automatically.
 
 ## Project Structure
 

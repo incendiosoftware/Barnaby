@@ -7,19 +7,62 @@ Barnaby is a desktop AI agent orchestrator for **agentic coordination** — conn
 - **API provider**: OpenRouter — free-tier and paid models via API key (ideal when CLI quotas are exhausted)
 - **UI experience**: Split layouts (horizontal, vertical, grid), workspace window, dark/light themes, zoom, activity timeline
 
-Latest Binary Release  
-[Download Barnaby v0.0.125](https://github.com/incendiosoftware/Barnaby/releases/tag/v0.0.125)
+## Installation
 
-Website: https://barnaby.build  
-Written By: Stuart Mackereth  
-Company: Incendio Trading Limited  
-Email: incendiosoftware@gmail.com  
+You can run Barnaby without cloning the repository. Choose one of the options below.
+
+### Option 1: Download (recommended for Windows)
+
+[Download Barnaby](https://github.com/incendiosoftware/Barnaby/releases) — portable `.exe` for Windows. No install required. Best for correct Start menu and taskbar integration.
+
+1. Go to [Releases](https://github.com/incendiosoftware/Barnaby/releases)
+2. Download the latest `Barnaby_*_portable.exe`
+3. Run it — no installer, no Node.js needed
+
+### Option 2: npm (requires Node.js 20+)
+
+If you have Node.js installed, you can run Barnaby via npm without cloning:
+
+**Quick run (no install):**
+```bash
+npx '@barnaby.build/barnaby'
+```
+
+**Global install:**
+```bash
+npm install -g '@barnaby.build/barnaby'
+barnaby
+```
+
+*PowerShell: use single quotes around the package name (e.g. `'@barnaby.build/barnaby'`). Without quotes, `@` is interpreted as a variable.*
+
+**Windows (npm install):**
+- A Start menu shortcut is created automatically. Search "Barnaby" in Start.
+- For correct taskbar icon: **pin the shortcut** (right‑click → Pin to taskbar), not the running window. Pinning the window shows "Electron" because npm runs the electron binary directly.
+- If the shortcut has no icon: **Edit → Application Settings → Preferences** → **Repair Start menu shortcut**.
+- For the full experience (correct icon everywhere), use the [portable exe](https://github.com/incendiosoftware/Barnaby/releases).
+
+### Orchestrator plugin (optional)
+
+The Orchestrator is an optional add-on for autonomous agent loops. It is **not** bundled with Barnaby.
+
+- **Install:** Edit → Application Settings → Orchestrator → **Install from npm**
+- **Uninstall:** Edit → Application Settings → Orchestrator → **Uninstall**
+- **Manual:** `cd ~/.barnaby/plugins` (or `%USERPROFILE%\.barnaby\plugins` on Windows), then `npm install '@barnaby.build/orchestrator'` or `npm uninstall '@barnaby.build/orchestrator'`
+
+---
+
+Stuart Mackereth  
+https://barnaby.build  
+incendiosoftware@gmail.com  
+Incendio Trading Limited  
 
 ## Screenshots
 
-![Barnaby dark screenshot](docs/screenshots/barnaby-dark.png)
-
-![Barnaby light screenshot](docs/screenshots/barnaby-light.png)
+<p align="center">
+  <img src="docs/screenshots/barnaby-dark.png" width="45%" alt="Barnaby dark" />
+  <img src="docs/screenshots/barnaby-light.png" width="45%" alt="Barnaby light" />
+</p>
 
 ## Overview
 
@@ -44,6 +87,17 @@ Barnaby unifies **CLI-based** providers (Codex, Claude, Gemini) and **API-based*
 - **OpenRouter**: API key in Barnaby settings; access free-tier and paid models when CLI quotas are exhausted
 
 Compared to single-chat tools: Barnaby gives you parallel windowed agents and workspace-aware orchestration.
+
+## Orchestrator (optional add-on)
+
+The **Orchestrator** is an optional plugin that extends Barnaby beyond single-turn chat. It is a persistent management engine for **autonomous agent loops** — set a goal, define guardrails, and let agents work until the task is complete.
+
+**What it does:**
+- **Cross-agent state sync** — Agents share context across panels (e.g. backend signals schema changes to frontend)
+- **Goal persistence** — Stores a hierarchy of goals; pauses and resumes on failure or rate limits
+- **Deterministic guardrails** — Intercepts output to verify linting and security rules before committing to the workspace
+
+The Orchestrator is **not** bundled with Barnaby. Install it from Settings (Edit → Application Settings → Orchestrator → Install from npm) if you want autonomous, multi-stage development. See [barnaby.build](https://barnaby.build) for more details.
 
 ## Prerequisites
 
@@ -86,11 +140,13 @@ gemini --version
 2. In Barnaby: open connectivity settings, select OpenRouter, enter your API key
 3. Choose a model (e.g. free-tier Llama 3.3 70B) and connect
 
-## Development
+## Development (from source)
 
-From repo root:
+To build and run from the cloned repository:
 
 ```sh
+git clone https://github.com/incendiosoftware/Barnaby.git
+cd Barnaby
 npm install
 npm run dev
 ```

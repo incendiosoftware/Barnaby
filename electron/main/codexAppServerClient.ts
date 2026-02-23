@@ -28,6 +28,7 @@ export type FireHarnessCodexEvent =
   | { type: 'assistantDelta'; delta: string }
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
+  | { type: 'thinking'; message: string }
   | { type: 'planUpdated'; plan: unknown }
   | { type: 'rawNotification'; method: string; params?: unknown }
 
@@ -339,12 +340,29 @@ export class CodexAppServerClient extends EventEmitter {
       return
     }
 
-    if (method === 'item/completed') {
-      // Agent message items can complete multiple times within a single turn.
-      // Keep streaming state open until turn/completed so duration and completion
-      // are measured once for the whole turn.
-      const itemType = params?.item?.type
-      if (itemType === 'agentMessage') return
+    if (method === 'item/created' || method === 'item/completed') {
+      const item = params?.item
+      const itemType = item?.type
+      if (method === 'item/completed' && itemType === 'agentMessage') return
+
+      if (itemType === 'function_call' || itemType === 'tool_call') {
+        const name = item?.name ?? item?.function?.name ?? 'tool'
+        const rawArgs = item?.arguments ?? item?.function?.arguments ?? ''
+        let argSummary = ''
+        try {
+          const parsed = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs
+          argSummary = parsed?.command ?? parsed?.file_path ?? parsed?.path ?? parsed?.pattern ?? ''
+        } catch { argSummary = typeof rawArgs === 'string' ? rawArgs.slice(0, 60) : '' }
+        const short = typeof argSummary === 'string' && argSummary.length > 60 ? argSummary.slice(0, 60) + '...' : argSummary
+        this.emitEvent({ type: 'thinking', message: short ? `${name}: ${short}` : name })
+        return
+      }
+      if (itemType === 'function_call_output' || itemType === 'tool_result') return
+      if (typeof itemType === 'string' && /file_|shell|command|exec|read|write|search|patch/i.test(itemType)) {
+        const desc = item?.name ?? item?.command ?? item?.path ?? itemType
+        this.emitEvent({ type: 'thinking', message: `${desc}` })
+        return
+      }
     }
 
     if (method === 'turn/completed') {

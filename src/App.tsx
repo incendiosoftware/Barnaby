@@ -891,6 +891,17 @@ const CONNECT_TIMEOUT_MS = 30000
 const TURN_START_TIMEOUT_MS = 300000
 const STALL_WATCHDOG_MS = 360000
 const COLLAPSIBLE_CODE_MIN_LINES = 14
+
+function looksLikeDiff(code: string): boolean {
+  const lines = code.split('\n')
+  let plusCount = 0
+  let minusCount = 0
+  for (const line of lines) {
+    if (line.startsWith('+') && !line.startsWith('+++')) plusCount++
+    else if (line.startsWith('-') && !line.startsWith('---')) minusCount++
+  }
+  return plusCount + minusCount >= 3 && plusCount > 0 && minusCount > 0
+}
 const MAX_CHAT_HISTORY_ENTRIES = 80
 const DEFAULT_GPT_CONTEXT_TOKENS = 200_000
 const CONTEXT_OUTPUT_RESERVE_RATIO = 0.2
@@ -4040,13 +4051,13 @@ export default function App() {
       prev.map((w) => {
         if (w.id !== agentWindowId) return w
         const msgs = w.messages
-        const last = msgs[msgs.length - 1]
-        // Append only while this panel is actively streaming; otherwise start a fresh assistant message.
-        if (w.streaming && last && last.role === 'assistant') {
+        const lastAssistantIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
+        if (w.streaming && lastAssistantIdx >= 0) {
+          const last = msgs[lastAssistantIdx]
           return {
             ...w,
             streaming: true,
-            messages: [...msgs.slice(0, -1), { ...last, format: 'markdown', content: last.content + buf, createdAt: last.createdAt ?? Date.now() }],
+            messages: [...msgs.slice(0, lastAssistantIdx), { ...last, format: 'markdown', content: last.content + buf, createdAt: last.createdAt ?? Date.now() }, ...msgs.slice(lastAssistantIdx + 1)],
           }
         }
         return {
@@ -4174,6 +4185,18 @@ export default function App() {
       if (evt?.type === 'thinking') {
         appendPanelDebug(agentWindowId, 'event:thinking', evt.message ?? '')
         markPanelActivity(agentWindowId, evt)
+        const thinkingText = typeof evt.message === 'string' ? evt.message.trim() : ''
+        if (thinkingText && thinkingText.includes(':')) {
+          const prefixed = `\u{1F504} ${thinkingText}`
+          setPanels((prev) =>
+            prev.map((w) => {
+              if (w.id !== agentWindowId) return w
+              const last = w.messages[w.messages.length - 1]
+              if (last && last.role === 'system' && last.content === prefixed) return w
+              return { ...w, messages: [...w.messages, { id: newId(), role: 'system' as const, content: prefixed, format: 'text' as const, createdAt: Date.now() }] }
+            }),
+          )
+        }
         return
       }
 
@@ -4239,15 +4262,16 @@ export default function App() {
           prev.map((w) => {
             if (w.id !== agentWindowId) return w
             const msgs = w.messages
-            const last = msgs[msgs.length - 1]
-            if (!last || last.role !== 'assistant') {
+            const lastAssistantIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
+            const lastAssistant = lastAssistantIdx >= 0 ? msgs[lastAssistantIdx] : null
+            if (!lastAssistant) {
               const updated = { ...w, streaming: false }
               snapshotForHistory = updated
               return updated
             }
             let pendingInputs: string[] = w.pendingInputs
-            let nextMessages: ChatMessage[] = [...msgs.slice(0, -1), { ...last, format: 'markdown' as const }]
-            if (looksIncomplete(last.content)) {
+            let nextMessages: ChatMessage[] = [...msgs.slice(0, lastAssistantIdx), { ...lastAssistant, format: 'markdown' as const }, ...msgs.slice(lastAssistantIdx + 1)]
+            if (looksIncomplete(lastAssistant.content)) {
               const count = autoContinueCountRef.current.get(agentWindowId) ?? 0
               if (count < MAX_AUTO_CONTINUE && w.pendingInputs.length === 0) {
                 autoContinueCountRef.current.set(agentWindowId, count + 1)
@@ -7650,6 +7674,17 @@ export default function App() {
                 </div>
               )}
             </div>
+            <button
+              type="button"
+              className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
+              onClick={() => createAgentPanel()}
+              title="New chat"
+              aria-label="New chat"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+            </button>
           </div>
           <div className="flex items-center gap-1.5">
             <div className="flex items-center gap-0.5 shrink-0">
@@ -7657,19 +7692,6 @@ export default function App() {
               {!toolsDockButtonsOnLeft && codeDockToggleButton}
               {!toolsDockButtonsOnLeft && settingsDockToggleButton}
             </div>
-            {panels.length === 0 && (
-              <button
-                type="button"
-                className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-200 dark:hover:bg-blue-900/40"
-                onClick={() => createAgentPanel()}
-                title="New chat"
-                aria-label="New chat"
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                </svg>
-              </button>
-            )}
             {/* layoutToolbar: Tile V/H/Grid */}
             <div data-layout-toolbar="true" className="flex items-center gap-1">
               <button
@@ -10152,8 +10174,10 @@ export default function App() {
               title={panels.length >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'Split panel'}
               aria-label="Split panel"
             >
-              <svg width="16" height="16" viewBox="0 0 14 14" fill="none">
-                <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <rect x="8.25" y="2" width="1.5" height="14" rx="0.75" fill="currentColor" />
+                <path d="M6 9L2.5 6.5V11.5L6 9Z" fill="currentColor" />
+                <path d="M12 9L15.5 6.5V11.5L12 9Z" fill="currentColor" />
               </svg>
             </button>
             <button
@@ -10202,7 +10226,8 @@ export default function App() {
             </div>
           )}
           {(() => {
-            type Row = { type: 'single'; unit: TimelineUnit } | { type: 'operationBatch'; units: TimelineUnit[] }
+            type Row = { type: 'single'; unit: TimelineUnit } | { type: 'operationBatch'; units: TimelineUnit[] } | { type: 'thinkingBatch'; units: TimelineUnit[] }
+            const isToolThinking = (u: TimelineUnit) => u.kind === 'thinking' && u.body.startsWith('\u{1F504} ')
             const rows: Row[] = []
             let i = 0
             while (i < timelineUnits.length) {
@@ -10215,6 +10240,15 @@ export default function App() {
                   i += 1
                 }
                 rows.push({ type: 'operationBatch', units: batch })
+                continue
+              }
+              if (isToolThinking(unit)) {
+                const batch: TimelineUnit[] = []
+                while (i < timelineUnits.length && isToolThinking(timelineUnits[i])) {
+                  batch.push(timelineUnits[i])
+                  i += 1
+                }
+                rows.push({ type: 'thinkingBatch', units: batch })
                 continue
               }
               rows.push({ type: 'single', unit })
@@ -10244,6 +10278,54 @@ export default function App() {
                         </div>
                       )
                     })}
+                  </div>
+                )
+              }
+              if (row.type === 'thinkingBatch') {
+                const THINKING_FOLD_THRESHOLD = 5
+                const items = row.units
+                const batchKey = `think-batch-${items.map((u) => u.id).join('-')}`
+                const lastInProgress = items[items.length - 1]?.status === 'in_progress'
+                const renderLine = (u: TimelineUnit) => {
+                  const label = u.body.replace(/^\u{1F504}\s*/u, '').trim()
+                  return (
+                    <div key={u.id} className="px-1 py-0">
+                      <div
+                        className={`text-[11px] leading-[1.4] truncate ${u.status === 'in_progress' ? 'animate-pulse motion-reduce:animate-none' : ''}`}
+                        style={{ color: timelineMessageColor }}
+                        title={label}
+                      >
+                        {label}
+                      </div>
+                    </div>
+                  )
+                }
+                if (items.length <= THINKING_FOLD_THRESHOLD) {
+                  return (
+                    <div key={batchKey} className="w-full space-y-0">
+                      {items.map(renderLine)}
+                    </div>
+                  )
+                }
+                const batchOpen = timelineOpenByUnitId[batchKey] ?? lastInProgress
+                return (
+                  <div key={batchKey} className="w-full">
+                    <button
+                      type="button"
+                      className={`w-full text-left cursor-pointer py-1 px-1 text-[11px] flex items-center gap-1.5 select-none hover:opacity-80 bg-transparent border-0 outline-none ${lastInProgress ? 'animate-pulse motion-reduce:animate-none' : ''}`}
+                      style={{ color: timelineMessageColor }}
+                      onClick={() => setTimelineOpenByUnitId((prev) => ({ ...prev, [batchKey]: !batchOpen }))}
+                    >
+                      <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className={`shrink-0 transition-transform ${batchOpen ? 'rotate-90' : ''}`} aria-hidden>
+                        <path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      <span>{items.length} tool steps</span>
+                    </button>
+                    {batchOpen && (
+                      <div className="space-y-0 pl-3">
+                        {items.map(renderLine)}
+                      </div>
+                    )}
                   </div>
                 )
               }
@@ -10393,7 +10475,7 @@ export default function App() {
                                 const normalized = codeText.replace(/\n$/, '')
                                 const lineCount = normalized ? normalized.split('\n').length : 0
                                 const lang = codeClass.startsWith('language-') ? codeClass.slice('language-'.length) : 'code'
-                                const isDiff = lang === 'diff'
+                                const isDiff = lang === 'diff' || looksLikeDiff(normalized)
                                 const diffLines = normalized.split('\n')
                                 const openByDefault = isCodeLifecycleUnit
                                   ? unit.status === 'in_progress' || codeUnitPinned
@@ -10401,23 +10483,12 @@ export default function App() {
                                 const codeBlockId = `${m.id}:${codeBlockIndex++}`
                                 const isOpen = codeBlockOpenById[codeBlockId] ?? openByDefault
                                 return (
-                                  <details
-                                    ref={(el) => {
-                                      if (!el || el.dataset.barnabyInit === '1') return
-                                      el.open = isOpen
-                                      el.dataset.barnabyInit = '1'
-                                    }}
-                                    onToggle={(e) => {
-                                      const next = e.currentTarget.open
-                                      queueMicrotask(() => {
-                                        setCodeBlockOpenById((prev) =>
-                                          prev[codeBlockId] === next ? prev : { ...prev, [codeBlockId]: next },
-                                        )
-                                      })
-                                    }}
-                                    className="group my-2 rounded-lg border border-neutral-300/80 dark:border-neutral-700/80 bg-neutral-100/80 dark:bg-neutral-900/65"
-                                  >
-                                    <summary className="list-none cursor-pointer px-3 py-1.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between">
+                                  <div className="group my-2 rounded-lg border border-neutral-300/80 dark:border-neutral-700/80 bg-neutral-100/80 dark:bg-neutral-900/65">
+                                    <button
+                                      type="button"
+                                      className="w-full text-left cursor-pointer px-3 py-1.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between gap-2 bg-transparent border-0 outline-none hover:opacity-80"
+                                      onClick={() => setCodeBlockOpenById((prev) => ({ ...prev, [codeBlockId]: !isOpen }))}
+                                    >
                                       <span className="inline-flex items-center gap-1.5">
                                         <span>{lang} - {lineCount} lines</span>
                                         {isDiff && (
@@ -10431,12 +10502,13 @@ export default function App() {
                                         height="12"
                                         viewBox="0 0 12 12"
                                         fill="none"
-                                        className="transition-transform group-open:rotate-180"
+                                        className={`shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
                                         aria-hidden
                                       >
                                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                                       </svg>
-                                    </summary>
+                                    </button>
+                                    {isOpen && (
                                     <div className="rounded-b-lg overflow-hidden border-t border-neutral-300/70 dark:border-neutral-700/80">
                                       {isDiff ? (
                                         <div className="p-3 overflow-auto max-h-80 whitespace-pre bg-white/80 dark:bg-neutral-950/80">
@@ -10466,7 +10538,8 @@ export default function App() {
                                         </SyntaxHighlighter>
                                       )}
                                     </div>
-                                  </details>
+                                    )}
+                                  </div>
                                 )
                               },
                               code(props) {
@@ -10531,7 +10604,7 @@ export default function App() {
                           const normalized = codeText.replace(/\n$/, '')
                           const lineCount = normalized ? normalized.split('\n').length : 0
                           const lang = codeClass.startsWith('language-') ? codeClass.slice('language-'.length) : 'code'
-                          const isDiff = lang === 'diff'
+                          const isDiff = lang === 'diff' || looksLikeDiff(normalized)
                           const diffLines = normalized.split('\n')
                           const openByDefault = isCodeLifecycleUnit
                             ? unit.status === 'in_progress' || codeUnitPinned
@@ -10539,42 +10612,32 @@ export default function App() {
                           const codeBlockId = `${m.id}:${codeBlockIndex++}`
                           const isOpen = codeBlockOpenById[codeBlockId] ?? openByDefault
                           return (
-                            <details
-                              ref={(el) => {
-                                if (!el || el.dataset.barnabyInit === '1') return
-                                el.open = isOpen
-                                el.dataset.barnabyInit = '1'
-                              }}
-                              onToggle={(e) => {
-                                const next = e.currentTarget.open
-                                queueMicrotask(() => {
-                                  setCodeBlockOpenById((prev) =>
-                                    prev[codeBlockId] === next ? prev : { ...prev, [codeBlockId]: next },
-                                  )
-                                })
-                              }}
-                              className="group my-2 rounded-lg border border-neutral-300/80 dark:border-neutral-700/80 bg-neutral-100/80 dark:bg-neutral-900/65"
-                            >
-                              <summary className="list-none cursor-pointer px-3 py-1.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between">
-                              <span className="inline-flex items-center gap-1.5">
-                                <span>{lang} - {lineCount} lines</span>
-                                {isDiff && (
-                                  <span className="rounded border border-emerald-300 bg-emerald-100 px-1.5 py-0.5 text-[10px] leading-none text-emerald-900 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">
-                                    DIFF
-                                  </span>
-                                )}
-                              </span>
-                              <svg
-                                width="12"
-                                height="12"
-                                viewBox="0 0 12 12"
-                                fill="none"
-                                className="transition-transform group-open:rotate-180"
-                                aria-hidden
+                            <div className="group my-2 rounded-lg border border-neutral-300/80 dark:border-neutral-700/80 bg-neutral-100/80 dark:bg-neutral-900/65">
+                              <button
+                                type="button"
+                                className="w-full text-left cursor-pointer px-3 py-1.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between gap-2 bg-transparent border-0 outline-none hover:opacity-80"
+                                onClick={() => setCodeBlockOpenById((prev) => ({ ...prev, [codeBlockId]: !isOpen }))}
                               >
-                                <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                              </svg>
-                              </summary>
+                                <span className="inline-flex items-center gap-1.5">
+                                  <span>{lang} - {lineCount} lines</span>
+                                  {isDiff && (
+                                    <span className="rounded border border-emerald-300 bg-emerald-100 px-1.5 py-0.5 text-[10px] leading-none text-emerald-900 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">
+                                      DIFF
+                                    </span>
+                                  )}
+                                </span>
+                                <svg
+                                  width="12"
+                                  height="12"
+                                  viewBox="0 0 12 12"
+                                  fill="none"
+                                  className={`shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+                                  aria-hidden
+                                >
+                                  <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              </button>
+                              {isOpen && (
                                     <div className="rounded-b-lg overflow-hidden border-t border-neutral-300/70 dark:border-neutral-700/80">
                                       {isDiff ? (
                                         <div className="p-3 overflow-auto max-h-80 whitespace-pre bg-white/80 dark:bg-neutral-950/80">
@@ -10604,7 +10667,8 @@ export default function App() {
                                         </SyntaxHighlighter>
                                       )}
                                     </div>
-                            </details>
+                              )}
+                            </div>
                           )
                         },
                         code(props) {

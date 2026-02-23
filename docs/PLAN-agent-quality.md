@@ -40,71 +40,17 @@ User message
 
 ---
 
-## Phase 1: Rich System Prompts (Highest Impact, Lowest Effort) ✅ IMPLEMENTED
+## Phase 1: Rich System Prompts ✅ IMPLEMENTED
 
 **Goal:** Replace the minimal system prompts across all clients with comprehensive, Cursor-quality instructions.
 
-### Files to modify
+### What was done
 
-- `electron/main/claudeClient.ts` — `COMPLETION_SYSTEM` constant
-- `electron/main/openaiClient.ts` — `system` variable in `startTurn()`
-- `electron/main/openRouterClient.ts` — `system` variable in `startTurn()`
-- `electron/main/geminiClient.ts` — needs a system prompt (currently has none)
-
-### New file: `electron/main/systemPrompt.ts`
-
-Create a shared function:
-
-```typescript
-export function buildSystemPrompt(options: {
-  workspaceTree: string
-  cwd: string
-  permissionMode: string
-  sandbox: string
-  interactionMode?: string
-  gitStatus?: string
-}): string
-```
-
-### System prompt content (in order)
-
-1. **Identity and role** — "You are a coding agent running inside Barnaby, an AI orchestrator. You have access to the user's workspace and tools to read, search, write files, and run commands."
-
-2. **Behavioral rules:**
-   - Prefer action over deferral: locate files, apply edits, report what changed
-   - Never invent file names, symbols, or behavior — verify via tools first
-   - Cite evidence (file paths, line numbers) in answers
-   - Keep working until the task is done or a clear blocker is identified
-   - Don't narrate what you're about to do — just do it
-   - Be concise — no filler, no restating the question
-
-3. **Code quality rules:**
-   - Don't add obvious/redundant comments
-   - Preserve existing code style and indentation
-   - When editing, show only the changed section with enough context to locate it
-   - Don't generate binary data or extremely long hashes
-
-4. **Tool usage guidance:**
-   - Read files before editing them
-   - Use search to find symbols rather than guessing file locations
-   - Use shell commands for build/test/install tasks instead of returning checklists
-
-5. **Mode-specific instructions** — Move from frontend `INTERACTION_MODE_META.promptPrefix` into system prompt:
-   - agent: "Implement changes directly. Bias toward action."
-   - plan: "Explore options and trade-offs first. Present a plan before making changes."
-   - debug: "Investigate systematically. Gather evidence. Identify root cause before proposing fixes."
-   - ask: "Read-only guidance mode. Explain clearly. Do not make code changes unless explicitly asked."
-
-6. **Workspace context** — the tree, cwd, permission mode, sandbox mode
-
-### Frontend change in `src/App.tsx`
-
-- Pass `interactionMode` through to the client via the `sendMessageEx` payload (or a new field on connect options)
-- Remove the `promptPrefix` prepending from `sendToAgent()` since it moves into the system prompt
-
-### Estimated impact
-
-Large. This alone should close 50-60% of the quality gap.
+- Created `electron/main/systemPrompt.ts` with shared `buildSystemPrompt()` function
+- Identity/role, behavioral rules, code quality rules, tool usage guidance, mode-specific instructions
+- Integrated into all clients: Claude, OpenAI, OpenRouter, Gemini
+- Frontend `interactionMode` passed through to backend
+- Git status included in system prompt for all clients
 
 ---
 
@@ -112,58 +58,51 @@ Large. This alone should close 50-60% of the quality gap.
 
 **Goal:** Give the Claude CLI client and OpenRouter client the same tool capabilities that the OpenAI client already has.
 
-### Current tool support by client
+### What was done
 
-| Client | Tools | Notes |
-|--------|-------|-------|
-| `OpenAIClient` | 5 tools | list_workspace_tree, search_workspace, read_workspace_file, write_workspace_file, run_shell_command |
-| `ClaudeClient` | 0 (CLI has own) | Relies on Claude CLI built-in tools |
-| `OpenRouterClient` | 0 | Simple chat completion |
-| `CodexAppServerClient` | Server-managed | Codex server handles tools |
-| `GeminiClient` | CLI-managed | Gemini CLI handles tools |
-
-### Step 1: Extract shared tool infrastructure
-
-Create new file: `electron/main/agentTools.ts`
-
-Move the following from `openaiClient.ts` into the shared module:
-- `agentTools()` — tool definition schemas
-- `runTool()` — tool execution dispatcher
-- `readWorkspaceFile()` — file reading with line range support
-- `writeWorkspaceFile()` — file writing with permission checks
-- `searchWorkspace()` — text search across workspace
-- `runShellCommand()` — shell command execution
-- `resolveWorkspacePath()` — path validation
-- `limitToolOutput()` — output truncation
-
-Export as:
-
-```typescript
-export class AgentToolRunner {
-  constructor(options: { cwd: string; sandbox: string; permissionMode: string; allowedCommandPrefixes: string[] })
-  getToolDefinitions(): ToolDefinition[]
-  async executeTool(name: string, args: string): Promise<string>
-}
-```
-
-### Step 2: Add tool loop to OpenRouterClient
-
-`electron/main/openRouterClient.ts` — OpenRouter supports OpenAI-compatible tool calling format:
-- Add `tools` and `tool_choice: 'auto'` to the request body
-- Add tool execution loop (max 8 rounds, same as OpenAI client)
-- Append tool result messages to conversation
-
-### Step 3: Claude CLI tools
-
-The `claude` CLI has its own built-in tools for file operations. The issue with `ClaudeClient` is not missing tools but the weak system prompt. Phase 1 addresses this. Verify the Claude CLI's `--permission-mode` flag is correctly enabling tool use.
-
-### Estimated impact
-
-Medium-high. OpenRouter models will go from "dumb chat" to capable agents. Claude CLI benefit is mainly from Phase 1.
+- Created `electron/main/agentTools.ts` — shared `AgentToolRunner` class with 5 tools (list_workspace_tree, search_workspace, read_workspace_file, write_workspace_file, run_shell_command)
+- Refactored `OpenAIClient` to use shared `AgentToolRunner`, removing ~400 lines of duplicated code
+- Upgraded `OpenRouterClient` from simple chat to full agent with tool execution loop (up to 8 rounds)
+- Claude CLI already has native tools; upgraded `--permission-mode` to `bypassPermissions` for full autonomy
+- Fixed `gitStatus` propagation bug across all clients (was fetched but dropped before reaching `buildSystemPrompt`)
+- Fixed same bug in `CodexAppServerClient` (prepends git status to message text)
 
 ---
 
-## Phase 3: Automatic Context Enrichment
+## Phase 5: Streaming & Inline Tool Activity ✅ IMPLEMENTED
+
+**Goal:** Real-time streaming and visible tool activity for all providers.
+
+### What was done
+
+**Streaming:**
+- OpenAI: switched `stream: false` to `stream: true` with SSE parsing (`consumeSSEStream`)
+- OpenRouter: same SSE streaming implementation
+- Claude CLI: switched to `--output-format stream-json --include-partial-messages --verbose` for true progressive streaming; rewrote JSON stream parser to handle Claude CLI format (`assistant`/`system`/`result` events vs Anthropic API SSE format)
+- Gemini: was already streaming via CLI
+
+**Session persistence (Claude):**
+- Captures `session_id` from Claude CLI stream-json `system` init event
+- Subsequent messages use `--resume <session_id>` to skip CLI startup overhead (model init, MCP server setup, tool discovery, permission negotiation)
+- First message has full startup cost; second+ messages should be dramatically faster
+
+**Inline tool activity UI:**
+- Backend: all 5 clients now emit `thinking` events with format `Tool: detail` (e.g. `Read: src/App.tsx`)
+- Frontend: thinking events accumulate as `🔄`-prefixed system messages (no longer replaced/stripped)
+- Timeline parser: `🔄` system messages classified as `thinking` kind, rendered as compact single-line items
+- Consecutive thinking items batched; >5 items auto-collapse into "N tool steps" toggle
+- Bare tool names without details are filtered; consecutive duplicates deduplicated
+- Removed old `isLikelyThinkingUpdate` heuristic that was mis-classifying assistant text as thinking
+
+**UI polish:**
+- Split panel button: replaced `+` icon with proper splitter icon (vertical bar with outward arrows)
+- Tool steps toggle: uses React button (not native `<details>`) for reliable click handling
+- Theme-compliant styling for tool step counter
+- Auto-detection of diff-like content in any code block (not just `\`\`\`diff`) for red/green highlighting
+
+---
+
+## Phase 3: Automatic Context Enrichment — NOT YET STARTED
 
 **Goal:** Automatically attach relevant workspace context to every message, so the model doesn't start blind.
 
@@ -203,26 +142,25 @@ Medium. Reduces "cold start" problem where the model doesn't know what language,
 
 ---
 
-## Phase 4: Structured Conversation History
+## Phase 4: Structured Conversation History — NOT YET STARTED
 
 **Goal:** Replace text-transcript history formatting with proper API-structured messages.
 
 ### Current state
 
-- `ClaudeClient` formats history as `User:\n...\n\nAssistant:\n...` plain text via `buildPrompt()`
-- `CodexAppServerClient` uses `formatPriorMessagesForContext()` which does the same
+- `ClaudeClient` — Now uses `--resume` for session persistence (Phase 5), but first message still sends full text history via `buildPrompt()`
+- `CodexAppServerClient` uses `formatPriorMessagesForContext()` which prepends all history as text blob
 - `OpenAIClient` properly uses `{ role, content }` message arrays (good)
 
-### Changes
+### Changes needed
 
 1. **ClaudeClient** (`electron/main/claudeClient.ts`)
-   - Instead of `buildPrompt()` that flattens history to text, send the current message only to stdin, and pass initial history via the `--resume` or `--continue` Claude CLI flags if available
-   - If CLI doesn't support structured history, keep text format but improve: clear delimiters, truncate long assistant responses (currently unlimited)
+   - Session resume handles multi-turn context natively — no need to send history on subsequent messages ✅
+   - First message still uses text-format history; could be improved with truncation
 
 2. **CodexAppServerClient** (`electron/main/index.ts`)
    - `formatPriorMessagesForContext()` prepends all history as text blob — wastes context window
    - Send only the last 2-4 messages as context (not all 24), summarize older history
-   - Consider: "Previous conversation summary: [user asked about X, assistant modified files Y and Z]"
 
 3. **History truncation** — Add smart truncation to all clients:
    - Trim assistant messages longer than ~2000 chars to a summary
@@ -235,22 +173,20 @@ Medium. Prevents context window pollution and keeps the model focused on the cur
 
 ---
 
-## Phase 5: Per-Client Configuration and Model-Aware Tuning
+## Phase 5 Remaining: Per-Client Configuration and Model-Aware Tuning
 
 **Goal:** Let each client optimize for its model's strengths.
 
-### Changes
+### Still to do
 
 1. **Temperature tuning** — `openaiClient.ts` uses `0.1`, OpenRouter uses `0.2`. Claude CLI and Gemini CLI don't set temperature. Add temperature configuration per-model.
 
 2. **Max tokens / response length** — Set appropriate `max_tokens` for each model to prevent runaway responses.
 
-3. **Model-specific prompt adjustments** — `buildSystemPrompt()` from Phase 1 could accept a `modelFamily` parameter:
+3. **Model-specific prompt adjustments** — `buildSystemPrompt()` could accept a `modelFamily` parameter:
    - Claude: responds well to XML-structured prompts with `<rules>` tags
    - GPT: responds well to numbered lists and explicit constraints
    - Gemini: responds well to conversational instructions
-
-4. **Streaming for OpenAI and OpenRouter** — Both currently use `stream: false`. Switch to `stream: true` with SSE parsing so the user sees output immediately instead of waiting 30+ seconds.
 
 ### Estimated impact
 
@@ -260,14 +196,12 @@ Low-medium individually, but compounds with the other phases.
 
 ## Implementation Priority
 
-Phase 1 should be done first — highest impact and unblocks everything else. Phases 2 and 3 can run in parallel. Phase 4 after Phase 2 (needs tool infrastructure). Phase 5 last.
-
 ```
-Phase 1 (system prompts)     ████████████████  HIGH IMPACT
-Phase 2 (tools)              ░░░░░████████████  MEDIUM-HIGH
-Phase 3 (context)            ░░░░░████████      MEDIUM (parallel with 2)
-Phase 4 (history)            ░░░░░░░░░░████     MEDIUM
-Phase 5 (tuning)             ░░░░░░░░░░░░░░██  LOW-MEDIUM
+Phase 1 (system prompts)     ████████████████  DONE ✅
+Phase 2 (tools)              ████████████████  DONE ✅
+Phase 5 (streaming/UI)       ████████████████  DONE ✅ (remaining: tuning)
+Phase 3 (context)            ░░░░░░░░░░░░░░░░  NOT STARTED
+Phase 4 (history)            ░░░░░░░░░░░░░░░░  NOT STARTED (partially addressed by session resume)
 ```
 
 ## Files Changed Summary
@@ -276,12 +210,13 @@ Phase 5 (tuning)             ░░░░░░░░░░░░░░██  L
 |------|-------|--------|
 | **NEW** `electron/main/systemPrompt.ts` | 1 | Shared system prompt builder |
 | **NEW** `electron/main/agentTools.ts` | 2 | Shared tool definitions and executor |
-| **NEW** `electron/main/contextBuilder.ts` | 3 | Automatic context enrichment |
-| `electron/main/claudeClient.ts` | 1, 4 | Rich system prompt, better history |
-| `electron/main/openaiClient.ts` | 1, 2 | Use shared prompt and tools |
-| `electron/main/openRouterClient.ts` | 1, 2 | Rich prompt, add tool support |
-| `electron/main/geminiClient.ts` | 1 | Add system prompt |
-| `electron/main/index.ts` | 3, 4 | Context enrichment, history improvement |
-| `src/App.tsx` | 1 | Pass interactionMode to backend, remove frontend mode prefix |
+| `electron/main/claudeClient.ts` | 1, 2, 5 | Rich system prompt, stream-json parsing, session resume via `--resume` |
+| `electron/main/openaiClient.ts` | 1, 2, 5 | Use shared prompt and tools, SSE streaming, thinking events |
+| `electron/main/openRouterClient.ts` | 1, 2, 5 | Rich prompt, tool support, SSE streaming, thinking events |
+| `electron/main/geminiClient.ts` | 1, 5 | System prompt, git status, thinking events |
+| `electron/main/codexAppServerClient.ts` | 5 | Git status in message text, thinking events from item notifications |
+| `electron/main/index.ts` | 1, 2 | Context/gitStatus wiring, CodexAppServerClient git status fix |
+| `src/App.tsx` | 1, 5 | interactionMode passthrough, thinking message accumulation, compact timeline rendering, diff detection, split icon |
+| `src/chat/timelineParser.ts` | 5 | `🔄` system messages → `thinking` kind, removed assistant thinking heuristic |
 
 Each phase is self-contained and deployable independently. An agent can pick up any single phase and implement it without needing the others to be complete first.

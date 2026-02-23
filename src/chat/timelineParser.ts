@@ -48,8 +48,10 @@ function defaultIsLikelyThinkingUpdate(content: string) {
 
 function messageKind(message: TimelineMessage): TimelineUnitKind {
   if (message.role === 'user') return 'user'
-  if (message.role === 'system') return 'system'
-  if (defaultIsLikelyThinkingUpdate(message.content)) return 'thinking'
+  if (message.role === 'system') {
+    if (message.content.startsWith('\u{1F504} ')) return 'thinking'
+    return 'system'
+  }
   if (message.content.includes('```')) return 'code'
   return 'assistant'
 }

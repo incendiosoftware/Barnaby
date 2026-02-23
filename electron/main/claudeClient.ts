@@ -44,6 +44,7 @@ export class ClaudeClient extends EventEmitter {
   private interactionMode: string = 'agent'
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeProc: ChildProcessWithoutNullStreams | null = null
+  private sessionId: string | null = null
 
   private normalizeModelId(model: string) {
     const trimmed = model.trim()
@@ -119,23 +120,32 @@ export class ClaudeClient extends EventEmitter {
       interactionMode: mode,
       gitStatus: options?.gitStatus,
     })
-    const prompt = this.buildPrompt()
+    const isResume = Boolean(this.sessionId)
+    const prompt = isResume ? (trimmed + fileContext) : this.buildPrompt()
     const permissionMode = this.permissionMode === 'proceed-always' ? 'bypassPermissions' : 'default'
 
     const runWithModel = async (modelId: string) => {
-      let full = ''
+      let assistantText = ''
       await new Promise<string>((resolve, reject) => {
         const args = [
           '--print',
+          '--verbose',
           '--output-format',
-          'text',
-          '--model',
-          modelId,
-          '--permission-mode',
-          permissionMode,
-          '--append-system-prompt',
-          COMPLETION_SYSTEM,
+          'stream-json',
+          '--include-partial-messages',
         ]
+        if (this.sessionId) {
+          args.push('--resume', this.sessionId)
+        } else {
+          args.push(
+            '--model',
+            modelId,
+            '--permission-mode',
+            permissionMode,
+            '--append-system-prompt',
+            COMPLETION_SYSTEM,
+          )
+        }
         const spawnOpts = {
           cwd: this.cwd,
           stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
@@ -150,8 +160,7 @@ export class ClaudeClient extends EventEmitter {
             : spawn('claude', args, spawnOpts)
 
         this.activeProc = proc
-        
-        // Write prompt to stdin
+
         proc.stdin.write(prompt)
         proc.stdin.end()
 
@@ -159,10 +168,75 @@ export class ClaudeClient extends EventEmitter {
         proc.stderr.setEncoding('utf8')
 
         let stderr = ''
+        let stdoutBuffer = ''
+        let emittedTextLen = 0
+        const seenToolUseIds = new Set<string>()
+
         proc.stdout.on('data', (chunk: string) => {
           if (!chunk) return
-          full += chunk
-          this.emitEvent({ type: 'assistantDelta', delta: chunk })
+          stdoutBuffer += chunk
+          const lines = stdoutBuffer.split('\n')
+          stdoutBuffer = lines.pop() ?? ''
+
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed) continue
+
+            let evt: any
+            try {
+              evt = JSON.parse(trimmed)
+            } catch {
+              continue
+            }
+
+            const eventType = evt.type ?? ''
+
+            if (eventType === 'assistant') {
+              const message = evt.message ?? evt
+              const contentBlocks: any[] = Array.isArray(message.content) ? message.content : []
+              for (const block of contentBlocks) {
+                if (block.type === 'text' && typeof block.text === 'string') {
+                  const fullText = block.text
+                  if (fullText.length > emittedTextLen) {
+                    const delta = fullText.slice(emittedTextLen)
+                    emittedTextLen = fullText.length
+                    assistantText += delta
+                    this.emitEvent({ type: 'assistantDelta', delta })
+                  }
+                } else if (block.type === 'tool_use') {
+                  const toolId = block.id ?? ''
+                  if (toolId && seenToolUseIds.has(toolId)) continue
+                  if (toolId) seenToolUseIds.add(toolId)
+                  const toolName = block.name ?? ''
+                  const toolInput = block.input ?? {}
+                  if (toolName) {
+                    const detail = toolInput.file_path ?? toolInput.command ?? toolInput.path ?? toolInput.query ?? ''
+                    this.emitEvent({ type: 'thinking', message: detail ? `${toolName}: ${detail}` : toolName })
+                  }
+                }
+              }
+            } else if (eventType === 'system') {
+              const sid = evt.session_id ?? evt.sessionId ?? ''
+              if (typeof sid === 'string' && sid) {
+                this.sessionId = sid
+                this.emitEvent({ type: 'status', status: 'ready', message: 'CLI loaded' })
+              }
+            } else if (eventType === 'result') {
+              const sid = evt.session_id ?? evt.sessionId ?? ''
+              if (typeof sid === 'string' && sid) {
+                this.sessionId = sid
+              }
+              const stats = evt.cost_usd != null || evt.duration_ms != null || evt.usage
+                ? { cost_usd: evt.cost_usd, duration_ms: evt.duration_ms, ...(evt.usage ?? {}) }
+                : evt.stats ?? null
+              if (stats) this.emitEvent({ type: 'usageUpdated', usage: stats })
+              const resultText = typeof evt.result === 'string' ? evt.result : ''
+              if (resultText && !assistantText) {
+                assistantText = resultText
+                this.emitEvent({ type: 'assistantDelta', delta: resultText })
+              }
+            }
+          }
         })
 
         proc.stderr.on('data', (chunk: string) => {
@@ -172,11 +246,32 @@ export class ClaudeClient extends EventEmitter {
         proc.on('error', (err) => reject(err))
         proc.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
           this.activeProc = null
-          if (code === 0) resolve(full)
+          if (stdoutBuffer.trim()) {
+            try {
+              const evt: any = JSON.parse(stdoutBuffer.trim())
+              if (evt.type === 'assistant') {
+                const blocks: any[] = Array.isArray(evt.message?.content ?? evt.content) ? (evt.message?.content ?? evt.content) : []
+                for (const block of blocks) {
+                  if (block.type === 'text' && typeof block.text === 'string' && block.text.length > emittedTextLen) {
+                    const delta = block.text.slice(emittedTextLen)
+                    emittedTextLen = block.text.length
+                    assistantText += delta
+                    this.emitEvent({ type: 'assistantDelta', delta })
+                  }
+                }
+              } else if (evt.type === 'result' && typeof evt.result === 'string' && evt.result && !assistantText) {
+                assistantText = evt.result
+                this.emitEvent({ type: 'assistantDelta', delta: evt.result })
+              }
+            } catch {
+              // ignore
+            }
+          }
+          if (code === 0) resolve(assistantText)
           else reject(new Error(this.formatClaudeExitError(code, signal, stderr)))
         })
       })
-      return full
+      return assistantText
     }
 
     try {
@@ -229,6 +324,7 @@ export class ClaudeClient extends EventEmitter {
   async close() {
     await this.interruptActiveTurn()
     this.history = []
+    this.sessionId = null
   }
 
   private buildPrompt(): string {

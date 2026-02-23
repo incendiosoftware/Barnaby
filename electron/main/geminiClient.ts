@@ -230,7 +230,7 @@ export class GeminiClient extends EventEmitter {
                 const params = evt.parameters ?? evt.args ?? evt.input ?? {}
                 const detail = params.file_path ?? params.command ?? params.dir_path ??
                   params.pattern ?? params.query ?? params.path ?? params.url ?? ''
-                const desc = `Using ${toolName}${detail ? `: ${detail}` : ''}`
+                const desc = detail ? `${toolName}: ${detail}` : toolName
                 this.emitEvent({ type: 'thinking', message: desc })
                 break
               }

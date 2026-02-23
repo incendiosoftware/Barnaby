@@ -2378,9 +2378,14 @@ ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: st
   const interactionMode = typeof payload?.interactionMode === 'string' ? payload.interactionMode : undefined
   const gitStatus = await getGitStatusPromptForAgent(agentWindowId)
   const sendOptions = (interactionMode || gitStatus) ? { interactionMode, gitStatus } : undefined
-  if (priorMessages.length > 0 && client instanceof CodexAppServerClient) {
-    const prefix = formatPriorMessagesForContext(priorMessages.slice(-24))
-    if (prefix) text = prefix + text
+  if (client instanceof CodexAppServerClient) {
+    if (priorMessages.length > 0) {
+      const prefix = formatPriorMessagesForContext(priorMessages.slice(-24))
+      if (prefix) text = prefix + text
+    }
+    if (gitStatus) {
+      text = `[Git status]\n${gitStatus.trim()}\n\n${text}`
+    }
   }
   if (imagePaths.length > 0) {
     const withImages = client as { sendUserMessageWithImages?: (t: string, paths: string[], opts?: { interactionMode?: string; gitStatus?: string }) => Promise<void> }

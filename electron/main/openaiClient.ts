@@ -163,7 +163,6 @@ export class OpenAIClient extends EventEmitter {
     try {
       const textOut = await this.runAgentLoop(messages, controller)
       this.history.push({ role: 'assistant', text: textOut })
-      this.emitEvent({ type: 'assistantDelta', delta: textOut })
       this.emitEvent({ type: 'assistantCompleted' })
       this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })
     } catch (err) {
@@ -190,22 +189,15 @@ export class OpenAIClient extends EventEmitter {
     let lastAssistantText = ''
 
     for (let round = 0; round < AGENT_MAX_TOOL_ROUNDS; round++) {
-      const data = (await this.fetchCompletionWithRetries(messages, controller)) as {
-        choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }>; tool_calls?: OpenAIToolCall[] } }>
-        usage?: unknown
-      }
-      if (data?.usage) this.emitEvent({ type: 'usageUpdated', usage: data.usage })
+      const result = await this.fetchStreamedCompletion(messages, controller)
 
-      const message = data?.choices?.[0]?.message
-      const assistantContent = this.extractAssistantText(message?.content)
-      if (assistantContent) lastAssistantText = assistantContent
-      const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : []
+      if (result.assistantText) lastAssistantText = result.assistantText
 
-      if (toolCalls.length === 0) {
-        return assistantContent || 'No response content returned by OpenAI.'
+      if (result.toolCalls.length === 0) {
+        return result.assistantText || 'No response content returned by OpenAI.'
       }
 
-      const normalizedToolCalls: OpenAIToolCall[] = toolCalls.map((call, i) => ({
+      const normalizedToolCalls: OpenAIToolCall[] = result.toolCalls.map((call, i) => ({
         ...call,
         id: call.id || `tool_${round}_${i}`,
         type: call.type || 'function',
@@ -213,7 +205,7 @@ export class OpenAIClient extends EventEmitter {
 
       const assistantMessage: OpenAIMessage = {
         role: 'assistant',
-        content: assistantContent || null,
+        content: result.assistantText || null,
         tool_calls: normalizedToolCalls,
       }
       messages.push(assistantMessage)
@@ -226,8 +218,8 @@ export class OpenAIClient extends EventEmitter {
         this.emitEvent({
           type: 'thinking',
           message: argsPreview
-            ? `Using ${toolName}(${argsPreview})`
-            : `Using ${toolName}`,
+            ? `${toolName}: ${argsPreview}`
+            : toolName,
         })
         const toolResult = await this.toolRunner.executeTool(toolName, toolCall.function?.arguments)
         messages.push({
@@ -241,10 +233,10 @@ export class OpenAIClient extends EventEmitter {
     return lastAssistantText || 'Stopped after too many tool steps without a final answer.'
   }
 
-  private async fetchCompletionWithRetries(
+  private async fetchStreamedCompletion(
     messages: OpenAIMessage[],
     controller: AbortController,
-  ): Promise<unknown> {
+  ): Promise<{ assistantText: string; toolCalls: OpenAIToolCall[] }> {
     const maxRateLimitRetries = 3
     for (let attempt = 0; attempt <= maxRateLimitRetries; attempt++) {
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
@@ -259,13 +251,13 @@ export class OpenAIClient extends EventEmitter {
           tools: this.toolRunner.getToolDefinitions(),
           tool_choice: 'auto',
           temperature: 0.1,
-          stream: false,
+          stream: true,
         }),
         signal: controller.signal,
       })
 
       if (response.ok) {
-        return response.json()
+        return this.consumeSSEStream(response, controller)
       }
 
       const retryAfterHeader = response.headers.get('retry-after')
@@ -286,6 +278,85 @@ export class OpenAIClient extends EventEmitter {
       throw new Error(`OpenAI request failed (${response.status}).${hint}`)
     }
     throw new Error('OpenAI request failed after retries.')
+  }
+
+  private async consumeSSEStream(
+    response: Response,
+    controller: AbortController,
+  ): Promise<{ assistantText: string; toolCalls: OpenAIToolCall[] }> {
+    let assistantText = ''
+    const toolCallAccumulators: Map<number, { id: string; type: string; name: string; arguments: string }> = new Map()
+
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('No response body for streaming.')
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      while (true) {
+        if (controller.signal.aborted) break
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed || trimmed === 'data: [DONE]') continue
+          if (!trimmed.startsWith('data: ')) continue
+
+          let chunk: any
+          try {
+            chunk = JSON.parse(trimmed.slice(6))
+          } catch {
+            continue
+          }
+
+          if (chunk.usage) this.emitEvent({ type: 'usageUpdated', usage: chunk.usage })
+
+          const delta = chunk.choices?.[0]?.delta
+          if (!delta) continue
+
+          if (delta.content) {
+            assistantText += delta.content
+            this.emitEvent({ type: 'assistantDelta', delta: delta.content })
+          }
+
+          if (Array.isArray(delta.tool_calls)) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index ?? 0
+              if (!toolCallAccumulators.has(idx)) {
+                toolCallAccumulators.set(idx, {
+                  id: tc.id ?? '',
+                  type: tc.type ?? 'function',
+                  name: tc.function?.name ?? '',
+                  arguments: '',
+                })
+              }
+              const acc = toolCallAccumulators.get(idx)!
+              if (tc.id) acc.id = tc.id
+              if (tc.function?.name) acc.name += tc.function.name
+              if (tc.function?.arguments) acc.arguments += tc.function.arguments
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+
+    const toolCalls: OpenAIToolCall[] = []
+    for (const [, acc] of [...toolCallAccumulators.entries()].sort((a, b) => a[0] - b[0])) {
+      toolCalls.push({
+        id: acc.id,
+        type: acc.type,
+        function: { name: acc.name, arguments: acc.arguments },
+      })
+    }
+
+    return { assistantText, toolCalls }
   }
 
   private getRetryDelayMs(status: number, retryAfterHeader: string | null, body: string, attempt: number): number {
@@ -329,14 +400,6 @@ export class OpenAIClient extends EventEmitter {
       }
       signal.addEventListener('abort', onAbort)
     })
-  }
-
-  private extractAssistantText(content: string | Array<{ type?: string; text?: string }> | undefined): string {
-    if (typeof content === 'string') return content
-    if (!Array.isArray(content)) return ''
-    return content
-      .map((item) => (typeof item?.text === 'string' ? item.text : ''))
-      .join('')
   }
 
   private safeToolArgsPreview(rawArgs: string | undefined): string {

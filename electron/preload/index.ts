@@ -370,6 +370,16 @@ const api = {
     ipcRenderer.on('barnaby:plugin-host:recovery', listener)
     return () => ipcRenderer.off('barnaby:plugin-host:recovery', listener)
   },
+  getLoadedPlugins() {
+    return ipcRenderer.invoke('agentorchestrator:getLoadedPlugins') as Promise<
+      Array<{ pluginId: string; displayName: string; version: string; active: boolean }>
+    >
+  },
+  onPluginsLoaded(cb: () => void) {
+    const listener = () => cb()
+    ipcRenderer.on('barnaby:plugin-host:plugins-loaded', listener)
+    return () => ipcRenderer.off('barnaby:plugin-host:plugins-loaded', listener)
+  },
   zoomIn() {
     const level = webFrame.getZoomLevel()
     webFrame.setZoomLevel(level + 1)

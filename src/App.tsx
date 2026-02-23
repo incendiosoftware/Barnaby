@@ -2252,6 +2252,7 @@ export default function App() {
     enabled: true,
   })
   const [dockTab, setDockTab] = useState<'orchestrator' | 'explorer' | 'git' | 'settings'>('explorer')
+  const [loadedPlugins, setLoadedPlugins] = useState<Array<{ pluginId: string; displayName: string; version: string; active: boolean }> | null>(null)
   const [workspaceDockSide, setWorkspaceDockSide] = useState<WorkspaceDockSide>(() => getInitialWorkspaceDockSide())
   const [workspaceTree, setWorkspaceTree] = useState<WorkspaceTreeNode[]>([])
   const [workspaceTreeLoading, setWorkspaceTreeLoading] = useState(false)
@@ -4408,6 +4409,19 @@ export default function App() {
     }
   }, [workspaceRoot])
 
+  useEffect(() => {
+    const fetchPlugins = () => {
+      api.getLoadedPlugins?.().then((list) => {
+        setLoadedPlugins(list ?? [])
+      }).catch(() => setLoadedPlugins([]))
+    }
+    if (dockTab === 'orchestrator') {
+      fetchPlugins()
+    }
+    const unsub = api.onPluginsLoaded?.(fetchPlugins)
+    return () => { unsub?.() }
+  }, [dockTab, api])
+
   function estimateTokenCountFromText(text: string) {
     const trimmed = text.trim()
     if (!trimmed) return 0
@@ -5620,14 +5634,11 @@ export default function App() {
               }`}
               onClick={() => setDockTab('orchestrator')}
             >
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <rect x="2.5" y="2.5" width="11" height="11" rx="1.8" stroke="currentColor" strokeWidth="1.1" />
-                <circle cx="6" cy="6" r="1.2" fill="currentColor" />
-                <circle cx="10" cy="6" r="1.2" fill="currentColor" />
-                <circle cx="8" cy="10" r="1.2" fill="currentColor" />
-                <path d="M7 6H9" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-                <path d="M6.7 6.8L7.6 9.2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-                <path d="M9.3 6.8L8.4 9.2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="2.5" y="8" width="19" height="11.5" rx="5.75" stroke="currentColor" strokeWidth="1.8" />
+                <path d="M5.5 8V4.5L8 8" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                <circle cx="9.2" cy="13.7" r="1.5" fill="currentColor" />
+                <circle cx="14.8" cy="13.7" r="1.5" fill="currentColor" />
               </svg>
             </button>
             <button
@@ -7031,7 +7042,7 @@ export default function App() {
               </>
             ) : gitOperationSuccess ? (
               <>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0" aria-hidden>
+                <svg width="18" height="18" viewBox="0 0 14 14" fill="none" className="shrink-0" aria-hidden>
                   <path d="M3 7l3 3 5-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
                 <span>
@@ -7139,7 +7150,7 @@ export default function App() {
                   title="Browse for workspace folder"
                   aria-label="Browse for workspace folder"
                 >
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                     <path d="M2.5 4.5H6.2L7.4 5.7H13.5V11.8C13.5 12.4 13.1 12.8 12.5 12.8H3.5C2.9 12.8 2.5 12.4 2.5 11.8V4.5Z" stroke="currentColor" strokeWidth="1.1" />
                     <path d="M2.5 6.2H13.5" stroke="currentColor" strokeWidth="1.1" />
                   </svg>
@@ -7278,6 +7289,8 @@ export default function App() {
   }
 
   function renderAgentOrchestratorPane() {
+    const orchestratorPlugin = loadedPlugins?.find((p) => p.pluginId === 'orchestrator')
+    const pluginInstalled = Boolean(orchestratorPlugin?.active)
     return (
       <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
         <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
@@ -7287,13 +7300,21 @@ export default function App() {
           </p>
           <div className="mt-2.5 flex flex-col gap-2">
             <div className="flex items-center gap-1.5">
-              <span className="inline-block w-2 h-2 rounded-full bg-neutral-300 dark:bg-neutral-600" />
-              <span className="text-neutral-500 dark:text-neutral-400">Plugin: not installed</span>
+              <span
+                className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+                  pluginInstalled ? 'bg-green-500 dark:bg-green-600' : 'bg-neutral-300 dark:bg-neutral-600'
+                }`}
+              />
+              <span className="text-neutral-500 dark:text-neutral-400">
+                {pluginInstalled
+                  ? `Plugin: ${orchestratorPlugin?.displayName ?? 'Orchestrator'} v${orchestratorPlugin?.version ?? '?'}`
+                  : 'Plugin: not installed'}
+              </span>
             </div>
             <button
               type="button"
               className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-[11px] text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-              onClick={() => window.open('https://barnaby.build/orchestrator', '_blank', 'noopener,noreferrer')}
+              onClick={() => window.open('https://barnaby.build/orchestrator.html', '_blank', 'noopener,noreferrer')}
             >
               Learn more
             </button>
@@ -7540,7 +7561,7 @@ export default function App() {
                           title="Delete conversation"
                           aria-label="Delete conversation"
                         >
-                          <svg width="12" height="12" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                          <svg width="14" height="14" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                             <path d="M2 2L8 8M8 2L2 8" />
                           </svg>
                         </button>
@@ -7946,7 +7967,7 @@ export default function App() {
                   }`}
                   onClick={() => setAppSettingsView(view)}
                 >
-                  {view === 'connectivity' && 'CLI Connectivity'}
+                  {view === 'connectivity' && 'Darryl'}
                   {view === 'models' && 'Models'}
                   {view === 'preferences' && 'Preferences'}
                   {view === 'agents' && 'Agents'}
@@ -9504,7 +9525,7 @@ export default function App() {
                   title="Browse for workspace folder"
                   aria-label="Browse for workspace folder"
                 >
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                     <path d="M2.5 4.5H6.2L7.4 5.7H13.5V11.8C13.5 12.4 13.1 12.8 12.5 12.8H3.5C2.9 12.8 2.5 12.4 2.5 11.8V4.5Z" stroke="currentColor" strokeWidth="1.1" />
                     <path d="M2.5 6.2H13.5" stroke="currentColor" strokeWidth="1.1" />
                   </svg>
@@ -9761,7 +9782,7 @@ export default function App() {
           >
             {panels.length > 1 && (
               <span className="shrink-0 flex text-neutral-400 dark:text-neutral-500 touch-none" aria-hidden="true">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                <svg width="14" height="14" viewBox="0 0 12 12" fill="currentColor">
                   <circle cx="4" cy="3" r="1" /><circle cx="8" cy="3" r="1" />
                   <circle cx="4" cy="6" r="1" /><circle cx="8" cy="6" r="1" />
                   <circle cx="4" cy="9" r="1" /><circle cx="8" cy="9" r="1" />
@@ -9782,7 +9803,7 @@ export default function App() {
               title={panels.length >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'Split panel'}
               aria-label="Split panel"
             >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <svg width="16" height="16" viewBox="0 0 14 14" fill="none">
                 <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
               </svg>
             </button>
@@ -10344,7 +10365,7 @@ export default function App() {
                         aria-label="Inject now"
                         onClick={() => injectQueuedMessage(w.id, i)}
                       >
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <svg width="14" height="14" viewBox="0 0 12 12" fill="none">
                           <path d="M6 10V2M2.5 5.5L6 2l3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                       </button>
@@ -10469,8 +10490,8 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
             >
               {isBusy && !hasInput ? (
                 <svg
-                  width="14"
-                  height="14"
+                  width="18"
+                  height="18"
                   viewBox="0 0 20 20"
                   fill="none"
                   className="animate-spin motion-reduce:animate-none"
@@ -10479,11 +10500,11 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                   <path d="M10 3.5a6.5 6.5 0 0 1 6.5 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                 </svg>
               ) : !hasInput && isFinalComplete ? (
-                <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
                   <path d="M5.2 10.2L8.5 13.5L14.8 7.2" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               ) : (
-                <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
                   <path d="M10 4V13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                   <path d="M6.5 7.5L10 4l3.5 3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                   <path d="M4 16h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />

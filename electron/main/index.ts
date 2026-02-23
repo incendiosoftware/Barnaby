@@ -22,7 +22,7 @@ import { GeminiClient, type GeminiClientEvent } from './geminiClient'
 import { ClaudeClient, type ClaudeClientEvent } from './claudeClient'
 import { OpenRouterClient, type OpenRouterClientEvent } from './openRouterClient'
 import { OpenAIClient, type OpenAIClientEvent } from './openaiClient'
-import { initializePluginHost, shutdownPluginHost, setPluginHostWindow, setWorkspaceRootGetter, notifyPluginPanelEvent, notifyPluginPanelTurnComplete } from './pluginHost'
+import { initializePluginHost, shutdownPluginHost, setPluginHostWindow, setWorkspaceRootGetter, notifyPluginPanelEvent, notifyPluginPanelTurnComplete, getLoadedPlugins } from './pluginHost'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
 const WORKSPACE_LOCK_DIRNAME = '.barnaby'
@@ -2192,9 +2192,13 @@ app.whenReady().then(async () => {
       for (const [root] of ownedWorkspaceLocks) return root
       return ''
     })
-    initializePluginHost(app.getAppPath()).catch((e) => {
-      console.error('[pluginHost] Initialization failed:', e)
-    })
+    initializePluginHost(app.getAppPath())
+      .then(() => {
+        win?.webContents.send('barnaby:plugin-host:plugins-loaded')
+      })
+      .catch((e) => {
+        console.error('[pluginHost] Initialization failed:', e)
+      })
   }
 })
 
@@ -2350,6 +2354,16 @@ ipcMain.handle('agentorchestrator:rendererReady', async () => {
 
 ipcMain.handle('agentorchestrator:getDiagnosticsInfo', async () => {
   return getDiagnosticsInfo()
+})
+
+ipcMain.handle('agentorchestrator:getLoadedPlugins', async () => {
+  const plugins = getLoadedPlugins()
+  return Array.from(plugins.entries()).map(([id, entry]) => ({
+    pluginId: id,
+    displayName: entry.plugin.displayName,
+    version: entry.plugin.version,
+    active: entry.active,
+  }))
 })
 
 ipcMain.handle('agentorchestrator:openRuntimeLog', async () => {

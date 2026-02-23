@@ -240,7 +240,7 @@ function discoverPlugins(appRoot: string): string[] {
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true })
       for (const entry of entries) {
-        if (!entry.isDirectory()) continue
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
         const pkgJsonPath = path.join(dir, entry.name, 'package.json')
         if (!fs.existsSync(pkgJsonPath)) continue
         try {
@@ -262,7 +262,7 @@ function discoverPlugins(appRoot: string): string[] {
     try {
       const entries = fs.readdirSync(homePluginDir, { withFileTypes: true })
       for (const entry of entries) {
-        if (!entry.isDirectory()) continue
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
         const pkgJsonPath = path.join(homePluginDir, entry.name, 'package.json')
         if (!fs.existsSync(pkgJsonPath)) continue
         try {
@@ -283,7 +283,9 @@ function discoverPlugins(appRoot: string): string[] {
 }
 
 export async function initializePluginHost(appRoot: string): Promise<void> {
+  console.log(`[pluginHost] Initializing plugin host (appRoot: ${appRoot})`)
   const pluginPaths = discoverPlugins(appRoot)
+  console.log(`[pluginHost] Discovered ${pluginPaths.length} plugin(s): ${pluginPaths.join(', ') || '(none)'}`)
   const hostApi = buildHostApi()
 
   for (const pluginPath of pluginPaths) {

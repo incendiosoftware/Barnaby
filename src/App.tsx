@@ -28,542 +28,145 @@ import {
 import { EmbeddedTerminal } from './components/Terminal'
 import { CodeMirrorEditor } from './components/CodeMirrorEditor'
 import { registerPluginHostCallbacks, unregisterPluginHostCallbacks } from './pluginHostRenderer'
-
-type Theme = 'light' | 'dark'
-
-type StandaloneTheme = {
-  id: string
-  name: string
-  mode: Theme
-  accent500: string
-  accent600: string
-  accent700: string
-  accentText: string
-  accentSoft: string
-  accentSoftDark: string
-  dark950: string
-  dark900: string
-  debugNotes: string
-  activityUpdates: string
-  reasoningUpdates: string
-  operationTrace: string
-  thinkingProgress: string
-}
-type ChatRole = 'user' | 'assistant' | 'system'
-type MessageFormat = 'text' | 'markdown'
-type PastedImageAttachment = { id: string; path: string; label: string; mimeType?: string }
-type ChatMessage = {
-  id: string
-  role: ChatRole
-  content: string
-  format?: MessageFormat
-  attachments?: PastedImageAttachment[]
-  createdAt?: number
-}
-type PermissionMode = 'verify-first' | 'proceed-always'
-type SandboxMode = 'read-only' | 'workspace-write'
-type AgentInteractionMode = 'agent' | 'plan' | 'debug' | 'ask'
-
-type LayoutMode = 'vertical' | 'horizontal' | 'grid'
-type WorkspaceDockSide = 'left' | 'right'
-type CodeWindowTab = 'code' | 'settings'
-
-type AgentPanelState = {
-  id: string
-  historyId: string
-  title: string
-  cwd: string
-  model: string
-  interactionMode: AgentInteractionMode
-  permissionMode: PermissionMode
-  sandbox: SandboxMode
-  status: string
-  connected: boolean
-  streaming: boolean
-  messages: ChatMessage[]
-  attachments: PastedImageAttachment[]
-  input: string
-  pendingInputs: string[]
-  fontScale: number
-  usage?: {
-    kind?: string
-    primary?: { usedPercent?: number; windowMinutes?: number; resetsAt?: number } | null
-    secondary?: { usedPercent?: number; windowMinutes?: number; resetsAt?: number } | null
-  }
-}
-
-type WorkspaceSettings = {
-  path: string
-  defaultModel: string
-  permissionMode: PermissionMode
-  sandbox: SandboxMode
-  allowedCommandPrefixes: string[]
-  allowedAutoReadPrefixes: string[]
-  allowedAutoWritePrefixes: string[]
-  deniedAutoReadPrefixes: string[]
-  deniedAutoWritePrefixes: string[]
-}
-
-type WorkspaceSettingsTextDraft = {
-  allowedCommandPrefixes: string
-  allowedAutoReadPrefixes: string
-  allowedAutoWritePrefixes: string
-  deniedAutoReadPrefixes: string
-  deniedAutoWritePrefixes: string
-}
-
-type WorkspaceTreeNode = {
-  name: string
-  relativePath: string
-  type: 'file' | 'directory'
-  children?: WorkspaceTreeNode[]
-}
-
-type GitStatusEntry = {
-  relativePath: string
-  indexStatus: string
-  workingTreeStatus: string
-  staged: boolean
-  unstaged: boolean
-  untracked: boolean
-  renamedFrom?: string
-}
-
-type GitStatusState = {
-  ok: boolean
-  branch: string
-  ahead: number
-  behind: number
-  stagedCount: number
-  unstagedCount: number
-  untrackedCount: number
-  clean: boolean
-  entries: GitStatusEntry[]
-  checkedAt: number
-  error?: string
-}
-
-type GitOperation = 'commit' | 'push' | 'deploy' | 'build' | 'release'
-
-type EditorPanelState = {
-  id: string
-  workspaceRoot: string
-  relativePath: string
-  title: string
-  fontScale: number
-  content: string
-  size: number
-  loading: boolean
-  saving: boolean
-  dirty: boolean
-  binary: boolean
-  error?: string
-  savedAt?: number
-  editMode?: boolean
-  diagnosticsTarget?: 'chatHistory' | 'appState' | 'runtimeLog'
-  diagnosticsReadOnly?: boolean
-}
-
-type ExplorerPrefs = {
-  showHiddenFiles: boolean
-  showNodeModules: boolean
-}
-
-type ChatHistoryEntry = {
-  id: string
-  title: string
-  savedAt: number
-  workspaceRoot: string
-  model: string
-  permissionMode: PermissionMode
-  sandbox: SandboxMode
-  fontScale: number
-  messages: ChatMessage[]
-}
-
-type DiagnosticsMessageColors = {
-  debugNotes: string
-  activityUpdates: string
-  reasoningUpdates: string
-  operationTrace: string
-  thinkingProgress: string
-}
-
-type ApplicationSettings = {
-  restoreSessionOnStartup: boolean
-  themeId: string
-  responseStyle: 'concise' | 'standard' | 'detailed'
-  showDebugNotesInTimeline: boolean
-  verboseDiagnostics: boolean
-  showResponseDurationAfterPrompt: boolean
-  editorWordWrap: boolean
-}
-
-type OrchestratorSettings = {
-  orchestratorModel: string
-  workerProvider: string
-  workerModel: string
-  maxParallelPanels: number
-  maxTaskAttempts: number
-}
-
-
-type PersistedEditorPanelState = {
-  id?: unknown
-  workspaceRoot?: unknown
-  relativePath?: unknown
-  title?: unknown
-  fontScale?: unknown
-  content?: unknown
-  size?: unknown
-  dirty?: unknown
-  binary?: unknown
-  error?: unknown
-  savedAt?: unknown
-  editMode?: unknown
-}
-
-type PersistedAgentPanelState = {
-  id?: unknown
-  historyId?: unknown
-  title?: unknown
-  cwd?: unknown
-  model?: unknown
-  interactionMode?: unknown
-  permissionMode?: unknown
-  sandbox?: unknown
-  status?: unknown
-  messages?: unknown
-  attachments?: unknown
-  input?: unknown
-  pendingInputs?: unknown
-  fontScale?: unknown
-}
-
-type PersistedAppState = {
-  workspaceRoot?: unknown
-  workspaceList?: unknown
-  workspaceSnapshotsByRoot?: unknown
-  layoutMode?: unknown
-  showWorkspaceWindow?: unknown
-  showCodeWindow?: unknown
-  codeWindowTab?: unknown
-  dockTab?: unknown
-  workspaceDockSide?: unknown
-  activePanelId?: unknown
-  focusedEditorId?: unknown
-  selectedWorkspaceFile?: unknown
-  expandedDirectories?: unknown
-  panels?: unknown
-  editorPanels?: unknown
-  applicationSettings?: unknown
-  themeOverrides?: unknown
-}
-
-type ParsedAppState = {
-  workspaceRoot: string | null
-  workspaceList: string[] | null
-  workspaceSnapshotsByRoot: Record<string, WorkspaceUiSnapshot>
-  panels: AgentPanelState[]
-  editorPanels: EditorPanelState[]
-  dockTab: 'orchestrator' | 'explorer' | 'git' | 'settings' | null
-  layoutMode: LayoutMode | null
-  workspaceDockSide: WorkspaceDockSide | null
-  codeWindowTab: CodeWindowTab | null
-  selectedWorkspaceFile: string | null | undefined
-  activePanelId: string | null
-  focusedEditorId: string | null | undefined
-  showWorkspaceWindow: boolean | undefined
-  showCodeWindow: boolean | undefined
-  expandedDirectories: Record<string, boolean> | undefined
-  applicationSettings: ApplicationSettings | undefined
-  themeOverrides: ThemeOverrides | undefined
-}
-
-type WorkspaceUiSnapshot = {
-  layoutMode: LayoutMode
-  showWorkspaceWindow: boolean
-  showCodeWindow: boolean
-  codeWindowTab: CodeWindowTab
-  dockTab: 'orchestrator' | 'explorer' | 'git' | 'settings'
-  workspaceDockSide: WorkspaceDockSide
-  panels: AgentPanelState[]
-  editorPanels: EditorPanelState[]
-  activePanelId: string | null
-  focusedEditorId: string | null
-  selectedWorkspaceFile: string | null
-  expandedDirectories: Record<string, boolean>
-}
-
-type PanelActivityState = {
-  lastEventAt: number
-  lastEventLabel: string
-  totalEvents: number
-  recent?: ActivityFeedItem[]
-}
-
-type PanelDebugEntry = {
-  id: string
-  at: number
-  stage: string
-  detail: string
-}
-
-type ActivityKind = 'approval' | 'command' | 'reasoning' | 'event' | 'operation'
-type ActivityFeedItem = {
-  id: string
-  label: string
-  detail?: string
-  kind: ActivityKind
-  at: number
-  count: number
-}
-
-const DEFAULT_MODEL = 'gpt-5.3-codex'
-const MODEL_BANNER_PREFIX = 'Model: '
-const AUTO_CONTINUE_PROMPT = 'Please continue from where you left off. Complete the task fully.'
-const STARTUP_LOCKED_WORKSPACE_PROMPT =
-  'The workspace being opened is locked by another Barnaby. Select another workspace or try again.'
-const ALL_WORKSPACES_LOCKED_PROMPT =
-  'No workspace is available right now. Another Barnaby instance is already using each saved workspace.'
+import type {
+  ActivityFeedItem,
+  ActivityKind,
+  AgentInteractionMode,
+  AgentPanelState,
+  AppSettingsView,
+  ApplicationSettings,
+  ChatHistoryEntry,
+  ChatMessage,
+  ChatRole,
+  CodeWindowTab,
+  ConnectivityMode,
+  ConnectivityProvider,
+  CustomProviderConfig,
+  DiagnosticsMessageColors,
+  EditorPanelState,
+  ExplorerPrefs,
+  GitOperation,
+  GitStatusEntry,
+  GitStatusState,
+  LayoutMode,
+  MessageFormat,
+  ModelCatalogRefreshStatus,
+  ModelConfig,
+  ModelInterface,
+  ModelProvider,
+  OrchestratorSettings,
+  PanelActivityState,
+  PanelDebugEntry,
+  ParsedAppState,
+  PastedImageAttachment,
+  PermissionMode,
+  PersistedAgentPanelState,
+  PersistedAppState,
+  PersistedEditorPanelState,
+  ProviderAuthStatus,
+  ProviderConfig,
+  ProviderConfigCli,
+  ProviderRegistry,
+  SandboxMode,
+  StandaloneTheme,
+  Theme,
+  ThemeEditableField,
+  ThemeOverrideValues,
+  ThemeOverrides,
+  WorkspaceDockSide,
+  WorkspaceSettings,
+  WorkspaceSettingsTextDraft,
+  WorkspaceApplyFailure,
+  WorkspaceTreeNode,
+  WorkspaceUiSnapshot,
+  AvailableCatalogModels,
+} from './types'
+import {
+  ALL_WORKSPACES_LOCKED_PROMPT,
+  APP_STATE_AUTOSAVE_MS,
+  APP_SETTINGS_STORAGE_KEY,
+  APP_SETTINGS_VIEWS,
+  AUTO_CONTINUE_PROMPT,
+  CODEX_API_MODELS,
+  CODE_WINDOW_TOOLBAR_BUTTON,
+  CODE_WINDOW_TOOLBAR_BUTTON_SM,
+  CHAT_HISTORY_STORAGE_KEY,
+  COLLAPSIBLE_CODE_MIN_LINES,
+  CONNECT_TIMEOUT_MS,
+  CONTEXT_MAX_OUTPUT_RESERVE_TOKENS,
+  CONTEXT_MIN_OUTPUT_RESERVE_TOKENS,
+  CONTEXT_OUTPUT_RESERVE_RATIO,
+  CONNECTIVITY_PROVIDERS,
+  DEFAULT_BUILTIN_PROVIDER_CONFIGS,
+  DEFAULT_DIAGNOSTICS_MESSAGE_COLORS,
+  DEFAULT_DIAGNOSTICS_VISIBILITY,
+  DEFAULT_EXPLORER_PREFS,
+  DEFAULT_GPT_CONTEXT_TOKENS,
+  DEFAULT_MODEL,
+  EXPLORER_PREFS_STORAGE_KEY,
+  DEFAULT_MODEL_INTERFACES,
+  DEFAULT_THEME_ID,
+  DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES,
+  DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES,
+  DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES,
+  DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES,
+  DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES,
+  FONT_SCALE_STEP,
+  INPUT_MAX_HEIGHT_PX,
+  INTERACTION_MODE_META,
+  LAST_USER_RECALL_EXPIRY_MS,
+  LEGACY_PRESET_TO_THEME_ID,
+  MAX_AUTO_CONTINUE,
+  MAX_EDITOR_FILE_SIZE_BYTES,
+  MAX_EDITOR_PANELS,
+  MAX_FONT_SCALE,
+  MAX_CHAT_HISTORY_ENTRIES,
+  MAX_PANELS,
+  MIN_FONT_SCALE,
+  MODAL_BACKDROP_CLASS,
+  MODAL_CARD_CLASS,
+  MODEL_CONFIG_STORAGE_KEY,
+  ONGOING_WORK_LABELS,
+  PANEL_COMPLETION_NOTICE_MS,
+  PANEL_INTERACTION_MODES,
+  ORCHESTRATOR_SETTINGS_STORAGE_KEY,
+  PROVIDER_REGISTRY_STORAGE_KEY,
+  SETUP_WIZARD_DONE_STORAGE_KEY,
+  STARTUP_LOCKED_WORKSPACE_PROMPT,
+  STATUS_SYMBOL_ICON_CLASS,
+  THEME_EDITABLE_FIELDS,
+  THEME_ID_STORAGE_KEY,
+  THEME_OVERRIDES_STORAGE_KEY,
+  THINKING_MAX_CHARS,
+  TOKEN_ESTIMATE_CHARS_PER_TOKEN,
+  TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS,
+  TOKEN_ESTIMATE_MESSAGE_OVERHEAD,
+  TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS,
+  TOKEN_ESTIMATE_WORDS_MULTIPLIER,
+  STALL_WATCHDOG_MS,
+  TURN_START_TIMEOUT_MS,
+  UI_BUTTON_PRIMARY_CLASS,
+  UI_BUTTON_SECONDARY_CLASS,
+  UI_CLOSE_ICON_BUTTON_CLASS,
+  UI_ICON_BUTTON_CLASS,
+  UI_INPUT_CLASS,
+  UI_SELECT_CLASS,
+  UI_TOOLBAR_ICON_BUTTON_CLASS,
+  WORKSPACE_DOCK_SIDE_STORAGE_KEY,
+  WORKSPACE_LIST_STORAGE_KEY,
+  WORKSPACE_SETTINGS_STORAGE_KEY,
+  WORKSPACE_STORAGE_KEY,
+  MODEL_BANNER_PREFIX,
+  API_CONFIG_BY_PROVIDER,
+  PROVIDER_SUBSCRIPTION_URLS,
+  PROVIDERS_WITH_DUAL_MODE,
+  PROVIDERS_CLI_ONLY,
+  PROVIDERS_API_ONLY,
+} from './constants'
+import { THEMES } from './constants/themes'
 
 function isLockedWorkspacePrompt(prompt: string | null): boolean {
   return prompt === STARTUP_LOCKED_WORKSPACE_PROMPT || prompt === ALL_WORKSPACES_LOCKED_PROMPT
-}
-
-type ModelProvider = 'codex' | 'claude' | 'gemini' | 'openrouter'
-type ConnectivityProvider = 'codex' | 'claude' | 'gemini' | 'openrouter'
-
-type ModelInterface = {
-  id: string
-  displayName: string
-  provider: ModelProvider
-  enabled: boolean
-  config?: Record<string, string>
-}
-
-type ModelConfig = {
-  interfaces: ModelInterface[]
-}
-
-type AvailableCatalogModels = {
-  codex: { id: string; displayName: string }[]
-  claude: { id: string; displayName: string }[]
-  gemini: { id: string; displayName: string }[]
-  openrouter: { id: string; displayName: string }[]
-}
-
-type AppSettingsView = 'connectivity' | 'models' | 'preferences' | 'agents' | 'orchestrator' | 'mcp-servers' | 'diagnostics'
-
-type ModelCatalogRefreshStatus = {
-  kind: 'success' | 'error'
-  message: string
-}
-
-type ProviderConfigCli = {
-  id: string
-  displayName: string
-  enabled: boolean
-  type: 'cli'
-  cliCommand: string
-  authCheckCommand?: string
-  loginCommand?: string
-  upgradeCommand?: string
-  upgradePackage?: string
-  cliPath?: string
-  isBuiltIn?: boolean
-}
-
-type ProviderConfigApi = {
-  id: string
-  displayName: string
-  enabled: boolean
-  type: 'api'
-  apiBaseUrl: string
-  loginUrl?: string
-  isBuiltIn?: boolean
-}
-
-type ProviderConfig = ProviderConfigCli | ProviderConfigApi
-
-type CustomProviderConfig = Omit<ProviderConfigCli, 'isBuiltIn'>
-
-type ConnectivityMode = 'cli' | 'api'
-
-type ProviderRegistry = {
-  overrides: Record<
-    string,
-    {
-      displayName?: string
-      enabled?: boolean
-      cliPath?: string
-      apiBaseUrl?: string
-      primary?: ConnectivityMode
-      fallbackEnabled?: boolean
-      fallback?: ConnectivityMode
-    }
-  >
-  customProviders: CustomProviderConfig[]
-}
-
-const PROVIDERS_WITH_DUAL_MODE: ConnectivityProvider[] = ['gemini', 'claude', 'codex']
-const PROVIDERS_CLI_ONLY: ConnectivityProvider[] = []
-const PROVIDERS_API_ONLY: ConnectivityProvider[] = ['openrouter']
-
-const API_CONFIG_BY_PROVIDER: Record<string, { apiBaseUrl: string; loginUrl: string }> = {
-  codex: { apiBaseUrl: 'https://api.openai.com/v1', loginUrl: 'https://platform.openai.com/api-keys' },
-  claude: { apiBaseUrl: 'https://api.anthropic.com/v1', loginUrl: 'https://console.anthropic.com/' },
-  gemini: { apiBaseUrl: 'https://generativelanguage.googleapis.com/v1beta', loginUrl: 'https://aistudio.google.com/' },
-}
-
-/** URLs for viewing subscription limits and purchasing credits */
-const PROVIDER_SUBSCRIPTION_URLS: Record<string, string> = {
-  codex: 'https://platform.openai.com/account/usage',
-  claude: 'https://claude.ai',
-  gemini: 'https://aistudio.google.com/',
-  openrouter: 'https://openrouter.ai/credits',
-}
-
-type ProviderAuthStatus = {
-  provider: string
-  installed: boolean
-  authenticated: boolean
-  detail: string
-  checkedAt: number
-}
-
-type WorkspaceLockOwner = {
-  pid: number
-  hostname: string
-  acquiredAt: number
-  heartbeatAt: number
-}
-
-type WorkspaceLockAcquireResult =
-  | {
-      ok: true
-      workspaceRoot: string
-      lockFilePath: string
-    }
-  | {
-      ok: false
-      reason: 'invalid-workspace' | 'in-use' | 'error'
-      message: string
-      workspaceRoot: string
-      lockFilePath: string
-      owner?: WorkspaceLockOwner | null
-    }
-
-type WorkspaceApplyFailure =
-  | {
-      kind: 'request-error'
-      message: string
-    }
-  | {
-      kind: 'lock-denied'
-      result: WorkspaceLockAcquireResult
-    }
-
-const CODEX_API_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo']
-
-const DEFAULT_MODEL_INTERFACES: ModelInterface[] = []
-
-const MAX_PANELS = 5
-const MAX_EDITOR_PANELS = 20
-const MAX_EDITOR_FILE_SIZE_BYTES = 2 * 1024 * 1024
-const MAX_AUTO_CONTINUE = 3
-const MODAL_BACKDROP_CLASS = 'fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px] flex items-center justify-center p-4'
-const MODAL_CARD_CLASS = 'rounded-2xl border border-neutral-200/80 dark:border-neutral-800 bg-white/95 dark:bg-neutral-950 shadow-2xl'
-const UI_BUTTON_SECONDARY_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-const UI_BUTTON_PRIMARY_CLASS = 'px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-500'
-const UI_ICON_BUTTON_CLASS = 'h-9 w-9 inline-flex items-center justify-center rounded-lg border border-neutral-300 bg-white hover:bg-neutral-50 shadow-sm text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700'
-const UI_TOOLBAR_ICON_BUTTON_CLASS = 'h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-const CODE_WINDOW_TOOLBAR_BUTTON = 'h-7 w-7 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-700 dark:border-neutral-700/80 dark:bg-transparent dark:hover:bg-neutral-800/80 dark:text-neutral-300'
-const CODE_WINDOW_TOOLBAR_BUTTON_SM = 'h-7 w-9 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700/80 dark:bg-transparent dark:hover:bg-neutral-800/80 dark:text-neutral-300'
-const UI_INPUT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 placeholder:text-neutral-500 dark:placeholder:text-neutral-400'
-const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100'
-const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
-const STATUS_SYMBOL_ICON_CLASS = 'h-[15px] w-[15px] text-neutral-600 dark:text-neutral-300'
-const CONNECTIVITY_PROVIDERS: ConnectivityProvider[] = ['codex', 'claude', 'gemini', 'openrouter']
-const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'preferences', 'agents', 'orchestrator', 'mcp-servers', 'diagnostics']
-const PANEL_COMPLETION_NOTICE_MS = 15000
-const LAST_USER_RECALL_EXPIRY_MS = 10000
-const ONGOING_WORK_LABELS = new Set([
-  'Task step complete',
-  'Running command',
-  'Command finished',
-  'Edited file',
-  'Reasoning update',
-  'Reasoning step',
-  'Scanning workspace',
-  'Approval requested',
-  'Thinking',
-  'Read file',
-  'Searched workspace',
-  'Updated code',
-  'Ran command',
-])
-const DEFAULT_DIAGNOSTICS_MESSAGE_COLORS: DiagnosticsMessageColors = {
-  debugNotes: '#b91c1c',
-  activityUpdates: '#b45309',
-  reasoningUpdates: '#047857',
-  operationTrace: '#1e3a8a',
-  thinkingProgress: '#737373',
-}
-const DEFAULT_DIAGNOSTICS_VISIBILITY = {
-  showActivityUpdates: false,
-  showReasoningUpdates: false,
-  showOperationTrace: true,
-  showThinkingProgress: true,
-}
-
-const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderConfig> = {
-  codex: {
-    id: 'codex',
-    displayName: 'OpenAI',
-    enabled: true,
-    type: 'cli',
-    cliCommand: 'codex',
-    authCheckCommand: 'login status',
-    loginCommand: 'codex login',
-    upgradeCommand: 'npm update -g @openai/codex',
-    upgradePackage: '@openai/codex',
-    isBuiltIn: true,
-  },
-  claude: {
-    id: 'claude',
-    displayName: 'Claude',
-    enabled: true,
-    type: 'cli',
-    cliCommand: 'claude',
-    authCheckCommand: 'auth status',
-    loginCommand: 'claude',
-    upgradeCommand: 'npm update -g @anthropic-ai/claude-code',
-    upgradePackage: '@anthropic-ai/claude-code',
-    isBuiltIn: true,
-  },
-  gemini: {
-    id: 'gemini',
-    displayName: 'Gemini',
-    enabled: true,
-    type: 'cli',
-    cliCommand: 'gemini',
-    authCheckCommand: '--version',
-    loginCommand: 'gemini',
-    upgradeCommand: 'npm update -g @google/gemini-cli',
-    upgradePackage: '@google/gemini-cli',
-    isBuiltIn: true,
-  },
-  openrouter: {
-    id: 'openrouter',
-    displayName: 'OpenRouter',
-    enabled: true,
-    type: 'api',
-    apiBaseUrl: 'https://openrouter.ai/api/v1',
-    loginUrl: 'https://openrouter.ai/keys',
-    isBuiltIn: true,
-  },
 }
 
 function syncModelConfigWithCatalog(
@@ -711,32 +314,6 @@ function renderInteractionModeSymbol(mode: AgentInteractionMode) {
   )
 }
 
-const INTERACTION_MODE_META: Record<AgentInteractionMode, { label: string; promptPrefix: string; hint: string }> = {
-  agent: {
-    label: 'Agent',
-    promptPrefix: '',
-    hint: 'Default mode: implement directly.',
-  },
-  plan: {
-    label: 'Plan',
-    promptPrefix:
-      'Mode: Plan. Explore and design the implementation first. Focus on options, trade-offs, and concrete steps before making code changes.',
-    hint: 'Plan-first with trade-offs.',
-  },
-  debug: {
-    label: 'Debug',
-    promptPrefix:
-      'Mode: Debug. Investigate systematically. Prioritize root-cause analysis, evidence, and verification steps before proposing fixes.',
-    hint: 'Root-cause and evidence.',
-  },
-  ask: {
-    label: 'Ask',
-    promptPrefix:
-      'Mode: Ask. Answer in read-only guidance mode. Explain clearly and avoid code changes unless explicitly requested.',
-    hint: 'Read-only Q&A guidance.',
-  },
-}
-
 function looksIncomplete(content: string): boolean {
   const t = content.trim().toLowerCase()
   if (!t) return false
@@ -760,8 +337,6 @@ function looksIncomplete(content: string): boolean {
   if (t.endsWith('...')) return true
   return false
 }
-
-const THINKING_MAX_CHARS = 180
 
 function isLikelyThinkingUpdate(content: string): boolean {
   const text = content.trim()
@@ -882,26 +457,6 @@ function filterMessagesForPresentation(
   }
   return next
 }
-const WORKSPACE_STORAGE_KEY = 'agentorchestrator.workspaceRoot'
-const WORKSPACE_LIST_STORAGE_KEY = 'agentorchestrator.workspaceList'
-const WORKSPACE_SETTINGS_STORAGE_KEY = 'agentorchestrator.workspaceSettings'
-const WORKSPACE_DOCK_SIDE_STORAGE_KEY = 'agentorchestrator.workspaceDockSide'
-const MODEL_CONFIG_STORAGE_KEY = 'agentorchestrator.modelConfig'
-const PROVIDER_REGISTRY_STORAGE_KEY = 'agentorchestrator.providerRegistry'
-const SETUP_WIZARD_DONE_STORAGE_KEY = 'agentorchestrator.setupWizardDone'
-const EXPLORER_PREFS_STORAGE_KEY = 'agentorchestrator.explorerPrefsByWorkspace'
-const CHAT_HISTORY_STORAGE_KEY = 'agentorchestrator.chatHistory'
-const APP_SETTINGS_STORAGE_KEY = 'agentorchestrator.appSettings'
-const ORCHESTRATOR_SETTINGS_STORAGE_KEY = 'agentorchestrator.orchestratorSettings'
-const MIN_FONT_SCALE = 0.75
-const MAX_FONT_SCALE = 1.5
-const FONT_SCALE_STEP = 0.05
-const INPUT_MAX_HEIGHT_PX = 220
-const DEFAULT_EXPLORER_PREFS: ExplorerPrefs = { showHiddenFiles: false, showNodeModules: false }
-const CONNECT_TIMEOUT_MS = 30000
-const TURN_START_TIMEOUT_MS = 300000
-const STALL_WATCHDOG_MS = 180000
-const COLLAPSIBLE_CODE_MIN_LINES = 14
 
 function looksLikeDiff(code: string): boolean {
   const lines = code.split('\n')
@@ -913,105 +468,6 @@ function looksLikeDiff(code: string): boolean {
   }
   return plusCount + minusCount >= 3 && plusCount > 0 && minusCount > 0
 }
-const MAX_CHAT_HISTORY_ENTRIES = 80
-const DEFAULT_GPT_CONTEXT_TOKENS = 200_000
-const CONTEXT_OUTPUT_RESERVE_RATIO = 0.2
-const CONTEXT_MIN_OUTPUT_RESERVE_TOKENS = 4_096
-const CONTEXT_MAX_OUTPUT_RESERVE_TOKENS = 32_768
-const TOKEN_ESTIMATE_CHARS_PER_TOKEN = 4
-const TOKEN_ESTIMATE_WORDS_MULTIPLIER = 1.35
-const TOKEN_ESTIMATE_MESSAGE_OVERHEAD = 8
-const TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS = 850
-const TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS = 700
-const APP_STATE_AUTOSAVE_MS = 800
-const DEFAULT_THEME_ID = 'default-dark'
-const THEME_ID_STORAGE_KEY = 'agentorchestrator.themeId'
-const THEME_OVERRIDES_STORAGE_KEY = 'agentorchestrator.themeOverrides'
-
-/** Default workspace safety policy values for fresh workspaces. */
-const DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES = [
-  'npm run build:dist:raw',
-  'npx vite build',
-]
-const DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES = [
-  'src/',
-  'package.json',
-]
-const DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES = [
-  'src/',
-  'package.json',
-]
-const DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES = [
-  '../',
-  '.env',
-]
-const DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES = [
-  '../',
-  '.env',
-]
-
-type BaseStandaloneTheme = Omit<StandaloneTheme, keyof DiagnosticsMessageColors>
-
-const BASE_THEMES: BaseStandaloneTheme[] = [
-  { id: 'default-light', name: 'Default Light', mode: 'light', accent500: '#3b82f6', accent600: '#2563eb', accent700: '#1d4ed8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(30,58,138,0.28)', dark950: '#0a0a0a', dark900: '#171717' },
-  { id: 'default-dark', name: 'Default Dark', mode: 'dark', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#383838', dark900: '#454545' },
-  { id: 'obsidian-black', name: 'Obsidian Black', mode: 'dark', accent500: '#7c3aed', accent600: '#6d28d9', accent700: '#5b21b6', accentText: '#ddd6fe', accentSoft: '#ede9fe', accentSoftDark: 'rgba(124,58,237,0.24)', dark950: '#000000', dark900: '#0a0a0a' },
-  { id: 'dracula', name: 'Dracula', mode: 'dark', accent500: '#bd93f9', accent600: '#a87ef5', accent700: '#8f62ea', accentText: '#f3e8ff', accentSoft: '#f5f3ff', accentSoftDark: 'rgba(189,147,249,0.25)', dark950: '#191a21', dark900: '#232533' },
-  { id: 'nord-light', name: 'Nord Light', mode: 'light', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#2e3440', dark900: '#3b4252' },
-  { id: 'nord-dark', name: 'Nord Dark', mode: 'dark', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#2e3440', dark900: '#3b4252' },
-  { id: 'solarized-light', name: 'Solarized Light', mode: 'light', accent500: '#2aa198', accent600: '#268e87', accent700: '#1f7a74', accentText: '#d1fae5', accentSoft: '#dcfce7', accentSoftDark: 'rgba(42,161,152,0.26)', dark950: '#002b36', dark900: '#073642' },
-  { id: 'solarized-dark', name: 'Solarized Dark', mode: 'dark', accent500: '#2aa198', accent600: '#268e87', accent700: '#1f7a74', accentText: '#d1fae5', accentSoft: '#dcfce7', accentSoftDark: 'rgba(42,161,152,0.26)', dark950: '#002b36', dark900: '#073642' },
-  { id: 'gruvbox-light', name: 'Gruvbox Light', mode: 'light', accent500: '#d79921', accent600: '#b57614', accent700: '#9a5f10', accentText: '#fef3c7', accentSoft: '#fffbeb', accentSoftDark: 'rgba(215,153,33,0.26)', dark950: '#1d2021', dark900: '#282828' },
-  { id: 'gruvbox-dark', name: 'Gruvbox Dark', mode: 'dark', accent500: '#d79921', accent600: '#b57614', accent700: '#9a5f10', accentText: '#fef3c7', accentSoft: '#fffbeb', accentSoftDark: 'rgba(215,153,33,0.26)', dark950: '#1d2021', dark900: '#282828' },
-  { id: 'tokyo-night-light', name: 'Tokyo Night Light', mode: 'light', accent500: '#0db9d7', accent600: '#0aa2c0', accent700: '#0889a3', accentText: '#cceef3', accentSoft: '#e0f7fa', accentSoftDark: 'rgba(13,185,215,0.22)', dark950: '#1a1b26', dark900: '#24283b' },
-  { id: 'tokyo-night-dark', name: 'Tokyo Night Dark', mode: 'dark', accent500: '#7aa2f7', accent600: '#5f88e8', accent700: '#4c74d0', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(122,162,247,0.26)', dark950: '#1a1b26', dark900: '#24283b' },
-  { id: 'catppuccin-mocha', name: 'Catppuccin Mocha', mode: 'dark', accent500: '#cba6f7', accent600: '#b68cf0', accent700: '#9f73e3', accentText: '#f5e8ff', accentSoft: '#faf5ff', accentSoftDark: 'rgba(203,166,247,0.26)', dark950: '#1e1e2e', dark900: '#313244' },
-  { id: 'github-dark', name: 'GitHub Dark', mode: 'dark', accent500: '#58a6ff', accent600: '#3b82d6', accent700: '#2f6fb8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(88,166,255,0.26)', dark950: '#0d1117', dark900: '#161b22' },
-  { id: 'monokai', name: 'Monokai', mode: 'dark', accent500: '#a6e22e', accent600: '#84cc16', accent700: '#65a30d', accentText: '#ecfccb', accentSoft: '#f7fee7', accentSoftDark: 'rgba(166,226,46,0.22)', dark950: '#1f1f1f', dark900: '#272822' },
-  { id: 'one-dark', name: 'One Dark', mode: 'dark', accent500: '#61afef', accent600: '#3d8fd9', accent700: '#2f75ba', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(97,175,239,0.26)', dark950: '#1e2127', dark900: '#282c34' },
-  { id: 'ayu-mirage', name: 'Ayu Mirage', mode: 'dark', accent500: '#ffb454', accent600: '#f59e0b', accent700: '#d97706', accentText: '#ffedd5', accentSoft: '#fff7ed', accentSoftDark: 'rgba(255,180,84,0.24)', dark950: '#1f2430', dark900: '#242936' },
-  { id: 'material-ocean', name: 'Material Ocean', mode: 'dark', accent500: '#82aaff', accent600: '#5d8bef', accent700: '#4a74d1', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(130,170,255,0.26)', dark950: '#0f111a', dark900: '#1a1c25' },
-  { id: 'synthwave-84', name: 'Synthwave 84', mode: 'dark', accent500: '#ff7edb', accent600: '#ec4899', accent700: '#be185d', accentText: '#fce7f3', accentSoft: '#fdf2f8', accentSoftDark: 'rgba(255,126,219,0.26)', dark950: '#241b2f', dark900: '#2b213a' },
-]
-
-const THEMES: StandaloneTheme[] = BASE_THEMES.map((theme) => ({
-  ...theme,
-  ...DEFAULT_DIAGNOSTICS_MESSAGE_COLORS,
-}))
-
-type ThemeEditableField =
-  | 'accent500'
-  | 'accent600'
-  | 'accent700'
-  | 'accentText'
-  | 'accentSoft'
-  | 'accentSoftDark'
-  | 'dark950'
-  | 'dark900'
-  | 'debugNotes'
-  | 'activityUpdates'
-  | 'reasoningUpdates'
-  | 'operationTrace'
-  | 'thinkingProgress'
-
-type ThemeOverrideValues = Partial<Record<ThemeEditableField, string>>
-type ThemeOverrides = Record<string, ThemeOverrideValues>
-
-const THEME_EDITABLE_FIELDS: Array<{ key: ThemeEditableField; label: string; group?: string }> = [
-  { key: 'accent500', label: 'Primary hover & links (buttons, borders, focus ring)', group: 'Primary / interactive' },
-  { key: 'accent600', label: 'Primary button solid & focus border', group: 'Primary / interactive' },
-  { key: 'accent700', label: 'Text on primary (light mode)', group: 'Primary / interactive' },
-  { key: 'accentText', label: 'Text on primary (dark mode)', group: 'Primary / interactive' },
-  { key: 'accentSoft', label: 'Primary tint background (light mode, e.g. user bubbles)', group: 'Primary / interactive' },
-  { key: 'accentSoftDark', label: 'Primary tint background (dark mode)', group: 'Primary / interactive' },
-  { key: 'dark950', label: 'Darkest surface (main dark bg, scrollbar track)', group: 'Dark surfaces' },
-  { key: 'dark900', label: 'Dark surface (panels, borders, scrollbar)', group: 'Dark surfaces' },
-  { key: 'debugNotes', label: 'Debug notes', group: 'Diagnostics' },
-  { key: 'activityUpdates', label: 'Activity updates', group: 'Diagnostics' },
-  { key: 'reasoningUpdates', label: 'Reasoning updates', group: 'Diagnostics' },
-  { key: 'operationTrace', label: 'Operation trace', group: 'Diagnostics' },
-  { key: 'thinkingProgress', label: 'Thinking progress', group: 'Diagnostics' },
-]
 
 function applyThemeOverrides(overrides: ThemeOverrides): StandaloneTheme[] {
   return THEMES.map((theme) => {
@@ -1225,23 +681,6 @@ function resolveWorkspaceRelativePathFromChatHref(workspaceRoot: string, href: s
     return toWorkspaceRelativePathIfInsideRoot(workspaceRoot, decoded)
   }
   return normalizeWorkspaceRelativePath(decoded)
-}
-
-const LEGACY_PRESET_TO_THEME_ID: Record<string, { light: string; dark: string }> = {
-  default: { light: 'default-light', dark: 'default-dark' },
-  'obsidian-black': { light: 'default-light', dark: 'obsidian-black' },
-  dracula: { light: 'default-light', dark: 'dracula' },
-  nord: { light: 'nord-light', dark: 'nord-dark' },
-  'solarized-dark': { light: 'solarized-light', dark: 'solarized-dark' },
-  'gruvbox-dark': { light: 'gruvbox-light', dark: 'gruvbox-dark' },
-  'tokyo-night': { light: 'tokyo-night-light', dark: 'tokyo-night-dark' },
-  'catppuccin-mocha': { light: 'default-light', dark: 'catppuccin-mocha' },
-  'github-dark': { light: 'default-light', dark: 'github-dark' },
-  monokai: { light: 'default-light', dark: 'monokai' },
-  'one-dark': { light: 'default-light', dark: 'one-dark' },
-  'ayu-mirage': { light: 'default-light', dark: 'ayu-mirage' },
-  'material-ocean': { light: 'default-light', dark: 'material-ocean' },
-  'synthwave-84': { light: 'default-light', dark: 'synthwave-84' },
 }
 
 function getInitialThemeId(): string {

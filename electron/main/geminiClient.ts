@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
 
@@ -35,6 +36,7 @@ export type GeminiConnectOptions = {
   sandbox?: 'read-only' | 'workspace-write'
   interactionMode?: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
+  mcpConfigPath?: string
 }
 
 export class GeminiClient extends EventEmitter {
@@ -43,6 +45,8 @@ export class GeminiClient extends EventEmitter {
   private permissionMode: 'verify-first' | 'proceed-always' = 'verify-first'
   private sandbox: 'read-only' | 'workspace-write' = 'workspace-write'
   private interactionMode: string = 'agent'
+  private mcpConfigPath: string | null = null
+  private mcpServerNames: string[] = []
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeProc: ChildProcessWithoutNullStreams | null = null
 
@@ -106,6 +110,7 @@ export class GeminiClient extends EventEmitter {
     this.permissionMode = options.permissionMode ?? 'verify-first'
     this.sandbox = options.sandbox ?? 'workspace-write'
     this.interactionMode = options.interactionMode ?? 'agent'
+    this.mcpConfigPath = options.mcpConfigPath ?? null
     if (normalized !== requestedModel) {
       this.emitEvent({
         type: 'status',
@@ -115,6 +120,7 @@ export class GeminiClient extends EventEmitter {
     }
     this.emitEvent({ type: 'status', status: 'starting', message: 'Connecting to Gemini CLI...' })
     await this.assertGeminiCliAvailable()
+    await this.syncMcpServers()
     this.history =
       (options.initialHistory?.length ?? 0) > 0
         ? options.initialHistory!.slice(-INITIAL_HISTORY_MAX_MESSAGES)
@@ -154,6 +160,9 @@ export class GeminiClient extends EventEmitter {
     const startTurn = (modelId: string): Promise<void> =>
       new Promise((resolve, reject) => {
         const args = ['-m', modelId, '--yolo', '--output-format', 'stream-json']
+        if (this.mcpServerNames.length > 0) {
+          args.push('--allowed-mcp-server-names', ...this.mcpServerNames)
+        }
         const spawnOpts = {
           cwd: this.cwd,
           stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
@@ -395,6 +404,101 @@ export class GeminiClient extends EventEmitter {
       : ''
 
     return `${systemPrompt}\n\n---\n\n${continuationHint}${userMessage}`
+  }
+
+  /**
+   * Read Barnaby's MCP config and register any servers into Gemini CLI's own
+   * MCP registry via `gemini mcp add`.  Already-registered servers are skipped.
+   */
+  private async syncMcpServers(): Promise<void> {
+    if (!this.mcpConfigPath || !fs.existsSync(this.mcpConfigPath)) {
+      this.mcpServerNames = []
+      return
+    }
+    let config: { mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }> }
+    try {
+      config = JSON.parse(fs.readFileSync(this.mcpConfigPath, 'utf8'))
+    } catch {
+      this.mcpServerNames = []
+      return
+    }
+    if (!config.mcpServers || typeof config.mcpServers !== 'object') {
+      this.mcpServerNames = []
+      return
+    }
+
+    const existing = await this.listGeminiMcpServers()
+    const names: string[] = []
+
+    for (const [name, srv] of Object.entries(config.mcpServers)) {
+      if (srv.enabled === false) continue
+      names.push(name)
+      if (existing.has(name)) continue
+
+      const addArgs = ['mcp', 'add', '--scope', 'user', '--trust', name, srv.command]
+      if (srv.args?.length) addArgs.push(...srv.args)
+      if (srv.env && Object.keys(srv.env).length > 0) {
+        for (const [k, v] of Object.entries(srv.env)) {
+          addArgs.push('-e', `${k}=${v}`)
+        }
+      }
+
+      try {
+        await this.runGeminiCommand(addArgs)
+        this.emitEvent({ type: 'thinking', message: `Registered MCP server "${name}" with Gemini CLI` })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.emitEvent({ type: 'thinking', message: `Failed to register MCP server "${name}": ${msg}` })
+      }
+    }
+
+    this.mcpServerNames = names
+  }
+
+  private async listGeminiMcpServers(): Promise<Set<string>> {
+    try {
+      const output = await this.runGeminiCommand(['mcp', 'list'])
+      const names = new Set<string>()
+      for (const line of output.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed || /no mcp servers/i.test(trimmed) || /loaded cached/i.test(trimmed)) continue
+        const match = trimmed.match(/^[\s-]*(\S+)/)
+        if (match) names.add(match[1])
+      }
+      return names
+    } catch {
+      return new Set()
+    }
+  }
+
+  private runGeminiCommand(args: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const env = getGeminiSpawnEnv()
+      const proc =
+        process.platform === 'win32'
+          ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
+              cwd: this.cwd,
+              stdio: ['ignore', 'pipe', 'pipe'],
+              env,
+              windowsHide: true,
+            } as object)
+          : spawn('gemini', args, {
+              cwd: this.cwd,
+              stdio: ['ignore', 'pipe', 'pipe'],
+              env,
+            })
+      let stdout = ''
+      let stderr = ''
+      proc.stdout?.setEncoding('utf8')
+      proc.stderr?.setEncoding('utf8')
+      proc.stdout?.on('data', (c: string) => { stdout += c })
+      proc.stderr?.on('data', (c: string) => { stderr += c })
+      proc.on('error', reject)
+      proc.on('exit', (code) => {
+        if (code === 0) resolve(stdout)
+        else reject(new Error(stderr.trim() || `gemini exited with code ${code}`))
+      })
+    })
   }
 
   private async assertGeminiCliAvailable() {

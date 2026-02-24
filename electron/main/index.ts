@@ -2131,6 +2131,7 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
       sandbox: options.sandbox,
       interactionMode: options.interactionMode,
       initialHistory: options.initialHistory,
+      mcpConfigPath: mcpServerManager.getConfigPath(),
     }) as { threadId: string }
     agentClients.set(agentWindowId, client)
     agentClientCwds.set(agentWindowId, path.resolve(options.cwd || process.cwd()))
@@ -2838,6 +2839,46 @@ ipcMain.on('agentorchestrator:setEditorMenuState', (_evt, enabled: boolean) => {
 
 ipcMain.handle('agentorchestrator:getProviderAuthStatus', async (_evt, config: ProviderConfigForAuth) => {
   return getProviderAuthStatus(config)
+})
+
+ipcMain.handle('agentorchestrator:pingProvider', async (_evt, providerId: string) => {
+  const start = Date.now()
+  try {
+    if (providerId === 'openrouter') {
+      return { ok: true, detail: 'API provider (verified by key check)', durationMs: Date.now() - start }
+    }
+    if (providerId === 'claude') {
+      const result = await runCliCommand('claude', ['auth', 'status'])
+      const durationMs = Date.now() - start
+      const out = `${result.stdout ?? ''}`.trim()
+      try {
+        const parsed = JSON.parse(out)
+        if (parsed.loggedIn) return { ok: true, detail: `Authenticated as ${parsed.email ?? 'unknown'} (${parsed.subscriptionType ?? 'unknown'})`, durationMs }
+        return { ok: false, detail: 'Not logged in', durationMs }
+      } catch {
+        return { ok: out.length > 0, detail: out.slice(0, 100) || 'No response', durationMs }
+      }
+    }
+    if (providerId === 'codex') {
+      const result = await runCliCommand('codex', ['login', 'status'])
+      const durationMs = Date.now() - start
+      const combined = `${result.stdout ?? ''} ${result.stderr ?? ''}`.trim()
+      const loggedIn = /logged\s*in/i.test(combined)
+      return { ok: loggedIn, detail: combined.slice(0, 100) || 'No response', durationMs }
+    }
+    if (providerId === 'gemini') {
+      const result = await runCliCommand('gemini', ['--version'])
+      const combined = `${result.stdout ?? ''} ${result.stderr ?? ''}`.trim()
+      const durationMs = Date.now() - start
+      return { ok: combined.length > 0, detail: combined.slice(0, 100) || 'CLI ready', durationMs }
+    }
+    const result = await runCliCommand(providerId, ['--version'])
+    const out = `${result.stdout ?? ''}`.trim()
+    const durationMs = Date.now() - start
+    return { ok: out.length > 0, detail: out.slice(0, 100) || 'CLI found', durationMs }
+  } catch (err) {
+    return { ok: false, detail: errorMessage(err) || 'Ping failed', durationMs: Date.now() - start }
+  }
 })
 
 ipcMain.handle('agentorchestrator:startProviderLogin', async (_evt, config: ProviderConfigForAuth) => {

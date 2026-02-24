@@ -343,6 +343,9 @@ const api = {
   pingProvider(providerId: string) {
     return ipcRenderer.invoke('agentorchestrator:pingProvider', providerId) as Promise<{ ok: boolean; detail: string; durationMs: number }>
   },
+  pingModel(provider: string, modelId: string) {
+    return ipcRenderer.invoke('agentorchestrator:pingModel', provider, modelId) as Promise<{ ok: boolean; durationMs: number; error?: string }>
+  },
   startProviderLogin(config: ProviderConfigForAuth) {
     return ipcRenderer.invoke('agentorchestrator:startProviderLogin', config) as Promise<{ started: boolean; detail: string }>
   },

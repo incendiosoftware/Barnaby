@@ -1470,7 +1470,38 @@ function getCliSpawnEnv(): NodeJS.ProcessEnv {
   return env
 }
 
-const CLI_AUTH_CHECK_TIMEOUT_MS = 20_000
+/**
+ * Resolve a CLI's .js entry point from its npm .cmd shim on Windows.
+ * Lets us spawn node directly rather than going through cmd.exe (much faster, no shell hang).
+ */
+function resolveNpmCliJsEntry(cliName: string): string | null {
+  if (process.platform !== 'win32') return null
+  const npmBin = process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : ''
+  if (!npmBin) return null
+  const cmdPath = path.join(npmBin, `${cliName}.cmd`)
+  if (!fs.existsSync(cmdPath)) return null
+  try {
+    const cmdContent = fs.readFileSync(cmdPath, 'utf8')
+    const match = cmdContent.match(/%dp0%\\([^\s"]+\.js)/i)
+    if (match) {
+      const jsPath = path.join(npmBin, match[1])
+      if (fs.existsSync(jsPath)) return jsPath
+    }
+  } catch { /* fall through */ }
+  return null
+}
+
+/** Find 'node' on PATH (process.execPath is Electron in packaged apps, not node). */
+function findNodeExeOnPath(): string | null {
+  const pathDirs = (process.env.PATH ?? '').split(path.delimiter)
+  for (const dir of pathDirs) {
+    const candidate = path.join(dir, process.platform === 'win32' ? 'node.exe' : 'node')
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+const CLI_AUTH_CHECK_TIMEOUT_MS = 8_000
 
 function runCliCommand(executable: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   const env = getCliSpawnEnv()
@@ -1481,7 +1512,21 @@ function runCliCommand(executable: string, args: string[]): Promise<{ stdout: st
       timeoutMs,
     ),
   )
+  // On Windows, try spawning node directly via the npm .cmd shim entry point.
+  // This bypasses cmd.exe and avoids the shell-startup hangs seen with claude CLI.
   if (process.platform === 'win32') {
+    const jsEntry = resolveNpmCliJsEntry(executable)
+    const nodeExe = jsEntry ? findNodeExeOnPath() : null
+    if (jsEntry && nodeExe) {
+      return Promise.race([
+        execFileAsync(nodeExe, [jsEntry, ...args], {
+          windowsHide: true,
+          maxBuffer: 1024 * 1024,
+          env,
+        }),
+        timeoutPromise,
+      ])
+    }
     const fullCmd = [executable, ...args].map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')
     return Promise.race([
       execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', fullCmd], {
@@ -1683,13 +1728,163 @@ async function launchProviderUpgrade(config: ProviderConfigForAuth): Promise<{ s
 }
 
 const GEMINI_MODELS_PROMPT =
-  'Output a JSON array of model IDs you support. Use names like gemini-2.5-flash, gemini-2.5-pro, gemini-3-pro-preview. Output only the JSON array, no markdown or other text.'
+  'Output a JSON array of model IDs you support. Use names like gemini-2.5-flash, gemini-2.5-pro, gemini-3-pro-preview, gemini-3.1-pro. Output only the JSON array, no markdown or other text.'
 
 type ModelsByProvider = {
   codex: { id: string; displayName: string }[]
   claude: { id: string; displayName: string }[]
   gemini: { id: string; displayName: string }[]
   openrouter: { id: string; displayName: string }[]
+}
+
+const MODEL_PING_TIMEOUT_MS = 30_000
+const MODEL_PING_PROMPT = 'Reply with only the word OK.'
+
+function normalizeGeminiModelForCli(modelId: string): string {
+  const map: Record<string, string> = {
+    'gemini-1.5-pro': 'pro', 'gemini-1.5-flash': 'flash',
+    'gemini-2.0-flash': 'flash', 'gemini-3-pro': 'pro', 'gemini-pro': 'flash', 'gemini-1.0-pro': 'flash',
+  }
+  return map[modelId] ?? modelId
+}
+
+async function pingGeminiModel(modelId: string): Promise<{ ok: boolean; durationMs: number; error?: string }> {
+  const start = Date.now()
+  const normalized = normalizeGeminiModelForCli(modelId)
+  const env = getCliSpawnEnv()
+  return new Promise((resolve) => {
+    const args = ['-m', normalized, '--yolo', '--output-format', 'stream-json']
+    const proc = process.platform === 'win32'
+      ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env } as object)
+      : spawn('gemini', args, { stdio: ['pipe', 'pipe', 'pipe'], env })
+
+    const timer = setTimeout(() => {
+      try { proc.kill() } catch { /* ignore */ }
+      resolve({ ok: false, durationMs: Date.now() - start, error: 'Timed out' })
+    }, MODEL_PING_TIMEOUT_MS)
+
+    let resolved = false
+    const done = (ok: boolean, error?: string) => {
+      if (resolved) return
+      resolved = true
+      clearTimeout(timer)
+      resolve({ ok, durationMs: Date.now() - start, error })
+    }
+
+    proc.stdin?.write(MODEL_PING_PROMPT)
+    proc.stdin?.end()
+
+    let buf = ''
+    proc.stdout?.setEncoding('utf8')
+    proc.stdout?.on('data', (chunk: string) => {
+      buf += chunk
+      for (const line of buf.split('\n')) {
+        const t = line.trim()
+        if (!t) continue
+        try {
+          const evt = JSON.parse(t)
+          if (evt.type === 'message' && (evt.role === 'assistant' || evt.role === 'model') && typeof evt.content === 'string' && evt.content.trim()) {
+            try { proc.kill() } catch { /* ignore */ }
+            done(true)
+            return
+          }
+          if (evt.type === 'error') {
+            done(false, evt.message ?? 'Model error')
+            return
+          }
+        } catch { /* not JSON, ignore */ }
+      }
+    })
+    proc.on('exit', (code) => done(code === 0, code !== 0 ? `Exit ${code}` : undefined))
+    proc.on('error', (err) => done(false, err.message))
+  })
+}
+
+async function pingClaudeModel(modelId: string): Promise<{ ok: boolean; durationMs: number; error?: string }> {
+  const start = Date.now()
+  const jsEntry = resolveNpmCliJsEntry('claude')
+  const nodeExe = jsEntry ? findNodeExeOnPath() : null
+  const env = getCliSpawnEnv()
+  return new Promise((resolve) => {
+    const args = ['-m', modelId, '--print', '--output-format', 'stream-json']
+    let proc: ReturnType<typeof spawn>
+    if (jsEntry && nodeExe) {
+      proc = spawn(nodeExe, [jsEntry, ...args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env } as object)
+    } else if (process.platform === 'win32') {
+      proc = spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'claude', ...args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env } as object)
+    } else {
+      proc = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], env })
+    }
+
+    const timer = setTimeout(() => {
+      try { proc.kill() } catch { /* ignore */ }
+      resolve({ ok: false, durationMs: Date.now() - start, error: 'Timed out' })
+    }, MODEL_PING_TIMEOUT_MS)
+
+    let resolved = false
+    const done = (ok: boolean, error?: string) => {
+      if (resolved) return
+      resolved = true
+      clearTimeout(timer)
+      resolve({ ok, durationMs: Date.now() - start, error })
+    }
+
+    proc.stdin?.write(MODEL_PING_PROMPT)
+    proc.stdin?.end()
+
+    let buf = ''
+    proc.stdout?.setEncoding('utf8')
+    proc.stdout?.on('data', (chunk: string) => {
+      buf += chunk
+      for (const line of buf.split('\n')) {
+        const t = line.trim()
+        if (!t) continue
+        try {
+          const evt = JSON.parse(t)
+          if (evt.type === 'content_block_delta' || (evt.type === 'message' && evt.role === 'assistant')) {
+            try { proc.kill() } catch { /* ignore */ }
+            done(true)
+            return
+          }
+          if (evt.type === 'message_start' && evt.message?.role === 'assistant') {
+            try { proc.kill() } catch { /* ignore */ }
+            done(true)
+            return
+          }
+        } catch { /* not JSON */ }
+      }
+    })
+    proc.on('exit', (code) => done(code === 0, code !== 0 ? `Exit ${code}` : undefined))
+    proc.on('error', (err) => done(false, err.message))
+  })
+}
+
+async function pingOpenRouterModel(modelId: string): Promise<{ ok: boolean; durationMs: number; error?: string }> {
+  const start = Date.now()
+  const apiKey = getProviderApiKey('openrouter')
+  if (!apiKey) return { ok: false, durationMs: 0, error: 'No API key' }
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://barnaby.build', 'X-Title': 'Barnaby' },
+      body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: MODEL_PING_PROMPT }], max_tokens: 5 }),
+      signal: AbortSignal.timeout(MODEL_PING_TIMEOUT_MS),
+    })
+    const durationMs = Date.now() - start
+    if (res.ok) return { ok: true, durationMs }
+    const body = await res.text().catch(() => '')
+    return { ok: false, durationMs, error: `HTTP ${res.status}: ${body.slice(0, 100)}` }
+  } catch (err) {
+    return { ok: false, durationMs: Date.now() - start, error: errorMessage(err) }
+  }
+}
+
+async function pingModelById(provider: string, modelId: string): Promise<{ ok: boolean; durationMs: number; error?: string }> {
+  if (provider === 'gemini') return pingGeminiModel(modelId)
+  if (provider === 'claude') return pingClaudeModel(modelId)
+  if (provider === 'openrouter') return pingOpenRouterModel(modelId)
+  // Codex: no lightweight ping available yet
+  return { ok: true, durationMs: 0 }
 }
 
 const CODEX_MODELS_PROMPT =
@@ -1755,28 +1950,26 @@ async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: str
   })
 }
 
-async function getAvailableModels(): Promise<ModelsByProvider> {
-  let codex = await queryCodexModelsViaExec().catch(() => [])
-  let claude: { id: string; displayName: string }[] = [
-    { id: 'sonnet', displayName: 'sonnet' },
-    { id: 'opus', displayName: 'opus' },
-    { id: 'claude-opus-4-6', displayName: 'opus 4.6' },
-    { id: 'haiku', displayName: 'haiku' },
-  ]
-  let gemini = await getGeminiAvailableModels().catch(() => [])
-  let openrouter = await fetchOpenRouterModels().catch(() => [])
-  if (openrouter.length === 0) openrouter = [{ id: 'openrouter/auto', displayName: 'openrouter/auto' }]
-  if (codex.length === 0) {
-    codex = [
-      { id: 'gpt-5.3-codex', displayName: 'gpt-5.3-codex' },
-      { id: 'gpt-5.2-codex', displayName: 'gpt-5.2-codex' },
-      { id: 'gpt-5.1-codex', displayName: 'gpt-5.1-codex' },
-      { id: 'gpt-4o', displayName: 'gpt-4o' },
-      { id: 'gpt-4o-mini', displayName: 'gpt-4o-mini' },
-      { id: 'gpt-4-turbo', displayName: 'gpt-4-turbo' },
-    ]
+async function queryClaudeModelsViaExec(): Promise<{ id: string; displayName: string }[]> {
+  try {
+    const result = await runCliCommand('claude', ['models', '--output', 'json'])
+    const out = (result.stdout ?? '').trim()
+    if (!out) return []
+    const parsed = JSON.parse(out)
+    const arr = Array.isArray(parsed) ? parsed : (parsed?.models ?? parsed?.data ?? [])
+    return arr
+      .filter((m: unknown) => m && typeof (m as Record<string, unknown>).id === 'string')
+      .map((m: Record<string, unknown>) => ({ id: String(m.id), displayName: String(m.id) }))
+  } catch {
+    return []
   }
-  if (gemini.length === 0) gemini = [{ id: 'gemini-2.5-flash', displayName: 'gemini-2.5-flash' }, { id: 'gemini-2.5-pro', displayName: 'gemini-2.5-pro' }]
+}
+
+async function getAvailableModels(): Promise<ModelsByProvider> {
+  const codex = await queryCodexModelsViaExec().catch(() => [])
+  const claude = await queryClaudeModelsViaExec().catch(() => [])
+  const gemini = await getGeminiAvailableModels().catch(() => [])
+  const openrouter = await fetchOpenRouterModels().catch(() => [])
   return { codex, claude, gemini, openrouter }
 }
 
@@ -2273,7 +2466,7 @@ async function createWindow() {
   const titleSuffix = VITE_DEV_SERVER_URL ? '(DEV)' : `(V${app.getVersion()})`
   win = new BrowserWindow({
     title: `Barnaby ${titleSuffix}`,
-    icon: path.join(process.env.VITE_PUBLIC, 'appicon.png'),
+    icon: path.join(process.env.VITE_PUBLIC, 'node.svg'),
     show: false,
     width: startupWidth,
     height: startupHeight,
@@ -2870,6 +3063,10 @@ ipcMain.on('agentorchestrator:setEditorMenuState', (_evt, enabled: boolean) => {
 
 ipcMain.handle('agentorchestrator:getProviderAuthStatus', async (_evt, config: ProviderConfigForAuth) => {
   return getProviderAuthStatus(config)
+})
+
+ipcMain.handle('agentorchestrator:pingModel', async (_evt, provider: string, modelId: string) => {
+  return pingModelById(provider, modelId)
 })
 
 ipcMain.handle('agentorchestrator:pingProvider', async (_evt, providerId: string) => {

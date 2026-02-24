@@ -212,9 +212,10 @@ export class GeminiClient extends EventEmitter {
         let resolved = false
         let stdoutBuffer = ''
 
-        const GEMINI_NOISE = /quota|retrying after|rate.?limit|capacity.*exhausted|reset after|YOLO mode|Loaded cached credentials|All tool calls will be|Subagent|GOAL Result|Termination Reason|"answer":\s*"Based on the provided runtime context/i
+        const GEMINI_NOISE = /quota|retrying after|rate.?limit|capacity.*exhausted|reset after|YOLO mode|Loaded cached credentials|All tool calls will be/i
         const GEMINI_RETRYABLE = /status 429|Retrying with backoff|Attempt \d+ failed(?!.*Max attempts)|No capacity available/i
-        const SUBAGENT_METADATA = /Subagent|GOAL Result|Termination Reason|"answer":\s*"Based on the provided runtime context/i
+        // Only filter subagent metadata from non-JSON noise lines and thinking traces — never from real assistant message content.
+        const SUBAGENT_NOISE = /^Subagent\s+\S+.*Finished|GOAL Result\s*:|Termination Reason\s*:/i
 
         proc.stdout.on('data', (chunk: string) => {
           if (!chunk) return
@@ -230,7 +231,7 @@ export class GeminiClient extends EventEmitter {
             try {
               evt = JSON.parse(trimmed)
             } catch {
-              if (GEMINI_NOISE.test(trimmed)) continue
+              if (GEMINI_NOISE.test(trimmed) || SUBAGENT_NOISE.test(trimmed)) continue
 
               const short = trimmed.length > 300 ? trimmed.slice(0, 300) + '...' : trimmed
 
@@ -247,12 +248,11 @@ export class GeminiClient extends EventEmitter {
             switch (evt.type) {
               case 'message':
                 if ((evt.role === 'assistant' || evt.role === 'model') && typeof evt.content === 'string') {
-                  if (SUBAGENT_METADATA.test(evt.content)) break
                   this.emitEvent({ type: 'assistantDelta', delta: evt.content })
                   assistantText += evt.content
                   if (evt.delta) {
                     const snippet = evt.content.trim()
-                    if (snippet.length > 0 && snippet.length < 200 && !SUBAGENT_METADATA.test(snippet)) {
+                    if (snippet.length > 0 && snippet.length < 200) {
                       this.emitEvent({ type: 'thinking', message: snippet })
                     }
                   }
@@ -282,7 +282,7 @@ export class GeminiClient extends EventEmitter {
                 if (isError || /^error/i.test(output)) {
                   const errMsg = output.length > 300 ? output.slice(0, 300) + '...' : output
                   this.emitEvent({ type: 'status', status: 'error', message: errMsg || `Tool "${toolName}" failed` })
-                } else if (!SUBAGENT_METADATA.test(output)) {
+                } else if (!SUBAGENT_NOISE.test(output)) {
                   const short = output.length > 160 ? output.slice(0, 160) + '...' : output
                   this.emitEvent({ type: 'thinking', message: short || toolStatus })
                 }
@@ -293,7 +293,7 @@ export class GeminiClient extends EventEmitter {
                 const text = typeof evt.content === 'string' ? evt.content
                   : typeof evt.message === 'string' ? evt.message
                   : typeof evt.text === 'string' ? evt.text : ''
-                if (text && !SUBAGENT_METADATA.test(text)) {
+                if (text && !SUBAGENT_NOISE.test(text)) {
                   const short = text.length > 200 ? text.slice(0, 200) + '...' : text
                   this.emitEvent({ type: 'thinking', message: short })
                 }
@@ -323,7 +323,7 @@ export class GeminiClient extends EventEmitter {
                 break
               default: {
                 const msg = evt.message ?? evt.content ?? evt.text ?? ''
-                if (typeof msg === 'string' && msg.trim() && !SUBAGENT_METADATA.test(msg)) {
+                if (typeof msg === 'string' && msg.trim() && !SUBAGENT_NOISE.test(msg)) {
                   const short = msg.length > 200 ? msg.slice(0, 200) + '...' : msg
                   this.emitEvent({ type: 'thinking', message: `[${evt.type}] ${short}` })
                 }
@@ -356,10 +356,8 @@ export class GeminiClient extends EventEmitter {
             try {
               const evt: any = JSON.parse(stdoutBuffer.trim())
               if (evt.type === 'message' && evt.role === 'assistant' && typeof evt.content === 'string') {
-                if (!SUBAGENT_METADATA.test(evt.content)) {
-                  this.emitEvent({ type: 'assistantDelta', delta: evt.content })
-                  assistantText += evt.content
-                }
+                this.emitEvent({ type: 'assistantDelta', delta: evt.content })
+                assistantText += evt.content
               } else if (evt.type === 'result' && evt.stats) {
                 this.emitEvent({ type: 'usageUpdated', usage: evt.stats })
               }
@@ -388,14 +386,15 @@ export class GeminiClient extends EventEmitter {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       if (this.isModelNotFoundError(msg) && this.model !== 'gemini-2.0-flash') {
+        const originalModel = this.model
+        this.model = 'gemini-2.0-flash'
         try {
           this.emitEvent({
-            type: 'status',
-            status: 'starting',
-            message: `Model "${this.model}" not found. Retrying with gemini-2.0-flash...`,
+            type: 'thinking',
+            message: `Model "${originalModel}" not found — retrying with gemini-2.0-flash...`,
           })
-          this.model = 'gemini-2.0-flash'
           await startTurn(this.model)
+          // Retry succeeded — no error shown to the user.
         } catch (retryErr: unknown) {
           const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr)
           this.emitEvent({ type: 'status', status: 'error', message: retryMsg })

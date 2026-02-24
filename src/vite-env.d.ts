@@ -218,6 +218,7 @@ interface Window {
     showContextMenu(kind: 'input-selection' | 'chat-selection'): Promise<{ ok: boolean }>
     getProviderAuthStatus(config: ProviderConfigForAuth): Promise<ProviderAuthStatus>
     pingProvider(providerId: string): Promise<{ ok: boolean; detail: string; durationMs: number }>
+    pingModel(provider: string, modelId: string): Promise<{ ok: boolean; durationMs: number; error?: string }>
     startProviderLogin(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }>
     upgradeProviderCli(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }>
     setProviderApiKey(providerId: string, apiKey: string): Promise<{ ok: boolean; hasKey: boolean }>

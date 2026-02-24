@@ -1,4 +1,5 @@
-import ReactMarkdown from 'react-markdown'
+import VerticalTilingIcon from './components/verticalTilingIcon';
+import ReactMarkdown from 'react-markdown'  
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
@@ -448,23 +449,7 @@ type WorkspaceApplyFailure =
 
 const CODEX_API_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo']
 
-const DEFAULT_MODEL_INTERFACES: ModelInterface[] = [
-  { id: 'gpt-5.3-codex', displayName: 'GPT 5.3', provider: 'codex', enabled: true },
-  { id: 'gpt-5.2-codex', displayName: 'GPT 5.2', provider: 'codex', enabled: true },
-  { id: 'gpt-5.1-codex', displayName: 'GPT 5.1', provider: 'codex', enabled: true },
-  { id: 'sonnet', displayName: 'Claude Sonnet', provider: 'claude', enabled: true },
-  { id: 'opus', displayName: 'Claude Opus', provider: 'claude', enabled: true },
-  { id: 'claude-opus-4-6', displayName: 'Claude Opus 4.6', provider: 'claude', enabled: true },
-  { id: 'haiku', displayName: 'Claude Haiku', provider: 'claude', enabled: true },
-  { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', provider: 'gemini', enabled: true },
-  { id: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', provider: 'gemini', enabled: true },
-  { id: 'gemini-3-pro-preview', displayName: 'Gemini 3 Pro (Preview)', provider: 'gemini', enabled: true },
-  { id: 'openrouter/auto', displayName: 'OpenRouter Auto', provider: 'openrouter', enabled: true },
-  { id: 'meta-llama/llama-3.3-70b-instruct:free', displayName: 'Llama 3.3 70B (Free)', provider: 'openrouter', enabled: true },
-  { id: 'gpt-4o', displayName: 'GPT-4o', provider: 'codex', enabled: true },
-  { id: 'gpt-4o-mini', displayName: 'GPT-4o Mini', provider: 'codex', enabled: true },
-  { id: 'gpt-4-turbo', displayName: 'GPT-4 Turbo', provider: 'codex', enabled: true },
-]
+const DEFAULT_MODEL_INTERFACES: ModelInterface[] = []
 
 const MAX_PANELS = 5
 const MAX_EDITOR_PANELS = 20
@@ -2383,6 +2368,8 @@ export default function App() {
   const [modelConfig, setModelConfig] = useState<ModelConfig>(() => getInitialModelConfig())
   const [modelCatalogRefreshStatus, setModelCatalogRefreshStatus] = useState<ModelCatalogRefreshStatus | null>(null)
   const [modelCatalogRefreshPending, setModelCatalogRefreshPending] = useState(false)
+  const [modelPingResults, setModelPingResults] = useState<Record<string, { ok: boolean; durationMs: number; error?: string }>>({})
+  const [modelPingPending, setModelPingPending] = useState<Set<string>>(new Set())
   const [modelFormStatus, setModelFormStatus] = useState<string | null>(null)
   const [providerRegistry, setProviderRegistry] = useState<ProviderRegistry>(() => getInitialProviderRegistry())
   const [editingModel, setEditingModel] = useState<ModelInterface | null>(null)
@@ -3885,7 +3872,7 @@ export default function App() {
     }
   }
 
-  function isViewportNearBottom(viewport: HTMLElement, thresholdPx = 32) {
+  function isViewportNearBottom(viewport: HTMLElement, thresholdPx = 80) {
     const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
     return distanceFromBottom <= thresholdPx
   }
@@ -4211,8 +4198,13 @@ export default function App() {
       prev.map((w) => {
         if (w.id !== agentWindowId) return w
         const msgs = w.messages
-        const lastAssistantIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-        if (w.streaming && lastAssistantIdx >= 0) {
+        const roles = msgs.map((m) => m.role)
+        const lastAssistantIdx = roles.lastIndexOf('assistant')
+        const lastUserIdx = roles.lastIndexOf('user')
+        // Only append to the existing assistant message if it comes AFTER the last user message.
+        // If a user message was added after the last assistant message (i.e. a new turn just started),
+        // create a fresh assistant message so the response doesn't bleed into the previous turn.
+        if (w.streaming && lastAssistantIdx >= 0 && lastAssistantIdx > lastUserIdx) {
           const last = msgs[lastAssistantIdx]
           return {
             ...w,
@@ -5923,12 +5915,7 @@ export default function App() {
               }`}
               onClick={() => setDockTab('orchestrator')}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <rect x="2.5" y="8" width="19" height="11.5" rx="5.75" stroke="currentColor" strokeWidth="1.8" />
-                <path d="M5.5 8V4.5L8 8" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                <circle cx="9.2" cy="13.7" r="1.5" fill="currentColor" />
-                <circle cx="14.8" cy="13.7" r="1.5" fill="currentColor" />
-              </svg>
+            <VerticalTilingIcon />
             </button>
             <button
               type="button"
@@ -5990,20 +5977,10 @@ export default function App() {
             onClick={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
           >
             <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <rect x="2.2" y="2.3" width="11.6" height="11.4" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
-              {workspaceDockSide === 'right' ? (
-                <>
-                  <path d="M10 3.2H13V12.8H10Z" fill="currentColor" fillOpacity="0.3" />
-                  <path d="M7.7 8H4.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-                  <path d="M6 6.4L4.4 8L6 9.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-                </>
-              ) : (
-                <>
-                  <path d="M3 3.2H6V12.8H3Z" fill="currentColor" fillOpacity="0.3" />
-                  <path d="M8.3 8H11.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-                  <path d="M10 6.4L11.6 8L10 9.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-                </>
-              )}
+              <path d="M3 5.5H11.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+              <path d="M5.5 3.5L3 5.5L5.5 7.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M13 10.5H4.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+              <path d="M10.5 8.5L13 10.5L10.5 12.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
           <button
@@ -6107,20 +6084,10 @@ export default function App() {
               onClick={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
             >
               <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <rect x="2.2" y="2.3" width="11.6" height="11.4" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
-                {workspaceDockSide === 'right' ? (
-                  <>
-                    <path d="M10 3.2H13V12.8H10Z" fill="currentColor" fillOpacity="0.3" />
-                    <path d="M7.7 8H4.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-                    <path d="M6 6.4L4.4 8L6 9.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-                  </>
-                ) : (
-                  <>
-                    <path d="M3 3.2H6V12.8H3Z" fill="currentColor" fillOpacity="0.3" />
-                    <path d="M8.3 8H11.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-                    <path d="M10 6.4L11.6 8L10 9.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-                  </>
-                )}
+                <path d="M3 5.5H11.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+                <path d="M5.5 3.5L3 5.5L5.5 7.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M13 10.5H4.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+                <path d="M10.5 8.5L13 10.5L10.5 12.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
             <button
@@ -6596,28 +6563,41 @@ export default function App() {
 
   function formatConnectionError(e: unknown, provider?: string): string {
     const msg = e instanceof Error ? e.message : String(e)
+
+    // Codex
     if (msg.includes('codex app-server closed') || msg.includes('codex app-server')) {
-      return [
-        'Codex disconnected. Common causes:',
-        '- Run `codex app-server` in a terminal to check for errors',
-        '- Ensure logged in: `codex login`',
-        '- Try using fewer panels (each uses a separate Codex process)',
-        'Send another message to reconnect.',
-      ].join('\n')
+      return 'Codex disconnected. Run `codex app-server` in a terminal to debug, or `codex login` if needed. Send another message to reconnect.'
     }
+    if (provider === 'codex' && msg.includes('no activity for 120 seconds')) {
+      return 'Codex stopped responding (2 min). Try again or use fewer panels.'
+    }
+
+    // Claude — distinguish inactivity timeout (often network) from generic timeout
     if (msg.includes('timed out') && provider === 'claude') {
-      return [
-        'Claude turn timed out.',
-        'Common causes:',
-        '- No credits left: check your Claude subscription at claude.ai',
-        '- Claude CLI not in PATH: run `claude --version` in a terminal',
-        '- Slow network or API delay.',
-        'Send another message to retry.',
-      ].join('\n')
+      if (msg.includes('no activity for 120 seconds')) {
+        return 'Claude stopped responding (2 min). Usually network or API delay. Try again.'
+      }
+      return 'Claude timed out. Check credits at claude.ai or run `claude --version`. Send another message to retry.'
     }
+
+    // OpenAI / OpenRouter
+    if (msg.includes('API key') && (msg.includes('missing') || msg.includes('OpenAI') || msg.includes('OpenRouter'))) {
+      return 'API key missing. Add it in Settings → Connectivity.'
+    }
+    if ((provider === 'openai' || provider === 'openrouter') && msg.includes('timed out')) {
+      return 'Request timed out. Check your connection and retry.'
+    }
+
+    // Gemini
+    if (provider === 'gemini' && msg.includes('timed out')) {
+      return 'Gemini stopped responding. Check `gemini` CLI or try again.'
+    }
+
+    // Generic connection loss
     if (msg.includes('Not connected') || msg.includes('closed')) {
-      return `${msg}\n\nSend another message to reconnect.`
+      return 'Connection closed. Send another message to reconnect.'
     }
+
     return `Error: ${msg}`
   }
 
@@ -6744,6 +6724,7 @@ export default function App() {
   function kickQueuedMessage(winId: string) {
     let nextText = ''
     let snapshotForHistory: AgentPanelState | null = null
+    stickToBottomByPanelRef.current.set(winId, true)
     setPanels((prev) =>
       prev.map((x) => {
         if (x.id !== winId) return x
@@ -6993,6 +6974,7 @@ export default function App() {
           return updated
         }
         appendPanelDebug(winId, 'queue', 'Panel idle - sending immediately')
+        stickToBottomByPanelRef.current.set(winId, true)
         const userMessage: ChatMessage = {
           id: newId(),
           role: 'user',
@@ -8504,14 +8486,56 @@ export default function App() {
                     onClick={async () => {
                       setModelCatalogRefreshPending(true)
                       setModelCatalogRefreshStatus(null)
+                      setModelPingResults({})
+                      setModelPingPending(new Set())
                       try {
                         const available = await api.getAvailableModels()
-                        if (available.codex.length === 0 && available.claude.length === 0 && available.gemini.length === 0) {
-                          setModelCatalogRefreshStatus({ kind: 'error', message: 'Provider refresh failed: no models were returned.' })
+                        if (available.codex.length === 0 && available.claude.length === 0 && available.gemini.length === 0 && available.openrouter.length === 0) {
+                          setModelCatalogRefreshStatus({ kind: 'error', message: 'No models returned. Enable providers and try again.' })
                           return
                         }
                         setModelConfig((prev) => syncModelConfigWithCatalog(prev, available, providerRegistry))
-                        setModelCatalogRefreshStatus({ kind: 'success', message: 'Models refreshed from providers.' })
+                        const total = available.codex.length + available.claude.length + available.gemini.length + available.openrouter.length
+                        setModelCatalogRefreshStatus({ kind: 'success', message: `Found ${total} model${total === 1 ? '' : 's'}. Testing each...` })
+
+                        // Kick off pings for all discovered models in parallel (max 4 at a time).
+                        const allModels: { provider: string; id: string }[] = [
+                          ...available.gemini.map((m) => ({ provider: 'gemini', id: m.id })),
+                          ...available.claude.map((m) => ({ provider: 'claude', id: m.id })),
+                          ...available.codex.map((m) => ({ provider: 'codex', id: m.id })),
+                          ...available.openrouter.map((m) => ({ provider: 'openrouter', id: m.id })),
+                        ]
+                        setModelPingPending(new Set(allModels.map((m) => m.id)))
+
+                        const CONCURRENCY = 4
+                        const queue = [...allModels]
+                        let active = 0
+                        let done = 0
+                        const runNext = () => {
+                          while (active < CONCURRENCY && queue.length > 0) {
+                            const item = queue.shift()!
+                            active++
+                            ;(api.pingModel ? api.pingModel(item.provider, item.id) : Promise.resolve({ ok: true, durationMs: 0 }))
+                              .then((result) => {
+                                setModelPingResults((prev) => ({ ...prev, [item.id]: result }))
+                                setModelPingPending((prev) => { const next = new Set(prev); next.delete(item.id); return next })
+                              })
+                              .catch(() => {
+                                setModelPingResults((prev) => ({ ...prev, [item.id]: { ok: false, durationMs: 0, error: 'Ping failed' } }))
+                                setModelPingPending((prev) => { const next = new Set(prev); next.delete(item.id); return next })
+                              })
+                              .finally(() => {
+                                active--
+                                done++
+                                if (done === allModels.length) {
+                                  setModelCatalogRefreshStatus((prev) => prev?.kind === 'success' ? { kind: 'success', message: `${total} model${total === 1 ? '' : 's'} tested.` } : prev)
+                                } else {
+                                  runNext()
+                                }
+                              })
+                          }
+                        }
+                        runNext()
                       } catch (err) {
                         setModelCatalogRefreshStatus({ kind: 'error', message: `Provider refresh failed: ${formatError(err)}` })
                       } finally {
@@ -8640,9 +8664,24 @@ export default function App() {
                             key={m.id}
                             className="flex items-center justify-between px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-900"
                           >
-                            <div className="min-w-0">
+                            <div className="min-w-0 flex items-center gap-2">
+                              {(() => {
+                                const ping = modelPingResults[m.id]
+                                const pending = modelPingPending.has(m.id)
+                                if (pending) return (
+                                  <svg className="h-2.5 w-2.5 shrink-0 animate-spin text-neutral-400" viewBox="0 0 16 16" fill="none" aria-label="Testing...">
+                                    <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2" />
+                                    <path d="M8 2a6 6 0 0 1 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                  </svg>
+                                )
+                                if (!ping) return <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-neutral-300 dark:bg-neutral-600" title="Not tested" />
+                                return <span
+                                  className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${ping.ok ? 'bg-emerald-500' : 'bg-red-500'}`}
+                                  title={ping.ok ? `Working (${ping.durationMs}ms)` : (ping.error ?? 'Failed')}
+                                />
+                              })()}
                               <span className="font-medium break-all">{m.id}</span>
-                              <span className="text-xs text-neutral-500 dark:text-neutral-400 ml-2">{grp.label}</span>
+                              <span className="text-xs text-neutral-500 dark:text-neutral-400">{grp.label}</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <label
@@ -11000,10 +11039,9 @@ export default function App() {
               title={panels.length >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'Split panel'}
               aria-label="Split panel"
             >
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <rect x="8.25" y="2" width="1.5" height="14" rx="0.75" fill="currentColor" />
-                <path d="M6 9L2.5 6.5V11.5L6 9Z" fill="currentColor" />
-                <path d="M12 9L15.5 6.5V11.5L12 9Z" fill="currentColor" />
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-label="Split Panel">
+                <path d="M1 2.25C1 1.56 1.56 1 2.25 1h13.5c.69 0 1.25.56 1.25 1.25v13.5c0 .69-.56 1.25-1.25 1.25H2.25A1.25 1.25 0 0 1 1 15.75V2.25z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M9 2V16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
               </svg>
             </button>
             <button
@@ -11600,7 +11638,7 @@ export default function App() {
                   </div>
                 )}
                 {isLastUserMessage && (
-                  <div className="flex justify-end mt-1.5 -mb-0.5 -mr-1 gap-1 opacity-0 pointer-events-none transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
+                  <div className="flex justify-end mt-1.5 mb-0.5 mr-0.5 gap-1 opacity-0 pointer-events-none transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
                     {canResendLastUserMessage && (
                       <button
                         type="button"

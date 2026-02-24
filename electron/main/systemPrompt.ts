@@ -37,6 +37,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
   parts.push('')
   parts.push('## Behavioral rules')
   parts.push('- Prefer action over deferral: locate files, apply edits, report what changed.')
+  parts.push('- Do not run git commit, branch, or push unless the user explicitly asks you to.')
   parts.push('- Never invent file names, symbols, or behavior — verify via tools first.')
   parts.push('- Cite evidence (file paths, line numbers) in your answers.')
   parts.push('- Keep working until the task is done or a clear blocker is identified.')

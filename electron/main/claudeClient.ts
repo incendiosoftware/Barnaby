@@ -137,10 +137,13 @@ export class ClaudeClient extends EventEmitter {
   private turnResolve: ((text: string) => void) | null = null
   private turnReject: ((err: Error) => void) | null = null
 
+  private static TURN_INACTIVITY_TIMEOUT_MS = 120_000
+
   /** Per-turn state, reset at the start of each sendUserMessage. */
   private emittedTextLen = 0
   private seenToolUseIds = new Set<string>()
   private assistantText = ''
+  private turnInactivityTimer: ReturnType<typeof setTimeout> | null = null
 
   private normalizeModelId(model: string) {
     const trimmed = model.trim()
@@ -172,6 +175,24 @@ export class ClaudeClient extends EventEmitter {
 
   emitEvent(evt: ClaudeClientEvent) {
     this.emit('event', evt)
+  }
+
+  private resetTurnInactivityTimer() {
+    if (this.turnInactivityTimer) clearTimeout(this.turnInactivityTimer)
+    if (!this.turnReject) return
+    this.turnInactivityTimer = setTimeout(() => {
+      this.turnInactivityTimer = null
+      if (this.turnReject) {
+        this.rejectCurrentTurn(new Error('Claude turn timed out — no activity for 120 seconds.'))
+      }
+    }, ClaudeClient.TURN_INACTIVITY_TIMEOUT_MS)
+  }
+
+  private clearTurnInactivityTimer() {
+    if (this.turnInactivityTimer) {
+      clearTimeout(this.turnInactivityTimer)
+      this.turnInactivityTimer = null
+    }
   }
 
   /**
@@ -315,6 +336,7 @@ export class ClaudeClient extends EventEmitter {
 
   /** Parse and dispatch a single JSONL event line. */
   private processLine(line: string) {
+    this.resetTurnInactivityTimer()
     let evt: any
     try {
       evt = JSON.parse(line)
@@ -460,11 +482,14 @@ export class ClaudeClient extends EventEmitter {
         this.proc.stdin.write(userMsg, (err) => {
           if (err) reject(err)
         })
+        this.resetTurnInactivityTimer()
       })
 
+      this.clearTurnInactivityTimer()
       this.history.push({ role: 'assistant', text: result.trim() || result })
       this.emitEvent({ type: 'assistantCompleted' })
     } catch (e: unknown) {
+      this.clearTurnInactivityTimer()
       const msg = e instanceof Error ? e.message : String(e)
       if (this.isModelNotFoundError(msg) && this.model !== 'sonnet') {
         this.emitEvent({
@@ -492,8 +517,10 @@ export class ClaudeClient extends EventEmitter {
             this.proc.stdin.write(userMsg, (writeErr) => {
               if (writeErr) reject(writeErr)
             })
+            this.resetTurnInactivityTimer()
           })
 
+          this.clearTurnInactivityTimer()
           this.history.push({ role: 'assistant', text: fallbackResult.trim() || fallbackResult })
           this.emitEvent({ type: 'status', status: 'ready', message: `Connected (using ${this.model})` })
           this.emitEvent({ type: 'assistantCompleted' })
@@ -511,9 +538,7 @@ export class ClaudeClient extends EventEmitter {
   }
 
   async interruptActiveTurn() {
-    // For a persistent process, we don't kill the whole process — just
-    // signal an interruption. However, the CLI doesn't support SIGINT
-    // gracefully via stream-json, so we kill and let respawn handle it.
+    this.clearTurnInactivityTimer()
     if (this.turnResolve) {
       this.turnResolve(this.assistantText)
       this.turnResolve = null
@@ -523,6 +548,7 @@ export class ClaudeClient extends EventEmitter {
   }
 
   async close() {
+    this.clearTurnInactivityTimer()
     this.turnResolve = null
     this.turnReject = null
     await this.killProc()

@@ -2,9 +2,22 @@
   "permissions": {
     "allow": [
       "Shell(npm)",
-      "Read(**)",
-      "Write(**)"
+      "Shell(node)",
+      "Shell(esbuild)",
+      "Shell(esbuild.exe)",
+      "Shell(cmd)",
+      "Shell(cmd.exe)",
+      "Shell(npx)",
+      "Read(src/**)",
+      "Read(package.json**)",
+      "Write(src/**)",
+      "Write(package.json**)"
     ],
-    "deny": []
+    "deny": [
+      "Read(../**)",
+      "Read(.env**)",
+      "Write(../**)",
+      "Write(.env**)"
+    ]
   }
 }

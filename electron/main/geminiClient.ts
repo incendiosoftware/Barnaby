@@ -50,6 +50,28 @@ export class GeminiClient extends EventEmitter {
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeProc: ChildProcessWithoutNullStreams | null = null
 
+  private static TURN_INACTIVITY_TIMEOUT_MS = 120_000
+  private turnInactivityTimer: ReturnType<typeof setTimeout> | null = null
+
+  private resetTurnInactivityTimer() {
+    if (this.turnInactivityTimer) clearTimeout(this.turnInactivityTimer)
+    if (!this.activeProc) return
+    this.turnInactivityTimer = setTimeout(() => {
+      this.turnInactivityTimer = null
+      if (this.activeProc) {
+        this.emitEvent({ type: 'status', status: 'error', message: 'Gemini turn timed out — no activity for 120 seconds.' })
+        try { this.activeProc.kill() } catch { /* ignore */ }
+      }
+    }, GeminiClient.TURN_INACTIVITY_TIMEOUT_MS)
+  }
+
+  private clearTurnInactivityTimer() {
+    if (this.turnInactivityTimer) {
+      clearTimeout(this.turnInactivityTimer)
+      this.turnInactivityTimer = null
+    }
+  }
+
   private normalizeModelId(model: string) {
     const legacyMap: Record<string, string> = {
       'gemini-1.5-pro': 'pro',
@@ -177,6 +199,7 @@ export class GeminiClient extends EventEmitter {
             : spawn('gemini', args, spawnOpts)
 
         this.activeProc = proc
+        this.resetTurnInactivityTimer()
 
         proc.stdin.write(prompt)
         proc.stdin.end()
@@ -194,6 +217,7 @@ export class GeminiClient extends EventEmitter {
 
         proc.stdout.on('data', (chunk: string) => {
           if (!chunk) return
+          this.resetTurnInactivityTimer()
           stdoutBuffer += chunk
           const lines = stdoutBuffer.split('\n')
           stdoutBuffer = lines.pop() ?? ''
@@ -246,12 +270,20 @@ export class GeminiClient extends EventEmitter {
               case 'tool_result':
               case 'toolResult':
               case 'functionResponse': {
-                const status = evt.status === 'success' ? 'done' : (evt.status ?? 'done')
+                const toolStatus = evt.status ?? 'done'
+                const isError = toolStatus === 'error' || toolStatus === 'failure'
                 const output = typeof evt.output === 'string' ? evt.output
                   : typeof evt.result === 'string' ? evt.result
-                  : typeof evt.response === 'string' ? evt.response : ''
-                const short = output.length > 160 ? output.slice(0, 160) + '...' : output
-                this.emitEvent({ type: 'thinking', message: short || status })
+                  : typeof evt.response === 'string' ? evt.response
+                  : typeof evt.error === 'string' ? evt.error : ''
+                const toolName = evt.tool_name ?? evt.name ?? evt.toolName ?? 'tool'
+                if (isError || /^error/i.test(output)) {
+                  const errMsg = output.length > 300 ? output.slice(0, 300) + '...' : output
+                  this.emitEvent({ type: 'status', status: 'error', message: errMsg || `Tool "${toolName}" failed` })
+                } else {
+                  const short = output.length > 160 ? output.slice(0, 160) + '...' : output
+                  this.emitEvent({ type: 'thinking', message: short || toolStatus })
+                }
                 break
               }
               case 'thinking':
@@ -299,6 +331,7 @@ export class GeminiClient extends EventEmitter {
         })
 
         proc.stderr.on('data', (chunk: string) => {
+          this.resetTurnInactivityTimer()
           stderr += chunk
           const trimmed = chunk.trim()
           if (!trimmed) return
@@ -315,6 +348,7 @@ export class GeminiClient extends EventEmitter {
           }
         })
         proc.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+          this.clearTurnInactivityTimer()
           this.activeProc = null
           if (stdoutBuffer.trim()) {
             try {
@@ -371,6 +405,7 @@ export class GeminiClient extends EventEmitter {
   }
 
   async interruptActiveTurn() {
+    this.clearTurnInactivityTimer()
     if (!this.activeProc) return
     try {
       this.activeProc.kill()
@@ -407,98 +442,72 @@ export class GeminiClient extends EventEmitter {
   }
 
   /**
-   * Read Barnaby's MCP config and register any servers into Gemini CLI's own
-   * MCP registry via `gemini mcp add`.  Already-registered servers are skipped.
+   * Sync Barnaby's MCP config directly into Gemini CLI's settings.json.
+   * We write to the file directly instead of using `gemini mcp add` because
+   * the CLI's `-e KEY=VALUE` flag misparses values containing `=` (e.g.
+   * connection strings).
    */
   private async syncMcpServers(): Promise<void> {
     if (!this.mcpConfigPath || !fs.existsSync(this.mcpConfigPath)) {
       this.mcpServerNames = []
       return
     }
-    let config: { mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }> }
+    let barnabyConfig: { mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }> }
     try {
-      config = JSON.parse(fs.readFileSync(this.mcpConfigPath, 'utf8'))
+      barnabyConfig = JSON.parse(fs.readFileSync(this.mcpConfigPath, 'utf8'))
     } catch {
       this.mcpServerNames = []
       return
     }
-    if (!config.mcpServers || typeof config.mcpServers !== 'object') {
+    if (!barnabyConfig.mcpServers || typeof barnabyConfig.mcpServers !== 'object') {
       this.mcpServerNames = []
       return
     }
 
-    const existing = await this.listGeminiMcpServers()
-    const names: string[] = []
+    const geminiSettingsPath = path.join(process.env.USERPROFILE || process.env.HOME || '', '.gemini', 'settings.json')
+    let geminiSettings: Record<string, unknown> = {}
+    try {
+      if (fs.existsSync(geminiSettingsPath)) {
+        geminiSettings = JSON.parse(fs.readFileSync(geminiSettingsPath, 'utf8'))
+      }
+    } catch {
+      geminiSettings = {}
+    }
 
-    for (const [name, srv] of Object.entries(config.mcpServers)) {
+    const existingMcp = (geminiSettings.mcpServers ?? {}) as Record<string, unknown>
+    const names: string[] = []
+    let changed = false
+
+    for (const [name, srv] of Object.entries(barnabyConfig.mcpServers)) {
       if (srv.enabled === false) continue
       names.push(name)
-      if (existing.has(name)) continue
 
-      const addArgs = ['mcp', 'add', '--scope', 'user', '--trust', name, srv.command]
-      if (srv.args?.length) addArgs.push(...srv.args)
+      const geminiEntry: Record<string, unknown> = {
+        command: srv.command,
+        args: srv.args ?? [],
+        trust: true,
+      }
       if (srv.env && Object.keys(srv.env).length > 0) {
-        for (const [k, v] of Object.entries(srv.env)) {
-          addArgs.push('-e', `${k}=${v}`)
-        }
+        geminiEntry.env = { ...srv.env }
       }
 
-      try {
-        await this.runGeminiCommand(addArgs)
-        this.emitEvent({ type: 'thinking', message: `Registered MCP server "${name}" with Gemini CLI` })
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        this.emitEvent({ type: 'thinking', message: `Failed to register MCP server "${name}": ${msg}` })
+      const existingJson = JSON.stringify(existingMcp[name] ?? null)
+      const newJson = JSON.stringify(geminiEntry)
+      if (existingJson !== newJson) {
+        existingMcp[name] = geminiEntry
+        changed = true
+        this.emitEvent({ type: 'thinking', message: `Synced MCP server "${name}" to Gemini CLI` })
       }
+    }
+
+    if (changed) {
+      geminiSettings.mcpServers = existingMcp
+      const dir = path.dirname(geminiSettingsPath)
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(geminiSettingsPath, JSON.stringify(geminiSettings, null, 2), 'utf8')
     }
 
     this.mcpServerNames = names
-  }
-
-  private async listGeminiMcpServers(): Promise<Set<string>> {
-    try {
-      const output = await this.runGeminiCommand(['mcp', 'list'])
-      const names = new Set<string>()
-      for (const line of output.split('\n')) {
-        const trimmed = line.trim()
-        if (!trimmed || /no mcp servers/i.test(trimmed) || /loaded cached/i.test(trimmed)) continue
-        const match = trimmed.match(/^[\s-]*(\S+)/)
-        if (match) names.add(match[1])
-      }
-      return names
-    } catch {
-      return new Set()
-    }
-  }
-
-  private runGeminiCommand(args: string[]): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const env = getGeminiSpawnEnv()
-      const proc =
-        process.platform === 'win32'
-          ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
-              cwd: this.cwd,
-              stdio: ['ignore', 'pipe', 'pipe'],
-              env,
-              windowsHide: true,
-            } as object)
-          : spawn('gemini', args, {
-              cwd: this.cwd,
-              stdio: ['ignore', 'pipe', 'pipe'],
-              env,
-            })
-      let stdout = ''
-      let stderr = ''
-      proc.stdout?.setEncoding('utf8')
-      proc.stderr?.setEncoding('utf8')
-      proc.stdout?.on('data', (c: string) => { stdout += c })
-      proc.stderr?.on('data', (c: string) => { stderr += c })
-      proc.on('error', reject)
-      proc.on('exit', (code) => {
-        if (code === 0) resolve(stdout)
-        else reject(new Error(stderr.trim() || `gemini exited with code ${code}`))
-      })
-    })
   }
 
   private async assertGeminiCliAvailable() {

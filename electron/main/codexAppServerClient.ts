@@ -63,8 +63,31 @@ export class CodexAppServerClient extends EventEmitter {
   private deniedAutoWritePrefixes: string[] = []
   private lastStderr = ''
 
+  private static TURN_INACTIVITY_TIMEOUT_MS = 120_000
+  private turnInactivityTimer: ReturnType<typeof setTimeout> | null = null
+
   emitEvent(evt: FireHarnessCodexEvent) {
     this.emit('event', evt)
+  }
+
+  private resetTurnInactivityTimer() {
+    if (this.turnInactivityTimer) clearTimeout(this.turnInactivityTimer)
+    if (!this.activeTurnId) return
+    this.turnInactivityTimer = setTimeout(() => {
+      this.turnInactivityTimer = null
+      if (this.activeTurnId) {
+        this.activeTurnId = null
+        this.emitEvent({ type: 'status', status: 'error', message: 'OpenAI turn timed out — no activity for 120 seconds.' })
+        this.emitEvent({ type: 'assistantCompleted' })
+      }
+    }, CodexAppServerClient.TURN_INACTIVITY_TIMEOUT_MS)
+  }
+
+  private clearTurnInactivityTimer() {
+    if (this.turnInactivityTimer) {
+      clearTimeout(this.turnInactivityTimer)
+      this.turnInactivityTimer = null
+    }
   }
 
   isConnected() {
@@ -173,6 +196,7 @@ export class CodexAppServerClient extends EventEmitter {
     })
     const turnId = (turnStart as any)?.turn?.id
     if (turnId && typeof turnId === 'string') this.activeTurnId = turnId
+    this.resetTurnInactivityTimer()
   }
 
   async sendUserMessageWithImages(text: string, localImagePaths: string[]) {
@@ -191,14 +215,17 @@ export class CodexAppServerClient extends EventEmitter {
     })
     const turnId = (turnStart as any)?.turn?.id
     if (turnId && typeof turnId === 'string') this.activeTurnId = turnId
+    this.resetTurnInactivityTimer()
   }
 
   async interruptActiveTurn() {
+    this.clearTurnInactivityTimer()
     if (!this.threadId || !this.activeTurnId) return
     await this.sendRequest('turn/interrupt', { threadId: this.threadId, turnId: this.activeTurnId })
   }
 
   async close() {
+    this.clearTurnInactivityTimer()
     if (!this.proc) return
 
     // Best-effort: closing stdin usually tells the server to exit.
@@ -218,6 +245,7 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private cleanupAfterExit() {
+    this.clearTurnInactivityTimer()
     this.rl?.close()
     this.rl = null
     this.proc = null
@@ -324,7 +352,8 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private handleNotification(method: string, params: any) {
-    // Core chat streaming
+    if (this.activeTurnId) this.resetTurnInactivityTimer()
+
     if (method === 'item/agentMessage/delta') {
       const delta =
         typeof params?.delta === 'string'
@@ -366,6 +395,7 @@ export class CodexAppServerClient extends EventEmitter {
     }
 
     if (method === 'turn/completed') {
+      this.clearTurnInactivityTimer()
       this.activeTurnId = null
       this.emitEvent({ type: 'assistantCompleted' })
       return

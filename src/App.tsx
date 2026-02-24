@@ -894,7 +894,7 @@ const INPUT_MAX_HEIGHT_PX = 220
 const DEFAULT_EXPLORER_PREFS: ExplorerPrefs = { showHiddenFiles: false, showNodeModules: false }
 const CONNECT_TIMEOUT_MS = 30000
 const TURN_START_TIMEOUT_MS = 300000
-const STALL_WATCHDOG_MS = 360000
+const STALL_WATCHDOG_MS = 180000
 const COLLAPSIBLE_CODE_MIN_LINES = 14
 
 function looksLikeDiff(code: string): boolean {
@@ -2073,6 +2073,22 @@ function isTurnCompletionRawNotification(method: string, params: any): boolean {
 
 const LIMIT_WARNING_PREFIX = 'Warning (Limits):'
 
+function isPermissionEscalationMessage(message: string): boolean {
+  const lower = message.trim().toLowerCase()
+  if (!lower) return false
+  return (
+    lower.includes('approval requested') ||
+    lower.includes('action requires approval') ||
+    lower.includes('requires approval') ||
+    lower.includes('set permissions to proceed always') ||
+    lower.includes('write denied in verify-first mode') ||
+    lower.includes('command execution denied in verify-first mode') ||
+    (lower.includes('verify-first') &&
+      (lower.includes('permission') || lower.includes('write') || lower.includes('command')) &&
+      (lower.includes('denied') || lower.includes('approval')))
+  )
+}
+
 function isUsageLimitMessage(message: string): boolean {
   const lower = message.toLowerCase()
   return (
@@ -2360,6 +2376,7 @@ export default function App() {
   const [providerAuthLoadingByName, setProviderAuthLoadingByName] = useState<Record<string, boolean>>({})
   const [providerAuthActionByName, setProviderAuthActionByName] = useState<Record<string, string | null>>({})
   const [providerVerifiedByName, setProviderVerifiedByName] = useState<Record<string, boolean>>({})
+  const [providerPingDurationByName, setProviderPingDurationByName] = useState<Record<string, number | null>>({})
   const [providerPanelOpenByName, setProviderPanelOpenByName] = useState<Record<string, boolean>>({})
   const [providerApiKeyDraftByName, setProviderApiKeyDraftByName] = useState<Record<string, string>>({})
   const [providerApiKeyStateByName, setProviderApiKeyStateByName] = useState<Record<string, boolean>>({})
@@ -2912,7 +2929,9 @@ export default function App() {
   const showDockedAppSettings = showCodeWindow && codeWindowTab === 'settings'
 
   // Warm up provider auth status on startup so status dots are available immediately.
-  // Runs once after mount; checks happen in parallel in the background.
+  // Times the auth check; for providers with a deeper ping (claude, codex) runs that too.
+  // Gemini's auth check is already --version, so a separate ping would be redundant.
+  const PROVIDERS_WITH_DEDICATED_PING = new Set(['claude', 'codex'])
   const startupAuthCheckedRef = useRef(false)
   useEffect(() => {
     if (startupAuthCheckedRef.current) return
@@ -2921,7 +2940,24 @@ export default function App() {
     void Promise.all(
       resolvedProviderConfigs
         .filter((config) => config.enabled)
-        .map((config) => refreshProviderAuthStatus(config)),
+        .map(async (config) => {
+          const authStart = Date.now()
+          const status = await refreshProviderAuthStatus(config)
+          const authDurationMs = Date.now() - authStart
+          if (!status?.authenticated) return
+          if (PROVIDERS_WITH_DEDICATED_PING.has(config.id) && api.pingProvider) {
+            try {
+              const ping = await api.pingProvider(config.id)
+              setProviderPingDurationByName((prev) => ({ ...prev, [config.id]: ping.durationMs }))
+              if (ping.ok) {
+                setProviderVerifiedByName((prev) => prev[config.id] ? prev : { ...prev, [config.id]: true })
+              }
+            } catch { /* ping failed - leave as amber */ }
+          } else {
+            setProviderPingDurationByName((prev) => ({ ...prev, [config.id]: authDurationMs }))
+            setProviderVerifiedByName((prev) => prev[config.id] ? prev : { ...prev, [config.id]: true })
+          }
+        }),
     )
   }, [resolvedProviderConfigs])
 
@@ -4264,6 +4300,18 @@ export default function App() {
     })
   }
 
+  function seedPanelActivity(agentWindowId: string) {
+    const prev = activityLatestRef.current.get(agentWindowId)
+    const seed: PanelActivityState = {
+      lastEventAt: Date.now(),
+      lastEventLabel: prev?.lastEventLabel ?? 'Turn started',
+      totalEvents: prev?.totalEvents ?? 0,
+      recent: prev?.recent ?? [],
+    }
+    activityLatestRef.current.set(agentWindowId, seed)
+    setPanelActivityById((prevState) => ({ ...prevState, [agentWindowId]: seed }))
+  }
+
   function markPanelActivity(agentWindowId: string, evt: any) {
     const prev = activityLatestRef.current.get(agentWindowId)
     const entry = describeActivityEntry(evt)
@@ -5002,7 +5050,22 @@ export default function App() {
     await Promise.all(
       resolvedProviderConfigs
         .filter((config) => config.id !== 'openrouter')
-        .map((config) => refreshProviderAuthStatus(config)),
+        .map(async (config) => {
+          const authStart = Date.now()
+          const s = await refreshProviderAuthStatus(config)
+          const authDurationMs = Date.now() - authStart
+          if (!s?.authenticated) return
+          if (PROVIDERS_WITH_DEDICATED_PING.has(config.id) && api.pingProvider) {
+            try {
+              const ping = await api.pingProvider(config.id)
+              setProviderPingDurationByName((prev) => ({ ...prev, [config.id]: ping.durationMs }))
+              if (ping.ok) setProviderVerifiedByName((prev) => prev[config.id] ? prev : { ...prev, [config.id]: true })
+            } catch { /* ignore */ }
+          } else {
+            setProviderPingDurationByName((prev) => ({ ...prev, [config.id]: authDurationMs }))
+            setProviderVerifiedByName((prev) => prev[config.id] ? prev : { ...prev, [config.id]: true })
+          }
+        }),
     )
   }
 
@@ -6559,34 +6622,40 @@ export default function App() {
   }
 
   async function sendToAgent(winId: string, text: string, imagePaths: string[] = []) {
-    const w = panels.find((x) => x.id === winId)
-    if (!w) return
+    const w = panelsRef.current.find((x) => x.id === winId)
+    if (!w) {
+      setPanels((prev) => prev.map((x) => x.id !== winId ? x : { ...x, streaming: false, status: 'Panel not found – message dropped.' }))
+      return
+    }
     const interactionMode = parseInteractionMode(w.interactionMode)
     const provider = getModelProvider(w.model)
 
-    // Resolve @file mentions (mode instructions are now in system prompt, not prepended)
-    const resolvedText = await (async () => {
-      const mentions = Array.from(text.matchAll(/@([^\s]+)/g))
-      if (mentions.length === 0) return text
+    if (text.trim() !== AUTO_CONTINUE_PROMPT || !activePromptStartedAtRef.current.has(winId)) {
+      activePromptStartedAtRef.current.set(winId, Date.now())
+    }
 
-      let context = ''
-      for (const match of mentions) {
-        const path = match[1]
-        try {
-          const file = await api.readWorkspaceTextFile(workspaceRoot, path)
-          context += `\n\nFile: ${path}\n\`\`\`\n${file.content}\n\`\`\``
-        } catch {
-          // Ignore invalid paths
+    // Resolve @file mentions (mode instructions are now in system prompt, not prepended)
+    let resolvedText = text
+    try {
+      const mentions = Array.from(text.matchAll(/@([^\s]+)/g))
+      if (mentions.length > 0) {
+        let context = ''
+        for (const match of mentions) {
+          const path = match[1]
+          try {
+            const file = await api.readWorkspaceTextFile(workspaceRoot, path)
+            context += `\n\nFile: ${path}\n\`\`\`\n${file.content}\n\`\`\``
+          } catch {
+            // Ignore invalid paths
+          }
         }
+        resolvedText = text + context
       }
-      return text + context
-    })()
+    } catch {
+      // Fall back to raw text if mention resolution fails
+    }
 
     try {
-      // Measure total elapsed time for a user prompt, including auth/connect delays.
-      if (text.trim() !== AUTO_CONTINUE_PROMPT || !activePromptStartedAtRef.current.has(winId)) {
-        activePromptStartedAtRef.current.set(winId, Date.now())
-      }
       appendPanelDebug(winId, 'send', `Received user message (${text.length} chars)`)
       setPanels((prev) =>
         prev.map((x) =>
@@ -6700,6 +6769,8 @@ export default function App() {
       }),
     )
     if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
+    seedPanelActivity(winId)
+    markPanelActivity(winId, { type: 'turnStart' })
     if (nextText) {
       clearPanelTurnComplete(winId)
       void sendToAgent(winId, nextText)
@@ -6734,6 +6805,8 @@ export default function App() {
       }),
     )
     if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
+    seedPanelActivity(winId)
+    markPanelActivity(winId, { type: 'turnStart' })
     if (!textToInject) return
     clearPanelTurnComplete(winId)
     void sendToAgent(winId, textToInject)
@@ -6941,6 +7014,8 @@ export default function App() {
       }),
     )
     if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
+    seedPanelActivity(winId)
+    markPanelActivity(winId, { type: 'turnStart' })
     if (draftEdit) {
       setInputDraftEditByPanel((prev) => ({ ...prev, [winId]: null }))
     }
@@ -6958,6 +7033,7 @@ export default function App() {
     setResendingPanelId(winId)
     setTimeout(() => setResendingPanelId(null), 1200)
     clearPanelTurnComplete(winId)
+    stickToBottomByPanelRef.current.set(winId, true)
     setPanels((prev) =>
       prev.map((x) =>
         x.id !== winId
@@ -6965,7 +7041,64 @@ export default function App() {
           : { ...x, streaming: true, status: 'Resending...' },
       ),
     )
+    seedPanelActivity(winId)
+    markPanelActivity(winId, { type: 'turnStart' })
+    setTimeout(() => {
+      const viewport = messageViewportRefs.current.get(winId)
+      if (viewport) viewport.scrollTop = viewport.scrollHeight
+    }, 50)
     void sendToAgent(winId, lastUserMsg.content)
+  }
+
+  function grantPermissionAndResend(panelId: string) {
+    const panel = panelsRef.current.find((p) => p.id === panelId)
+    if (!panel || panel.streaming) return
+    const limits = getWorkspaceSecurityLimitsForPath(panel.cwd)
+    if (limits.sandbox === 'read-only') {
+      setPanels((prev) =>
+        prev.map((p) =>
+          p.id !== panelId
+            ? p
+            : {
+                ...p,
+                status: 'Permissions are disabled because workspace sandbox is Read only.',
+              },
+        ),
+      )
+      return
+    }
+
+    if (limits.permissionMode === 'verify-first') {
+      setPanels((prev) =>
+        prev.map((p) =>
+          p.id !== panelId
+            ? p
+            : {
+                ...p,
+                permissionMode: 'verify-first',
+                status: 'Permissions are locked to Verify first by Workspace settings.',
+              },
+        ),
+      )
+      return
+    }
+
+    setPanels((prev) =>
+      prev.map((p) =>
+        p.id !== panelId
+          ? p
+          : (() => {
+              const clamped = clampPanelSecurityForWorkspace(p.cwd, p.sandbox, 'proceed-always')
+              return {
+                ...p,
+                permissionMode: clamped.permissionMode,
+                connected: false,
+                status: 'Permissions set: Proceed always (reconnect on next send).',
+              }
+            })(),
+      ),
+    )
+    setTimeout(() => resendLastUserMessage(panelId), 0)
   }
 
   async function closePanel(panelId: string, opts?: { skipUpsertToHistory?: boolean }) {
@@ -8919,6 +9052,13 @@ export default function App() {
                               )}
                             </span>
                             <div className={`px-2 py-0.5 rounded-full text-[11px] border ${statusClass}`}>{statusLabel}</div>
+                            {providerPingDurationByName[config.id] != null && (
+                              <span className="text-[10px] text-neutral-500 dark:text-neutral-400" title="Startup ping round-trip time">
+                                {providerPingDurationByName[config.id]! < 1000
+                                  ? `${providerPingDurationByName[config.id]}ms`
+                                  : `${(providerPingDurationByName[config.id]! / 1000).toFixed(1)}s`}
+                              </span>
+                            )}
                           </div>
                           <svg
                             width="14"
@@ -9200,7 +9340,22 @@ export default function App() {
                                   type="button"
                                   className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                                   disabled={loading}
-                                  onClick={() => void refreshProviderAuthStatus(config)}
+                                  onClick={async () => {
+                                    const authStart = Date.now()
+                                    const s = await refreshProviderAuthStatus(config)
+                                    const authDurationMs = Date.now() - authStart
+                                    if (!s?.authenticated) return
+                                    if (PROVIDERS_WITH_DEDICATED_PING.has(config.id) && api.pingProvider) {
+                                      try {
+                                        const ping = await api.pingProvider(config.id)
+                                        setProviderPingDurationByName((prev) => ({ ...prev, [config.id]: ping.durationMs }))
+                                        if (ping.ok) setProviderVerifiedByName((prev) => prev[config.id] ? prev : { ...prev, [config.id]: true })
+                                      } catch { /* ignore */ }
+                                    } else {
+                                      setProviderPingDurationByName((prev) => ({ ...prev, [config.id]: authDurationMs }))
+                                      setProviderVerifiedByName((prev) => prev[config.id] ? prev : { ...prev, [config.id]: true })
+                                    }
+                                  }}
                                 >
                                   {loading ? 'Checking...' : 'Re-check'}
                                 </button>
@@ -10141,7 +10296,16 @@ export default function App() {
                             } />
                             {providerId === 'openrouter' ? 'OpenRouter (Free Models)' : config.displayName}
                           </div>
-                          <div className="text-xs text-neutral-600 dark:text-neutral-400">{statusText}</div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs text-neutral-600 dark:text-neutral-400">{statusText}</span>
+                            {providerPingDurationByName[providerId] != null && (
+                              <span className="text-[10px] text-neutral-500 dark:text-neutral-400" title="Ping round-trip time">
+                                {providerPingDurationByName[providerId]! < 1000
+                                  ? `${providerPingDurationByName[providerId]}ms`
+                                  : `${(providerPingDurationByName[providerId]! / 1000).toFixed(1)}s`}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         {config.type === 'api' && (
                           <div className="flex items-center gap-2">
@@ -10162,7 +10326,22 @@ export default function App() {
                           <button
                             className={UI_BUTTON_SECONDARY_CLASS}
                             disabled={loading}
-                            onClick={() => void refreshProviderAuthStatus(config)}
+                            onClick={async () => {
+                              const authStart = Date.now()
+                              const s = await refreshProviderAuthStatus(config)
+                              const authDurationMs = Date.now() - authStart
+                              if (!s?.authenticated) return
+                              if (PROVIDERS_WITH_DEDICATED_PING.has(config.id) && api.pingProvider) {
+                                try {
+                                  const ping = await api.pingProvider(config.id)
+                                  setProviderPingDurationByName((prev) => ({ ...prev, [config.id]: ping.durationMs }))
+                                  if (ping.ok) setProviderVerifiedByName((prev) => prev[config.id] ? prev : { ...prev, [config.id]: true })
+                                } catch { /* ignore */ }
+                              } else {
+                                setProviderPingDurationByName((prev) => ({ ...prev, [config.id]: authDurationMs }))
+                                setProviderVerifiedByName((prev) => prev[config.id] ? prev : { ...prev, [config.id]: true })
+                              }
+                            }}
                           >
                             {loading ? 'Checking...' : 'Re-check'}
                           </button>
@@ -11008,6 +11187,11 @@ export default function App() {
             }
             const isDebugSystemNote = m.role === 'system' && /^Debug \(/.test(m.content)
             const isLimitSystemWarning = m.role === 'system' && m.content.startsWith(LIMIT_WARNING_PREFIX)
+            const isApprovalRequiredMessage = m.role === 'system' && isPermissionEscalationMessage(m.content)
+            const canShowGrantPermissionButton =
+              isApprovalRequiredMessage &&
+              !w.streaming &&
+              w.permissionMode !== 'proceed-always'
             const codeUnitPinned = Boolean(timelinePinnedCodeByUnitId[unit.id])
             const isCodeLifecycleUnit = unit.kind === 'code'
             const hasFencedCodeBlocks = m.content.includes('```')
@@ -11173,7 +11357,7 @@ export default function App() {
                                         <SyntaxHighlighter
                                           language={lang}
                                           style={activeTheme.mode === 'dark' ? oneDark : oneLight}
-                                          customStyle={{ margin: 0, padding: '0.75rem', maxHeight: '20rem', fontSize: '12px', background: activeTheme.mode === 'dark' ? 'rgba(10, 10, 10, 0.5)' : 'rgba(255, 255, 255, 0.5)' }}
+                                          customStyle={{ margin: 0, padding: '0.75rem', maxHeight: '20rem', overflow: 'auto', fontSize: '12px', background: activeTheme.mode === 'dark' ? 'rgba(10, 10, 10, 0.5)' : 'rgba(255, 255, 255, 0.5)' }}
                                           showLineNumbers={true}
                                           wrapLines={false}
                                         >
@@ -11308,7 +11492,7 @@ export default function App() {
                                         <SyntaxHighlighter
                                           language={lang}
                                           style={activeTheme.mode === 'dark' ? oneDark : oneLight}
-                                          customStyle={{ margin: 0, padding: '0.75rem', maxHeight: '20rem', fontSize: '12px', background: activeTheme.mode === 'dark' ? 'rgba(10, 10, 10, 0.5)' : 'rgba(255, 255, 255, 0.5)' }}
+                                          customStyle={{ margin: 0, padding: '0.75rem', maxHeight: '20rem', overflow: 'auto', fontSize: '12px', background: activeTheme.mode === 'dark' ? 'rgba(10, 10, 10, 0.5)' : 'rgba(255, 255, 255, 0.5)' }}
                                           showLineNumbers={true}
                                           wrapLines={false}
                                         >
@@ -11359,7 +11543,22 @@ export default function App() {
                       isDebugSystemNote ? 'italic text-red-800 dark:text-red-200' : ''
                     }`}
                   >
-                    {m.content}
+                    {canShowGrantPermissionButton ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                          {m.content}
+                        </span>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded border border-blue-300 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-200 dark:hover:bg-blue-900/40"
+                          onClick={() => grantPermissionAndResend(w.id)}
+                        >
+                          Grant Permission
+                        </button>
+                      </div>
+                    ) : (
+                      m.content
+                    )}
                   </div>
                 ) : null}
                 {m.attachments && m.attachments.length > 0 && (
@@ -11571,46 +11770,53 @@ export default function App() {
               }}
               onContextMenu={onInputPanelContextMenu}
             />
-            <button
-              className={[
-                'h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-full border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-                isBusy
-                  ? hasInput
-                    ? 'border-neutral-400 bg-neutral-200 text-neutral-700 hover:bg-neutral-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-600'
-                    : 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/60'
-                  : !hasInput && isFinalComplete
-                    ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
-                  : hasInput
-                    ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
-                    : 'border-neutral-300 bg-neutral-100 text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-600',
-              ].join(' ')}
-              onClick={() => sendMessage(w.id)}
-              disabled={!hasInput}
-              title={sendTitle}
-            >
-              {isBusy && !hasInput ? (
-                <svg
-                  width="18"
-                  height="18"
-                  viewBox="0 0 20 20"
-                  fill="none"
-                  className="animate-spin motion-reduce:animate-none"
-                >
-                  <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeOpacity="0.28" strokeWidth="2" />
-                  <path d="M10 3.5a6.5 6.5 0 0 1 6.5 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              ) : !hasInput && isFinalComplete ? (
-                <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-                  <path d="M5.2 10.2L8.5 13.5L14.8 7.2" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              ) : (
-                <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-                  <path d="M10 4V13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  <path d="M6.5 7.5L10 4l3.5 3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M4 16h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
+            <div className="shrink-0 flex flex-col items-center gap-0.5">
+              {livePromptDurationLabel && (
+                <span className="text-[10px] font-mono leading-none text-neutral-500 dark:text-neutral-400" title="Response duration">
+                  {livePromptDurationLabel}
+                </span>
               )}
-            </button>
+              <button
+                className={[
+                  'h-8 w-8 inline-flex items-center justify-center rounded-full border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                  isBusy
+                    ? hasInput
+                      ? 'border-neutral-400 bg-neutral-200 text-neutral-700 hover:bg-neutral-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-600'
+                      : 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/60'
+                    : !hasInput && isFinalComplete
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
+                    : hasInput
+                      ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
+                      : 'border-neutral-300 bg-neutral-100 text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-600',
+                ].join(' ')}
+                onClick={() => sendMessage(w.id)}
+                disabled={!hasInput}
+                title={sendTitle}
+              >
+                {isBusy && !hasInput ? (
+                  <svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    className="animate-spin motion-reduce:animate-none"
+                  >
+                    <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeOpacity="0.28" strokeWidth="2" />
+                    <path d="M10 3.5a6.5 6.5 0 0 1 6.5 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                ) : !hasInput && isFinalComplete ? (
+                  <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                    <path d="M5.2 10.2L8.5 13.5L14.8 7.2" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                    <path d="M10 4V13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                    <path d="M6.5 7.5L10 4l3.5 3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M4 16h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                )}
+              </button>
+            </div>
           </div>
           <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 min-w-0 text-xs">
             <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2 text-neutral-600 dark:text-neutral-300">
@@ -11635,7 +11841,6 @@ export default function App() {
                       strokeDashoffset={`${2 * Math.PI * 6 * (1 - Math.max(0, Math.min(100, contextUsagePercent)) / 100)}`}
                     />
                   </svg>
-                  <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{contextUsagePercent.toFixed(0)}%</span>
                 </div>
               )}
               <span
@@ -11656,11 +11861,6 @@ export default function App() {
                 >
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
                   complete
-                </span>
-              )}
-              {livePromptDurationLabel && (
-                <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400" title="Response duration">
-                  t+{livePromptDurationLabel}
                 </span>
               )}
               {(() => {
@@ -11879,7 +12079,6 @@ export default function App() {
                       />
                     )
                   })()}
-                  <span className="text-[11px] text-neutral-600 dark:text-neutral-400">Model</span>
                   <select
                     className="h-7 max-w-full text-[11px] rounded border border-neutral-300 bg-white text-neutral-900 px-1.5 py-0.5 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
                     value={w.model}

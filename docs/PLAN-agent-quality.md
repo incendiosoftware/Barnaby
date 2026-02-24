@@ -194,6 +194,108 @@ Low-medium individually, but compounds with the other phases.
 
 ---
 
+## Phase 6: Multi-Agent Orchestration — NOT YET STARTED
+
+**Goal:** Enable Barnaby to break complex tasks into sub-tasks and delegate them to multiple specialised agents running in parallel, coordinated by an orchestrator.
+
+*Inspired by multi-agent swarm architectures (e.g. Overstory) where a single coordinator fans work out to team leads, builders, and reviewers working in isolated git worktrees.*
+
+### Part A: Agent-to-Orchestrator Communication Protocol
+
+Sub-agents need a well-defined way to talk back to the orchestrator. Messages fall into three categories:
+
+**Lifecycle signals** (mandatory — the orchestrator needs these to function):
+
+| Signal | Meaning |
+|--------|---------|
+| `completed` | Agent finished its task. Includes a summary of what changed. |
+| `failed` | Agent could not complete the task. Includes the reason. |
+| `progress` | Incremental status update (current step, files touched so far). |
+
+**Requests** (the agent asks the orchestrator to do something):
+
+| Signal | Meaning |
+|--------|---------|
+| `need_context` | Agent needs information outside its scope (a file, a design decision). |
+| `escalate` | A decision is above the agent's authority — orchestrator must decide. |
+| `spawn_subtask` | Agent discovered a sub-problem that needs its own focused agent. |
+| `blocked_by` | Agent cannot proceed until another agent's work is complete. |
+| `request_review` | Agent's changes are ready for a reviewer to evaluate. |
+
+**Reports** (informational — no immediate action required):
+
+| Signal | Meaning |
+|--------|---------|
+| `discovered_issue` | Found a bug or problem unrelated to the current task. |
+| `scope_warning` | Task is larger or different than originally estimated. |
+
+**Message format:** structured envelope with a typed signal and natural-language payload.
+
+```typescript
+interface AgentMessage {
+  type: 'lifecycle' | 'request' | 'report'
+  signal: 'completed' | 'failed' | 'progress'
+        | 'need_context' | 'escalate' | 'spawn_subtask' | 'blocked_by' | 'request_review'
+        | 'discovered_issue' | 'scope_warning'
+  body: string   // free-form text the orchestrator interprets
+  agentId: string
+  timestamp: number
+}
+```
+
+This keeps the protocol machine-parseable (the orchestrator can switch on `type` and `signal`) while allowing rich, unstructured detail in `body`.
+
+### Part B: Role-Based Agent Types (Hybrid Model)
+
+Rather than fully predefined roles (rigid) or fully dynamic roles (unpredictable), use a **hybrid approach**: a small set of role templates that control tool access and core constraints, with the orchestrator filling in task-specific instructions per agent.
+
+**Role templates:**
+
+| Role | `list` / `search` / `read` | `write` | `shell` | Core constraint |
+|------|----------------------------|---------|---------|-----------------|
+| **Coordinator** | Yes | No | No | Plans and delegates only. Never edits code directly. Monitors agent lifecycle and manages merges. |
+| **Builder** | Yes | Yes | Yes | Focused on a single task scope. Must report back when done. |
+| **Reviewer** | Yes | No | Yes (tests only) | Evaluates builder output. Can approve, reject, or request changes. Cannot modify code. |
+| **Researcher** | Yes | No | No | Gathers context and reports findings. No side effects. |
+
+**Enforcement:** Tool restrictions are applied at the `AgentToolRunner` level by passing a filtered subset of the 5 existing tools based on the agent's role. This is not just a prompt instruction — the tools are literally absent from the agent's tool list, so the model cannot call them.
+
+**Orchestrator workflow:**
+
+1. Receives a complex task from the user
+2. Breaks it into sub-tasks (optionally spawning a Researcher first to gather context)
+3. For each sub-task, selects a role template and writes task-specific instructions
+4. Spawns agents (parallel API calls from the Electron app)
+5. Monitors agent messages, handles requests, resolves blockers
+6. When a Builder signals `request_review`, spawns a Reviewer for that work
+7. On approval, merges changes back (git worktree merge or sequential apply)
+
+### Key design decisions still open
+
+- **Git isolation strategy** — Use git worktrees for true parallel work, or sequential agents on a single branch? Worktrees are cleaner but add complexity.
+- **Cost controls** — Max agents, max rounds per agent, and total token budget caps to prevent runaway swarms.
+- **UI representation** — How does the Barnaby frontend visualise multiple agents? A dashboard view? Nested timelines? Agent cards with status badges?
+- **Session model** — Does each agent get its own API session, or do they share a conversation context with the orchestrator?
+
+### New files anticipated
+
+| File | Purpose |
+|------|---------|
+| `electron/main/orchestrator.ts` | Orchestrator logic: task decomposition, agent spawning, message routing, merge coordination |
+| `electron/main/agentRoles.ts` | Role templates: tool subsets, system prompt fragments, and constraint definitions per role |
+
+### Dependencies on earlier phases
+
+- **Phase 2 (tools)** — `AgentToolRunner` already defines the 5 tools as a list; role-based filtering is a natural extension.
+- **Phase 3 (context)** — The orchestrator needs `buildMessageContext()` to provide each agent with relevant workspace context at spawn time.
+- **Phase 4 (history)** — Structured message arrays are essential for the orchestrator to track multi-agent conversation state cleanly.
+
+### Estimated impact
+
+High. This is a fundamental capability upgrade from single-agent to multi-agent, enabling Barnaby to tackle complex, multi-file tasks that currently require extensive human coordination.
+
+---
+
 ## Implementation Priority
 
 ```
@@ -202,6 +304,7 @@ Phase 2 (tools)              ████████████████  D
 Phase 5 (streaming/UI)       ████████████████  DONE ✅ (remaining: tuning)
 Phase 3 (context)            ░░░░░░░░░░░░░░░░  NOT STARTED
 Phase 4 (history)            ░░░░░░░░░░░░░░░░  NOT STARTED (partially addressed by session resume)
+Phase 6 (multi-agent)        ░░░░░░░░░░░░░░░░  NOT STARTED (depends on Phases 2–4)
 ```
 
 ## Files Changed Summary
@@ -218,5 +321,7 @@ Phase 4 (history)            ░░░░░░░░░░░░░░░░  N
 | `electron/main/index.ts` | 1, 2 | Context/gitStatus wiring, CodexAppServerClient git status fix |
 | `src/App.tsx` | 1, 5 | interactionMode passthrough, thinking message accumulation, compact timeline rendering, diff detection, split icon |
 | `src/chat/timelineParser.ts` | 5 | `🔄` system messages → `thinking` kind, removed assistant thinking heuristic |
+| **NEW** `electron/main/orchestrator.ts` | 6 | Orchestrator logic: task decomposition, agent spawning, message routing, merge coordination |
+| **NEW** `electron/main/agentRoles.ts` | 6 | Role templates: tool subsets, system prompt fragments, constraint definitions per role |
 
-Each phase is self-contained and deployable independently. An agent can pick up any single phase and implement it without needing the others to be complete first.
+Phases 1–5 are self-contained and deployable independently. Phase 6 depends on Phases 2–4 being in place first.

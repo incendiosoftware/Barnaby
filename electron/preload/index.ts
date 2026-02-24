@@ -340,6 +340,9 @@ const api = {
   getProviderAuthStatus(config: ProviderConfigForAuth) {
     return ipcRenderer.invoke('agentorchestrator:getProviderAuthStatus', config) as Promise<ProviderAuthStatus>
   },
+  pingProvider(providerId: string) {
+    return ipcRenderer.invoke('agentorchestrator:pingProvider', providerId) as Promise<{ ok: boolean; detail: string; durationMs: number }>
+  },
   startProviderLogin(config: ProviderConfigForAuth) {
     return ipcRenderer.invoke('agentorchestrator:startProviderLogin', config) as Promise<{ started: boolean; detail: string }>
   },

@@ -1,4 +1,3 @@
-import VerticalTilingIcon from './components/verticalTilingIcon';
 import ReactMarkdown from 'react-markdown'  
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -8,6 +7,24 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { buildTimelineForPanel } from './chat/timelineParser'
 import type { TimelineUnit } from './chat/timelineTypes'
+import {
+  BuildIcon,
+  CloseIcon,
+  CollapseAllIcon,
+  CommitIcon,
+  DeployIcon,
+  ExpandAllIcon,
+  FolderIcon,
+  GitIcon,
+  PushIcon,
+  RefreshIcon,
+  ReleaseIcon,
+  RobotIcon,
+  SendIcon,
+  SettingsIcon,
+  SpinnerIcon,
+  StopIcon,
+} from './components/icons'
 import { EmbeddedTerminal } from './components/Terminal'
 import { CodeMirrorEditor } from './components/CodeMirrorEditor'
 import { registerPluginHostCallbacks, unregisterPluginHostCallbacks } from './pluginHostRenderer'
@@ -608,6 +625,10 @@ function syncModelConfigWithCatalog(
     }
   }
   return { interfaces: nextInterfaces }
+}
+
+function getModelPingKey(provider: string, modelId: string): string {
+  return `${provider}::${modelId}`
 }
 
 function renderSandboxSymbol(mode: SandboxMode) {
@@ -2532,6 +2553,7 @@ export default function App() {
   const startupReadyNotifiedRef = useRef(false)
   const historyDropdownRef = useRef<HTMLDivElement>(null)
   const codeWindowSettingsHostRef = useRef<HTMLDivElement | null>(null)
+  const lastScrollToUserMessageRef = useRef<{ panelId: string; messageId: string } | null>(null)
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('vertical')
   const [showWorkspaceWindow, setShowWorkspaceWindow] = useState(true)
@@ -2889,7 +2911,54 @@ export default function App() {
     }
   }, [api, applicationSettings.restoreSessionOnStartup])
 
+  const modelsPingedOnStartupRef = useRef(false)
   const modelsCatalogFetchedRef = useRef(false)
+  useEffect(() => {
+    if (!api.pingModel || modelsPingedOnStartupRef.current) return
+    if (modelConfig.interfaces.length === 0) return
+    modelsPingedOnStartupRef.current = true
+    void (async () => {
+      const allModels = modelConfig.interfaces
+        .map((m) => ({ provider: m.provider, id: String(m.id ?? '').trim() }))
+        .filter((m) => m.id.length > 0)
+      const seen = new Set<string>()
+      const uniqueModels = allModels.filter((m) => {
+        const key = getModelPingKey(m.provider, m.id)
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+      if (uniqueModels.length === 0) return
+      setModelPingPending((prev) => new Set([...prev, ...uniqueModels.map((m) => getModelPingKey(m.provider, m.id))]))
+      const CONCURRENCY = 4
+      const queue = [...uniqueModels]
+      let active = 0
+      let done = 0
+      const runNext = () => {
+        while (active < CONCURRENCY && queue.length > 0) {
+          const item = queue.shift()!
+          active++
+          const modelPingKey = getModelPingKey(item.provider, item.id)
+          api.pingModel(item.provider, item.id)
+            .then((result) => {
+              setModelPingResults((prev) => ({ ...prev, [modelPingKey]: result }))
+              setModelPingPending((prev) => { const next = new Set(prev); next.delete(modelPingKey); return next })
+            })
+            .catch(() => {
+              setModelPingResults((prev) => ({ ...prev, [modelPingKey]: { ok: false, durationMs: 0, error: 'Ping failed' } }))
+              setModelPingPending((prev) => { const next = new Set(prev); next.delete(modelPingKey); return next })
+            })
+            .finally(() => {
+              active--
+              done++
+              if (done < uniqueModels.length) runNext()
+            })
+        }
+      }
+      runNext()
+    })()
+  }, [api, modelConfig])
+
   useEffect(() => {
     if (!api.getAvailableModels || modelsCatalogFetchedRef.current) return
     modelsCatalogFetchedRef.current = true
@@ -2897,17 +2966,20 @@ export default function App() {
       try {
         const available = await api.getAvailableModels()
         if (
-          available.codex.length === 0 &&
-          available.claude.length === 0 &&
-          available.gemini.length === 0 &&
-          available.openrouter.length === 0
-        ) return
-        setModelConfig((prev) => syncModelConfigWithCatalog(prev, available, providerRegistry))
+          available.codex.length > 0 ||
+          available.claude.length > 0 ||
+          available.gemini.length > 0 ||
+          available.openrouter.length > 0
+        ) {
+          setModelConfig((prev) => syncModelConfigWithCatalog(prev, available, providerRegistry))
+        }
+        // Startup ping effect already ran; catalog effect only syncs config, does not re-ping.
+        // User can click "Refresh models" to re-fetch catalog and re-ping.
       } catch {
         // ignore - use built-in models only
       }
     })()
-  }, [api, providerRegistry])
+  }, [api, providerRegistry, modelConfig])
 
   const resolvedProviderConfigs = useMemo(
     () => resolveProviderConfigs(providerRegistry),
@@ -3162,9 +3234,21 @@ export default function App() {
     }
 
     const scrollStickyViewports = () => {
+      const pending = lastScrollToUserMessageRef.current
+      const scrolledPanelId = pending?.panelId ?? null
+      if (pending) {
+        const viewport = messageViewportRefs.current.get(pending.panelId)
+        const unitId = `msg-${pending.messageId}`
+        const el = viewport?.querySelector(`[data-unit-id="${unitId}"]`) as HTMLElement | null
+        if (el) {
+          el.scrollIntoView({ block: 'start', behavior: 'instant' })
+        }
+        lastScrollToUserMessageRef.current = null
+      }
       for (const p of panels) {
         const viewport = messageViewportRefs.current.get(p.id)
         if (!viewport) continue
+        if (scrolledPanelId === p.id) continue
         const stickToBottom = stickToBottomByPanelRef.current.get(p.id) ?? true
         if (!stickToBottom) continue
         viewport.scrollTop = viewport.scrollHeight
@@ -5915,7 +5999,7 @@ export default function App() {
               }`}
               onClick={() => setDockTab('orchestrator')}
             >
-            <VerticalTilingIcon />
+            <RobotIcon size={18} />
             </button>
             <button
               type="button"
@@ -5928,9 +6012,7 @@ export default function App() {
               }`}
               onClick={() => setDockTab('explorer')}
             >
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M2.5 4.5C2.5 3.95 2.95 3.5 3.5 3.5H6.2L7 4.5H12.5C13.05 4.5 13.5 4.95 13.5 5.5V11.5C13.5 12.05 13.05 12.5 12.5 12.5H3.5C2.95 12.5 2.5 12.05 2.5 11.5V4.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-              </svg>
+              <FolderIcon size={18} />
             </button>
             <button
               type="button"
@@ -5943,14 +6025,7 @@ export default function App() {
               }`}
               onClick={() => setDockTab('git')}
             >
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <circle cx="4" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.2" />
-                <circle cx="12" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.2" />
-                <circle cx="8" cy="12" r="1.5" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M5.3 4H10.7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                <path d="M4.7 5.1L7.3 10.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                <path d="M11.3 5.1L8.7 10.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
+              <GitIcon size={18} />
             </button>
             <button
               type="button"
@@ -5963,10 +6038,7 @@ export default function App() {
               }`}
               onClick={openWorkspaceSettingsTab}
             >
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M8 2.2L9 3.1L10.4 2.8L11.2 4.1L12.6 4.4L12.5 5.9L13.6 6.8L12.8 8L13.6 9.2L12.5 10.1L12.6 11.6L11.2 11.9L10.4 13.2L9 12.9L8 13.8L7 12.9L5.6 13.2L4.8 11.9L3.4 11.6L3.5 10.1L2.4 9.2L3.2 8L2.4 6.8L3.5 5.9L3.4 4.4L4.8 4.1L5.6 2.8L7 3.1L8 2.2Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-                <circle cx="8" cy="8" r="1.9" stroke="currentColor" strokeWidth="1.1" />
-              </svg>
+              <SettingsIcon size={18} />
             </button>
           </div>
           <button
@@ -5990,10 +6062,7 @@ export default function App() {
             className="h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
             onClick={() => setShowWorkspaceWindow(false)}
           >
-            <svg width="12" height="12" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-              <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-            </svg>
+            <CloseIcon size={12} />
           </button>
         </div>
         <div className="flex-1 min-h-0">
@@ -6692,7 +6761,7 @@ export default function App() {
         ? w.messages.map((m) => ({ role: m.role, content: m.content ?? '' }))
         : undefined
       await withTimeout(
-        api.sendMessage(winId, resolvedText, imagePaths, priorMessagesForContext, interactionMode),
+        api.sendMessage(winId, resolvedText, imagePaths, priorMessagesForContext, interactionMode, applicationSettings.responseStyle),
         TURN_START_TIMEOUT_MS,
         'turn/start',
       )
@@ -6738,6 +6807,7 @@ export default function App() {
           format: 'text',
           createdAt: Date.now(),
         }
+        lastScrollToUserMessageRef.current = { panelId: winId, messageId: queuedUserMessage.id }
         const updated: AgentPanelState = {
           ...x,
           streaming: true,
@@ -6774,6 +6844,7 @@ export default function App() {
           format: 'text',
           createdAt: Date.now(),
         }
+        lastScrollToUserMessageRef.current = { panelId: winId, messageId: queuedUserMessage.id }
         const updated: AgentPanelState = {
           ...x,
           streaming: true,
@@ -6983,6 +7054,7 @@ export default function App() {
           attachments: messageAttachments.length > 0 ? messageAttachments : undefined,
           createdAt: Date.now(),
         }
+        lastScrollToUserMessageRef.current = { panelId: winId, messageId: userMessage.id }
         const updated: AgentPanelState = {
           ...x,
           input: '',
@@ -7016,6 +7088,7 @@ export default function App() {
     setTimeout(() => setResendingPanelId(null), 1200)
     clearPanelTurnComplete(winId)
     stickToBottomByPanelRef.current.set(winId, true)
+    lastScrollToUserMessageRef.current = { panelId: winId, messageId: lastUserMsg.id }
     setPanels((prev) =>
       prev.map((x) =>
         x.id !== winId
@@ -7025,10 +7098,6 @@ export default function App() {
     )
     seedPanelActivity(winId)
     markPanelActivity(winId, { type: 'turnStart' })
-    setTimeout(() => {
-      const viewport = messageViewportRefs.current.get(winId)
-      if (viewport) viewport.scrollTop = viewport.scrollHeight
-    }, 50)
     void sendToAgent(winId, lastUserMsg.content)
   }
 
@@ -7335,10 +7404,7 @@ export default function App() {
                 title="Refresh workspace folder"
                 aria-label="Refresh workspace folder"
               >
-                <svg width="16" height="16" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                  <path d="M10 6A4 4 0 1 1 8.83 3.17" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  <path d="M10 2.5V4.5H8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
+                <RefreshIcon size={16} />
               </button>
               <button
                 type="button"
@@ -7347,10 +7413,7 @@ export default function App() {
                 title="Expand all"
                 aria-label="Expand all"
               >
-                <svg width="16" height="16" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                  <path d="M3 2.5L6 5.5L9 2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M3 5.5L6 8.5L9 5.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
+                <ExpandAllIcon size={16} />
               </button>
               <button
                 type="button"
@@ -7359,10 +7422,7 @@ export default function App() {
                 title="Collapse all"
                 aria-label="Collapse all"
               >
-                <svg width="16" height="16" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                  <path d="M3 6.5L6 3.5L9 6.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M3 9.5L6 6.5L9 9.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
+                <CollapseAllIcon size={16} />
               </button>
             </div>
           </div>
@@ -7418,10 +7478,7 @@ export default function App() {
               disabled={!canCommit || busy}
               onClick={() => void runGitOperation('commit')}
             >
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M5 8l2 2 4-4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <CommitIcon size={18} />
             </button>
             <button
               type="button"
@@ -7431,10 +7488,7 @@ export default function App() {
               disabled={busy || !gitStatus?.ok}
               onClick={() => void runGitOperation('push')}
             >
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M8 11V3M8 3L5 6M8 3l3 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
+              <PushIcon size={18} />
             </button>
             <button
               type="button"
@@ -7444,10 +7498,7 @@ export default function App() {
               disabled={busy || !workspaceRoot}
               onClick={() => void runGitOperation('deploy')}
             >
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M8 2L2 6l6 4 6-4-6-4z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-                <path d="M2 10l6 4 6-4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <DeployIcon size={18} />
             </button>
             <button
               type="button"
@@ -7457,10 +7508,7 @@ export default function App() {
               disabled={busy || !workspaceRoot}
               onClick={() => void runGitOperation('build')}
             >
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M3 4h4l2 3 2-3h4v8H3V4z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-                <path d="M6 7v4M10 7v4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-              </svg>
+              <BuildIcon size={18} />
             </button>
             <button
               type="button"
@@ -7470,9 +7518,7 @@ export default function App() {
               disabled={busy || !workspaceRoot}
               onClick={() => void runGitOperation('release')}
             >
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M8 2l1.2 3.6 3.8.1-2.9 2.2 1.1 3.7L8 9.8l-3.2 1.8 1.1-3.7-2.9-2.2 3.8-.1L8 2z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-              </svg>
+              <ReleaseIcon size={18} />
             </button>
             <button
               type="button"
@@ -7482,10 +7528,7 @@ export default function App() {
               disabled={busy}
               onClick={() => void refreshGitStatus()}
             >
-              <svg width="18" height="18" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                <path d="M10.5 6A4.5 4.5 0 116 1.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                <path d="M10.5 1.5v3h-3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <RefreshIcon size={18} />
             </button>
           </div>
         </div>
@@ -7499,17 +7542,7 @@ export default function App() {
           >
             {gitOperationPending ? (
               <>
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 14 14"
-                  fill="none"
-                  className="animate-spin shrink-0"
-                  aria-hidden
-                >
-                  <circle cx="7" cy="7" r="5" stroke="currentColor" strokeOpacity="0.3" strokeWidth="1.5" />
-                  <path d="M7 2a5 5 0 0 1 5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
+                <SpinnerIcon size={14} className="animate-spin shrink-0" />
                 <span>
                   {gitOperationPending === 'commit' && 'Committing…'}
                   {gitOperationPending === 'push' && 'Pushing…'}
@@ -8490,22 +8523,29 @@ export default function App() {
                       setModelPingPending(new Set())
                       try {
                         const available = await api.getAvailableModels()
-                        if (available.codex.length === 0 && available.claude.length === 0 && available.gemini.length === 0 && available.openrouter.length === 0) {
-                          setModelCatalogRefreshStatus({ kind: 'error', message: 'No models returned. Enable providers and try again.' })
+                        const nextModelConfig = syncModelConfigWithCatalog(modelConfig, available, providerRegistry)
+                        setModelConfig(nextModelConfig)
+
+                        const seenModelPingKeys = new Set<string>()
+                        const allModels: { provider: ModelProvider; id: string }[] = nextModelConfig.interfaces
+                          .map((m) => ({ provider: m.provider, id: String(m.id ?? '').trim() }))
+                          .filter((m) => m.id.length > 0)
+                          .filter((m) => {
+                            const key = getModelPingKey(m.provider, m.id)
+                            if (seenModelPingKeys.has(key)) return false
+                            seenModelPingKeys.add(key)
+                            return true
+                          })
+
+                        if (allModels.length === 0) {
+                          setModelCatalogRefreshStatus({ kind: 'error', message: 'No models available to test. Enable providers and try again.' })
                           return
                         }
-                        setModelConfig((prev) => syncModelConfigWithCatalog(prev, available, providerRegistry))
-                        const total = available.codex.length + available.claude.length + available.gemini.length + available.openrouter.length
+                        const total = allModels.length
                         setModelCatalogRefreshStatus({ kind: 'success', message: `Found ${total} model${total === 1 ? '' : 's'}. Testing each...` })
 
-                        // Kick off pings for all discovered models in parallel (max 4 at a time).
-                        const allModels: { provider: string; id: string }[] = [
-                          ...available.gemini.map((m) => ({ provider: 'gemini', id: m.id })),
-                          ...available.claude.map((m) => ({ provider: 'claude', id: m.id })),
-                          ...available.codex.map((m) => ({ provider: 'codex', id: m.id })),
-                          ...available.openrouter.map((m) => ({ provider: 'openrouter', id: m.id })),
-                        ]
-                        setModelPingPending(new Set(allModels.map((m) => m.id)))
+                        // Kick off pings for all configured models in parallel (max 4 at a time).
+                        setModelPingPending(new Set(allModels.map((m) => getModelPingKey(m.provider, m.id))))
 
                         const CONCURRENCY = 4
                         const queue = [...allModels]
@@ -8515,14 +8555,15 @@ export default function App() {
                           while (active < CONCURRENCY && queue.length > 0) {
                             const item = queue.shift()!
                             active++
+                            const modelPingKey = getModelPingKey(item.provider, item.id)
                             ;(api.pingModel ? api.pingModel(item.provider, item.id) : Promise.resolve({ ok: true, durationMs: 0 }))
                               .then((result) => {
-                                setModelPingResults((prev) => ({ ...prev, [item.id]: result }))
-                                setModelPingPending((prev) => { const next = new Set(prev); next.delete(item.id); return next })
+                                setModelPingResults((prev) => ({ ...prev, [modelPingKey]: result }))
+                                setModelPingPending((prev) => { const next = new Set(prev); next.delete(modelPingKey); return next })
                               })
                               .catch(() => {
-                                setModelPingResults((prev) => ({ ...prev, [item.id]: { ok: false, durationMs: 0, error: 'Ping failed' } }))
-                                setModelPingPending((prev) => { const next = new Set(prev); next.delete(item.id); return next })
+                                setModelPingResults((prev) => ({ ...prev, [modelPingKey]: { ok: false, durationMs: 0, error: 'Ping failed' } }))
+                                setModelPingPending((prev) => { const next = new Set(prev); next.delete(modelPingKey); return next })
                               })
                               .finally(() => {
                                 active--
@@ -8545,10 +8586,7 @@ export default function App() {
                     disabled={modelCatalogRefreshPending}
                   >
                     {modelCatalogRefreshPending && (
-                      <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                        <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.3" strokeWidth="1.6" />
-                        <path d="M8 2a6 6 0 0 1 6 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                      </svg>
+                      <SpinnerIcon size={14} className="animate-spin" />
                     )}
                     {modelCatalogRefreshPending ? 'Refreshing models...' : 'Refresh models from providers'}
                   </button>
@@ -8666,8 +8704,9 @@ export default function App() {
                           >
                             <div className="min-w-0 flex items-center gap-2">
                               {(() => {
-                                const ping = modelPingResults[m.id]
-                                const pending = modelPingPending.has(m.id)
+                                const modelPingKey = getModelPingKey(m.provider, m.id)
+                                const ping = modelPingResults[modelPingKey]
+                                const pending = modelPingPending.has(modelPingKey)
                                 if (pending) return (
                                   <svg className="h-2.5 w-2.5 shrink-0 animate-spin text-neutral-400" viewBox="0 0 16 16" fill="none" aria-label="Testing...">
                                     <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2" />
@@ -10913,11 +10952,9 @@ export default function App() {
         ? 'Queue corrected message next'
         : isBusy
       ? hasInput
-        ? `Queue message${queueCount > 0 ? ` (${queueCount} queued)` : ''}`
-        : 'Busy'
-      : isFinalComplete && !hasInput
-        ? 'Done'
-        : 'Send'
+        ? `Stop${queueCount > 0 ? ` (${queueCount} queued)` : ''}`
+        : 'Stop'
+      : 'Send'
     const secondsAgo = Number.isFinite(msSinceLastActivity) ? Math.max(0, Math.floor(msSinceLastActivity / 1000)) : null
     const activityTitle = activity
       ? `Activity: ${activityLabel}\nLast event: ${activity.lastEventLabel}\n${secondsAgo}s ago\nEvents seen: ${activity.totalEvents}\nTimeline units: ${timelineUnits.length}`
@@ -11249,7 +11286,7 @@ export default function App() {
             const canRecallLastUserMessage = isLastUserMessage && isIdle && lastUserMessageAgeMs <= LAST_USER_RECALL_EXPIRY_MS
             const canResendLastUserMessage = isLastUserMessage && isIdle
             return (
-            <div key={m.id} className="w-full">
+            <div key={m.id} data-unit-id={unit.id} className="w-full">
               <div
                 className={[
                   'w-full relative group',
@@ -11322,7 +11359,7 @@ export default function App() {
                     </summary>
                     <div className="mt-1 pl-0 py-1 text-[12px] leading-5 [&_*]:!text-current" style={{ color: timelineMessageColor }}>
                       {m.role === 'assistant' && m.format === 'markdown' ? (
-                        <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-1 prose-headings:my-1 prose-code:text-[currentColor]">
+                        <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-headings:my-1 prose-ul:my-0.5 prose-li:my-0 prose-code:text-[currentColor]">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             components={{
@@ -11457,7 +11494,7 @@ export default function App() {
                     </div>
                   </details>
                 ) : m.role === 'assistant' && m.format === 'markdown' ? (
-                  <div className="prose prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-code:text-blue-800 dark:prose-code:text-blue-300">
+                  <div className="prose prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-ul:my-0.5 prose-li:my-0 prose-code:text-blue-800 dark:prose-code:text-blue-300">
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
                       components={{
@@ -11821,37 +11858,27 @@ export default function App() {
                     ? hasInput
                       ? 'border-neutral-400 bg-neutral-200 text-neutral-700 hover:bg-neutral-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-600'
                       : 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/60'
-                    : !hasInput && isFinalComplete
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
                     : hasInput
                       ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
                       : 'border-neutral-300 bg-neutral-100 text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-600',
                 ].join(' ')}
-                onClick={() => sendMessage(w.id)}
-                disabled={!hasInput}
+                onClick={() => {
+                  if (isBusy) {
+                    if (draftEdit?.kind === 'recalled') sendMessage(w.id)
+                    else void api.interrupt(w.id)
+                  } else {
+                    sendMessage(w.id)
+                  }
+                }}
+                disabled={!isBusy && !hasInput}
                 title={sendTitle}
               >
                 {isBusy && !hasInput ? (
-                  <svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 20 20"
-                    fill="none"
-                    className="animate-spin motion-reduce:animate-none"
-                  >
-                    <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeOpacity="0.28" strokeWidth="2" />
-                    <path d="M10 3.5a6.5 6.5 0 0 1 6.5 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                ) : !hasInput && isFinalComplete ? (
-                  <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-                    <path d="M5.2 10.2L8.5 13.5L14.8 7.2" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
+                  <SpinnerIcon size={18} className="animate-spin motion-reduce:animate-none" />
+                ) : isBusy && draftEdit?.kind !== 'recalled' ? (
+                  <StopIcon size={18} />
                 ) : (
-                  <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-                    <path d="M10 4V13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                    <path d="M6.5 7.5L10 4l3.5 3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    <path d="M4 16h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  </svg>
+                  <SendIcon size={18} />
                 )}
               </button>
             </div>

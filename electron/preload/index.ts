@@ -92,12 +92,14 @@ const api = {
     imagePaths?: string[],
     priorMessagesForContext?: Array<{ role: string; content: string }>,
     interactionMode?: string,
+    responseStyle?: 'concise' | 'standard' | 'detailed',
   ) {
     return ipcRenderer.invoke('agentorchestrator:sendMessageEx', agentWindowId, {
       text,
       imagePaths: imagePaths ?? [],
       priorMessagesForContext,
       interactionMode,
+      responseStyle,
     }) as Promise<void>
   },
   loadChatHistory() {

@@ -92,6 +92,7 @@ interface Window {
       imagePaths?: string[],
       priorMessagesForContext?: Array<{ role: string; content: string }>,
       interactionMode?: string,
+      responseStyle?: 'concise' | 'standard' | 'detailed',
     ): Promise<void>
     loadChatHistory(): Promise<unknown[]>
     saveChatHistory(entries: unknown[]): Promise<{

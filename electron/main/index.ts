@@ -1748,6 +1748,27 @@ function normalizeGeminiModelForCli(modelId: string): string {
   return map[modelId] ?? modelId
 }
 
+function normalizeClaudeModelForCli(modelId: string): string {
+  const trimmed = String(modelId ?? '').trim()
+  if (!trimmed) return 'sonnet'
+  const normalized = trimmed.toLowerCase()
+  const aliasMap: Record<string, string> = {
+    'claude-sonnet-4-5-20250929': 'sonnet',
+    'claude-sonnet-4-6': 'sonnet',
+    'claude-opus-4-1-20250805': 'opus',
+    'claude-haiku-3-5-20241022': 'haiku',
+  }
+  return aliasMap[normalized] ?? trimmed
+}
+
+function isClaudeModelNotFoundError(message: string): boolean {
+  const lower = message.toLowerCase()
+  return (
+    lower.includes('model') &&
+    (lower.includes('not found') || lower.includes('unknown') || lower.includes('invalid'))
+  )
+}
+
 async function pingGeminiModel(modelId: string): Promise<{ ok: boolean; durationMs: number; error?: string }> {
   const start = Date.now()
   const normalized = normalizeGeminiModelForCli(modelId)
@@ -1800,63 +1821,122 @@ async function pingGeminiModel(modelId: string): Promise<{ ok: boolean; duration
   })
 }
 
-async function pingClaudeModel(modelId: string): Promise<{ ok: boolean; durationMs: number; error?: string }> {
+async function pingClaudeModel(modelId: string, cwd?: string): Promise<{ ok: boolean; durationMs: number; error?: string }> {
   const start = Date.now()
-  const jsEntry = resolveNpmCliJsEntry('claude')
-  const nodeExe = jsEntry ? findNodeExeOnPath() : null
-  const env = getCliSpawnEnv()
-  return new Promise((resolve) => {
-    const args = ['-m', modelId, '--print', '--output-format', 'stream-json']
-    let proc: ReturnType<typeof spawn>
-    if (jsEntry && nodeExe) {
-      proc = spawn(nodeExe, [jsEntry, ...args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env } as object)
-    } else if (process.platform === 'win32') {
-      proc = spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'claude', ...args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env } as object)
-    } else {
-      proc = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], env })
-    }
-
-    const timer = setTimeout(() => {
-      try { proc.kill() } catch { /* ignore */ }
-      resolve({ ok: false, durationMs: Date.now() - start, error: 'Timed out' })
-    }, MODEL_PING_TIMEOUT_MS)
-
-    let resolved = false
-    const done = (ok: boolean, error?: string) => {
-      if (resolved) return
-      resolved = true
-      clearTimeout(timer)
-      resolve({ ok, durationMs: Date.now() - start, error })
-    }
-
-    proc.stdin?.write(MODEL_PING_PROMPT)
-    proc.stdin?.end()
-
-    let buf = ''
-    proc.stdout?.setEncoding('utf8')
-    proc.stdout?.on('data', (chunk: string) => {
-      buf += chunk
-      for (const line of buf.split('\n')) {
-        const t = line.trim()
-        if (!t) continue
-        try {
-          const evt = JSON.parse(t)
-          if (evt.type === 'content_block_delta' || (evt.type === 'message' && evt.role === 'assistant')) {
-            try { proc.kill() } catch { /* ignore */ }
-            done(true)
-            return
-          }
-          if (evt.type === 'message_start' && evt.message?.role === 'assistant') {
-            try { proc.kill() } catch { /* ignore */ }
-            done(true)
-            return
-          }
-        } catch { /* not JSON */ }
+  const pingCwd = typeof cwd === 'string' && cwd.trim() ? path.resolve(cwd.trim()) : process.cwd()
+  const runPingAttempt = async (attemptModelId: string): Promise<{ ok: boolean; error?: string }> => {
+    const jsEntry = resolveNpmCliJsEntry('claude')
+    const nodeExe = jsEntry ? findNodeExeOnPath() : null
+    const env = getCliSpawnEnv()
+    return new Promise((resolve) => {
+      const args = ['--model', attemptModelId, '--print', '--output-format', 'stream-json', '--input-format', 'stream-json']
+      let proc: ReturnType<typeof spawn>
+      if (jsEntry && nodeExe) {
+        proc = spawn(nodeExe, [jsEntry, ...args], { cwd: pingCwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env } as object)
+      } else if (process.platform === 'win32') {
+        proc = spawn(
+          process.env.ComSpec ?? 'cmd.exe',
+          ['/d', '/s', '/c', 'claude', ...args],
+          { cwd: pingCwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env } as object,
+        )
+      } else {
+        proc = spawn('claude', args, { cwd: pingCwd, stdio: ['pipe', 'pipe', 'pipe'], env })
       }
+
+      const timer = setTimeout(() => {
+        try { proc.kill() } catch { /* ignore */ }
+        resolve({ ok: false, error: 'Timed out' })
+      }, MODEL_PING_TIMEOUT_MS)
+
+      let resolved = false
+      const done = (ok: boolean, error?: string) => {
+        if (resolved) return
+        resolved = true
+        clearTimeout(timer)
+        resolve({ ok, error })
+      }
+
+      const pingMsg = JSON.stringify({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: MODEL_PING_PROMPT }],
+        },
+      }) + '\n'
+      proc.stdin?.write(pingMsg)
+      proc.stdin?.end()
+
+      let stdoutBuffer = ''
+      let stderrBuffer = ''
+      proc.stdout?.setEncoding('utf8')
+      proc.stderr?.setEncoding('utf8')
+      proc.stderr?.on('data', (chunk: string) => {
+        stderrBuffer += chunk
+      })
+      proc.stdout?.on('data', (chunk: string) => {
+        stdoutBuffer += chunk
+        const lines = stdoutBuffer.split('\n')
+        stdoutBuffer = lines.pop() ?? ''
+        for (const line of lines) {
+          const t = line.trim()
+          if (!t) continue
+          try {
+            const evt = JSON.parse(t)
+            if (
+              evt.type === 'assistant' ||
+              evt.type === 'result' ||
+              evt.type === 'content_block_delta' ||
+              (evt.type === 'message' && evt.role === 'assistant') ||
+              (evt.type === 'message_start' && evt.message?.role === 'assistant')
+            ) {
+              if (evt.type === 'result' && evt.subtype === 'error') {
+                const msg = typeof evt.error === 'string' && evt.error.trim() ? evt.error.trim() : 'Model error'
+                done(false, msg)
+              } else {
+                try { proc.kill() } catch { /* ignore */ }
+                done(true)
+              }
+              return
+            }
+            if (evt.type === 'error') {
+              const msg = typeof evt.message === 'string' && evt.message.trim()
+                ? evt.message.trim()
+                : 'Model error'
+              done(false, msg)
+              return
+            }
+          } catch { /* not JSON */ }
+        }
+      })
+      proc.on('exit', (code) => {
+        if (code === 0) {
+          done(true)
+          return
+        }
+        const err = stderrBuffer.trim()
+        done(false, err || `Exit ${code}`)
+      })
+      proc.on('error', (err) => done(false, err.message))
     })
-    proc.on('exit', (code) => done(code === 0, code !== 0 ? `Exit ${code}` : undefined))
-    proc.on('error', (err) => done(false, err.message))
-  })
+  }
+
+  const normalizedModelId = normalizeClaudeModelForCli(modelId)
+  const primary = await runPingAttempt(normalizedModelId)
+  if (primary.ok) return { ok: true, durationMs: Date.now() - start }
+
+  if (normalizedModelId !== 'sonnet' && primary.error && isClaudeModelNotFoundError(primary.error)) {
+    const fallback = await runPingAttempt('sonnet')
+    if (fallback.ok) return { ok: true, durationMs: Date.now() - start }
+    return {
+      ok: false,
+      durationMs: Date.now() - start,
+      error: fallback.error
+        ? `${primary.error}; fallback to sonnet failed: ${fallback.error}`
+        : primary.error,
+    }
+  }
+
+  return { ok: false, durationMs: Date.now() - start, error: primary.error }
 }
 
 async function pingOpenRouterModel(modelId: string): Promise<{ ok: boolean; durationMs: number; error?: string }> {
@@ -1879,9 +1959,9 @@ async function pingOpenRouterModel(modelId: string): Promise<{ ok: boolean; dura
   }
 }
 
-async function pingModelById(provider: string, modelId: string): Promise<{ ok: boolean; durationMs: number; error?: string }> {
+async function pingModelById(provider: string, modelId: string, cwd?: string): Promise<{ ok: boolean; durationMs: number; error?: string }> {
   if (provider === 'gemini') return pingGeminiModel(modelId)
-  if (provider === 'claude') return pingClaudeModel(modelId)
+  if (provider === 'claude') return pingClaudeModel(modelId, cwd)
   if (provider === 'openrouter') return pingOpenRouterModel(modelId)
   // Codex: no lightweight ping available yet
   return { ok: true, durationMs: 0 }
@@ -2640,10 +2720,17 @@ function formatPriorMessagesForContext(messages: Array<{ role: string; content: 
   return transcript ? `Previous conversation:\n\n${transcript}\n\nUser continues: ` : ''
 }
 
-ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: string, payload: { text: string; imagePaths?: string[]; priorMessagesForContext?: Array<{ role: string; content: string }>; interactionMode?: string }) => {
+const CONCISE_RESPONSE_PREFIX =
+  '[Response style: Be extremely brief. Prefer bullet points over paragraphs. Use single newlines between items, not blank lines. No multi-paragraph blocks.]\n\n'
+
+ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: string, payload: { text: string; imagePaths?: string[]; priorMessagesForContext?: Array<{ role: string; content: string }>; interactionMode?: string; responseStyle?: 'concise' | 'standard' | 'detailed' }) => {
   const client = agentClients.get(agentWindowId)
   if (!client) return {}
   let text = typeof payload?.text === 'string' ? payload.text : ''
+  const responseStyle = payload?.responseStyle === 'concise' || payload?.responseStyle === 'standard' || payload?.responseStyle === 'detailed' ? payload.responseStyle : undefined
+  if (responseStyle === 'concise') {
+    text = CONCISE_RESPONSE_PREFIX + text
+  }
   const imagePaths = Array.isArray(payload?.imagePaths) ? payload.imagePaths.filter((p): p is string => typeof p === 'string' && p.trim().length > 0) : []
   const priorMessages = Array.isArray(payload?.priorMessagesForContext) ? payload.priorMessagesForContext : []
   const interactionMode = typeof payload?.interactionMode === 'string' ? payload.interactionMode : undefined
@@ -3065,8 +3152,8 @@ ipcMain.handle('agentorchestrator:getProviderAuthStatus', async (_evt, config: P
   return getProviderAuthStatus(config)
 })
 
-ipcMain.handle('agentorchestrator:pingModel', async (_evt, provider: string, modelId: string) => {
-  return pingModelById(provider, modelId)
+ipcMain.handle('agentorchestrator:pingModel', async (_evt, provider: string, modelId: string, cwd?: string) => {
+  return pingModelById(provider, modelId, cwd)
 })
 
 ipcMain.handle('agentorchestrator:pingProvider', async (_evt, providerId: string) => {

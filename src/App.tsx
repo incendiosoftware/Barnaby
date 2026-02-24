@@ -238,6 +238,8 @@ type PersistedAppState = {
   expandedDirectories?: unknown
   panels?: unknown
   editorPanels?: unknown
+  applicationSettings?: unknown
+  themeOverrides?: unknown
 }
 
 type ParsedAppState = {
@@ -256,6 +258,8 @@ type ParsedAppState = {
   showWorkspaceWindow: boolean | undefined
   showCodeWindow: boolean | undefined
   expandedDirectories: Record<string, boolean> | undefined
+  applicationSettings: ApplicationSettings | undefined
+  themeOverrides: ThemeOverrides | undefined
 }
 
 type WorkspaceUiSnapshot = {
@@ -331,7 +335,7 @@ type AvailableCatalogModels = {
   openrouter: { id: string; displayName: string }[]
 }
 
-type AppSettingsView = 'connectivity' | 'models' | 'preferences' | 'agents' | 'orchestrator' | 'diagnostics'
+type AppSettingsView = 'connectivity' | 'models' | 'preferences' | 'agents' | 'orchestrator' | 'mcp-servers' | 'diagnostics'
 
 type ModelCatalogRefreshStatus = {
   kind: 'success' | 'error'
@@ -480,8 +484,9 @@ const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-w
 const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
 const STATUS_SYMBOL_ICON_CLASS = 'h-[15px] w-[15px] text-neutral-600 dark:text-neutral-300'
 const CONNECTIVITY_PROVIDERS: ConnectivityProvider[] = ['codex', 'claude', 'gemini', 'openrouter']
-const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'preferences', 'agents', 'orchestrator', 'diagnostics']
+const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'preferences', 'agents', 'orchestrator', 'mcp-servers', 'diagnostics']
 const PANEL_COMPLETION_NOTICE_MS = 15000
+const LAST_USER_RECALL_EXPIRY_MS = 10000
 const ONGOING_WORK_LABELS = new Set([
   'Task step complete',
   'Running command',
@@ -530,7 +535,7 @@ const DEFAULT_BUILTIN_PROVIDER_CONFIGS: Record<ConnectivityProvider, ProviderCon
     enabled: true,
     type: 'cli',
     cliCommand: 'claude',
-    authCheckCommand: '--version',
+    authCheckCommand: 'auth status',
     loginCommand: 'claude',
     upgradeCommand: 'npm update -g @anthropic-ai/claude-code',
     upgradePackage: '@anthropic-ai/claude-code',
@@ -1078,6 +1083,51 @@ function newId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
+/** Format raw "toolName: detail" traces into clean Cursor-style summaries. */
+function formatToolTrace(raw: string): string {
+  const colonIdx = raw.indexOf(':')
+  if (colonIdx < 0) return raw
+  const tool = raw.slice(0, colonIdx).trim().toLowerCase()
+  const detail = raw.slice(colonIdx + 1).trim()
+  const shortPath = (p: string) => {
+    const parts = p.replace(/\\/g, '/').split('/')
+    return parts.length > 3 ? `.../${parts.slice(-3).join('/')}` : p
+  }
+  const shortCmd = (c: string) => {
+    const clean = c.replace(/\s+/g, ' ').trim()
+    return clean.length > 80 ? clean.slice(0, 77) + '...' : clean
+  }
+
+  if (/^(read_file|read|readfile|read_workspace_file|view_file)$/i.test(tool)) {
+    return `Read ${shortPath(detail)}`
+  }
+  if (/^(write_file|write|writefile|write_workspace_file|create_file)$/i.test(tool)) {
+    return `Write ${shortPath(detail)}`
+  }
+  if (/^(edit|edit_file|patch|str_replace_editor|apply_diff)$/i.test(tool)) {
+    return `Edit ${shortPath(detail)}`
+  }
+  if (/^(bash|shell|run_command|run_shell_command|terminal|execute)$/i.test(tool)) {
+    return `Ran ${shortCmd(detail)}`
+  }
+  if (/^(grep|rg|search|search_workspace|ripgrep|find_in_files)$/i.test(tool)) {
+    return `Searched for "${detail.length > 60 ? detail.slice(0, 57) + '...' : detail}"`
+  }
+  if (/^(glob|find|list_dir|list_directory|list_workspace_tree|ls|tree)$/i.test(tool)) {
+    return `Listed ${shortPath(detail) || 'directory'}`
+  }
+  if (/^(web_search|browser|fetch|curl)$/i.test(tool)) {
+    return `Fetched ${detail.length > 60 ? detail.slice(0, 57) + '...' : detail}`
+  }
+
+  // Fallback: clean up the tool name
+  const cleanTool = raw.slice(0, colonIdx).trim()
+    .replace(/_/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/^./, (c) => c.toUpperCase())
+  return `${cleanTool}: ${detail.length > 70 ? detail.slice(0, 67) + '...' : detail}`
+}
+
 function fileNameFromRelativePath(relativePath: string) {
   const parts = relativePath.split('/')
   return parts[parts.length - 1] || relativePath
@@ -1407,7 +1457,7 @@ function getInitialChatHistory(): ChatHistoryEntry[] {
 }
 
 
-function getInitialApplicationSettings(): ApplicationSettings {
+function parseApplicationSettings(parsed: Partial<ApplicationSettings> | null | undefined): ApplicationSettings {
   const defaults: ApplicationSettings = {
     restoreSessionOnStartup: true,
     themeId: DEFAULT_THEME_ID,
@@ -1417,28 +1467,32 @@ function getInitialApplicationSettings(): ApplicationSettings {
     showResponseDurationAfterPrompt: false,
     editorWordWrap: true,
   }
+  if (!parsed || typeof parsed !== 'object') return defaults
+  return {
+    restoreSessionOnStartup:
+      typeof parsed.restoreSessionOnStartup === 'boolean' ? parsed.restoreSessionOnStartup : true,
+    themeId: (() => {
+      if (typeof parsed.themeId === 'string' && THEMES.some((t) => t.id === parsed.themeId)) return parsed.themeId
+      return getInitialThemeId()
+    })(),
+    responseStyle:
+      parsed.responseStyle === 'concise' || parsed.responseStyle === 'standard' || parsed.responseStyle === 'detailed'
+        ? parsed.responseStyle
+        : 'standard',
+    showDebugNotesInTimeline: Boolean(parsed.showDebugNotesInTimeline),
+    verboseDiagnostics: Boolean(parsed.verboseDiagnostics),
+    showResponseDurationAfterPrompt: Boolean(parsed.showResponseDurationAfterPrompt),
+    editorWordWrap: typeof parsed.editorWordWrap === 'boolean' ? parsed.editorWordWrap : true,
+  }
+}
+
+function getInitialApplicationSettings(): ApplicationSettings {
   try {
     const raw = globalThis.localStorage?.getItem(APP_SETTINGS_STORAGE_KEY)
-    if (!raw) return defaults
-    const parsed = JSON.parse(raw) as Partial<ApplicationSettings>
-    return {
-      restoreSessionOnStartup:
-        typeof parsed?.restoreSessionOnStartup === 'boolean' ? parsed.restoreSessionOnStartup : true,
-      themeId: (() => {
-        if (typeof parsed?.themeId === 'string' && THEMES.some((t) => t.id === parsed.themeId)) return parsed.themeId
-        return getInitialThemeId()
-      })(),
-      responseStyle:
-        parsed?.responseStyle === 'concise' || parsed?.responseStyle === 'standard' || parsed?.responseStyle === 'detailed'
-          ? parsed.responseStyle
-          : 'standard',
-      showDebugNotesInTimeline: Boolean(parsed?.showDebugNotesInTimeline),
-      verboseDiagnostics: Boolean(parsed?.verboseDiagnostics),
-      showResponseDurationAfterPrompt: Boolean(parsed?.showResponseDurationAfterPrompt),
-      editorWordWrap: typeof parsed?.editorWordWrap === 'boolean' ? parsed.editorWordWrap : true,
-    }
+    if (!raw) return parseApplicationSettings(null)
+    return parseApplicationSettings(JSON.parse(raw) as Partial<ApplicationSettings>)
   } catch {
-    return defaults
+    return parseApplicationSettings(null)
   }
 }
 
@@ -1711,6 +1765,14 @@ function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: string): Pa
     showWorkspaceWindow: typeof rec.showWorkspaceWindow === 'boolean' ? rec.showWorkspaceWindow : undefined,
     showCodeWindow: typeof rec.showCodeWindow === 'boolean' ? rec.showCodeWindow : undefined,
     expandedDirectories,
+    applicationSettings:
+      rec.applicationSettings && typeof rec.applicationSettings === 'object'
+        ? parseApplicationSettings(rec.applicationSettings as Partial<ApplicationSettings>)
+        : undefined,
+    themeOverrides:
+      rec.themeOverrides && typeof rec.themeOverrides === 'object'
+        ? sanitizeThemeOverrides(rec.themeOverrides)
+        : undefined,
   }
 }
 
@@ -2297,6 +2359,7 @@ export default function App() {
   const [providerAuthByName, setProviderAuthByName] = useState<Partial<Record<string, ProviderAuthStatus>>>({})
   const [providerAuthLoadingByName, setProviderAuthLoadingByName] = useState<Record<string, boolean>>({})
   const [providerAuthActionByName, setProviderAuthActionByName] = useState<Record<string, string | null>>({})
+  const [providerVerifiedByName, setProviderVerifiedByName] = useState<Record<string, boolean>>({})
   const [providerPanelOpenByName, setProviderPanelOpenByName] = useState<Record<string, boolean>>({})
   const [providerApiKeyDraftByName, setProviderApiKeyDraftByName] = useState<Record<string, string>>({})
   const [providerApiKeyStateByName, setProviderApiKeyStateByName] = useState<Record<string, boolean>>({})
@@ -2320,6 +2383,19 @@ export default function App() {
   const [orchestratorLicenseKeyState, setOrchestratorLicenseKeyState] = useState<{ hasKey: boolean } | null>(null)
   const [orchestratorLicenseKeyDraft, setOrchestratorLicenseKeyDraft] = useState('')
   const [orchestratorInstallStatus, setOrchestratorInstallStatus] = useState<string | null>(null)
+  const [mcpServers, setMcpServers] = useState<Array<{
+    name: string
+    config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }
+    connected: boolean
+    error?: string
+    toolCount: number
+    tools: Array<{ name: string; description?: string }>
+  }>>([])
+  const [mcpPanelOpenByName, setMcpPanelOpenByName] = useState<Record<string, boolean>>({})
+  const [mcpEditingServer, setMcpEditingServer] = useState<string | null>(null)
+  const [mcpJsonDraft, setMcpJsonDraft] = useState('')
+  const [mcpJsonError, setMcpJsonError] = useState<string | null>(null)
+  const [mcpAddMode, setMcpAddMode] = useState(false)
   const [repairShortcutStatus, setRepairShortcutStatus] = useState<string | null>(null)
   const [workspaceDockSide, setWorkspaceDockSide] = useState<WorkspaceDockSide>(() => getInitialWorkspaceDockSide())
   const [workspaceTree, setWorkspaceTree] = useState<WorkspaceTreeNode[]>([])
@@ -2349,7 +2425,9 @@ export default function App() {
   const [panelDebugById, setPanelDebugById] = useState<Record<string, PanelDebugEntry[]>>({})
   const [lastPromptDurationMsByPanel, setLastPromptDurationMsByPanel] = useState<Record<string, number>>({})
   const [panelTurnCompleteAtById, setPanelTurnCompleteAtById] = useState<Record<string, number>>({})
+  type InputDraftEditState = { kind: 'queued'; index: number } | { kind: 'recalled' }
   const [settingsPopoverByPanel, setSettingsPopoverByPanel] = useState<Record<string, 'mode' | 'sandbox' | 'permission' | null>>({})
+  const [inputDraftEditByPanel, setInputDraftEditByPanel] = useState<Record<string, InputDraftEditState | null>>({})
   const [codeBlockOpenById, setCodeBlockOpenById] = useState<Record<string, boolean>>({})
   const [timelineOpenByUnitId, setTimelineOpenByUnitId] = useState<Record<string, boolean>>({})
   const [timelinePinnedCodeByUnitId, setTimelinePinnedCodeByUnitId] = useState<Record<string, boolean>>({})
@@ -2588,6 +2666,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(WORKSPACE_DOCK_SIDE_STORAGE_KEY, workspaceDockSide)
   }, [workspaceDockSide])
+
+  useEffect(() => {
+    if (appSettingsView === 'mcp-servers') void refreshMcpServers()
+  }, [appSettingsView])
 
   useEffect(() => {
     if (draggingPanelId) {
@@ -2829,6 +2911,20 @@ export default function App() {
   )
   const showDockedAppSettings = showCodeWindow && codeWindowTab === 'settings'
 
+  // Warm up provider auth status on startup so status dots are available immediately.
+  // Runs once after mount; checks happen in parallel in the background.
+  const startupAuthCheckedRef = useRef(false)
+  useEffect(() => {
+    if (startupAuthCheckedRef.current) return
+    if (resolvedProviderConfigs.length === 0) return
+    startupAuthCheckedRef.current = true
+    void Promise.all(
+      resolvedProviderConfigs
+        .filter((config) => config.enabled)
+        .map((config) => refreshProviderAuthStatus(config)),
+    )
+  }, [resolvedProviderConfigs])
+
   useEffect(() => {
     if (!showDockedAppSettings || (appSettingsView !== 'connectivity' && appSettingsView !== 'diagnostics')) return
     setDiagnosticsError(null)
@@ -2996,6 +3092,8 @@ export default function App() {
           savedAt: panel.savedAt,
           editMode: panel.editMode,
         })),
+        applicationSettings,
+        themeOverrides,
       }
       void api.saveAppState(payload).catch(() => {})
       appStateSaveTimerRef.current = null
@@ -3010,6 +3108,7 @@ export default function App() {
   }, [
     api,
     activePanelId,
+    applicationSettings,
     codeWindowTab,
     dockTab,
     editorPanels,
@@ -3020,6 +3119,7 @@ export default function App() {
     selectedWorkspaceFile,
     showWorkspaceWindow,
     showCodeWindow,
+    themeOverrides,
     workspaceList,
     workspaceRoot,
     workspaceDockSide,
@@ -3161,10 +3261,15 @@ export default function App() {
       const target = event.target
       if (!(target instanceof HTMLElement)) return
       if (target.closest('[data-settings-popover-root="true"]')) return
-      setSettingsPopoverByPanel({})
+      setSettingsPopoverByPanel((prev) =>
+        Object.values(prev).some((value) => value !== null) ? {} : prev,
+      )
     }
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSettingsPopoverByPanel({})
+      if (event.key !== 'Escape') return
+      setSettingsPopoverByPanel((prev) =>
+        Object.values(prev).some((value) => value !== null) ? {} : prev,
+      )
     }
     window.addEventListener('mousedown', onMouseDown)
     window.addEventListener('keydown', onKeyDown)
@@ -4206,7 +4311,7 @@ export default function App() {
         markPanelActivity(agentWindowId, evt)
         const thinkingText = typeof evt.message === 'string' ? evt.message.trim() : ''
         if (thinkingText && thinkingText.includes(':')) {
-          const prefixed = `\u{1F504} ${thinkingText}`
+          const prefixed = `\u{1F504} ${formatToolTrace(thinkingText)}`
           setPanels((prev) =>
             prev.map((w) => {
               if (w.id !== agentWindowId) return w
@@ -4275,6 +4380,12 @@ export default function App() {
       if (evt?.type === 'assistantCompleted') {
         appendPanelDebug(agentWindowId, 'event:assistantCompleted', 'Assistant turn completed')
         flushWindowDelta(agentWindowId)
+        // Mark this provider as verified (first successful response confirms readiness)
+        const completedPanel = panelsRef.current.find((p) => p.id === agentWindowId)
+        if (completedPanel) {
+          const verifiedProvider = getModelProvider(completedPanel.model)
+          setProviderVerifiedByName((prev) => prev[verifiedProvider] ? prev : { ...prev, [verifiedProvider]: true })
+        }
         let snapshotForHistory: AgentPanelState | null = null
         let shouldKeepPromptTimer = false
         setPanels((prev) =>
@@ -4893,6 +5004,15 @@ export default function App() {
         .filter((config) => config.id !== 'openrouter')
         .map((config) => refreshProviderAuthStatus(config)),
     )
+  }
+
+  async function refreshMcpServers() {
+    try {
+      const servers = await api.getMcpServers()
+      setMcpServers(servers)
+    } catch {
+      // ignore
+    }
   }
 
   async function refreshProviderApiKeyState(providerId: string) {
@@ -6619,19 +6739,102 @@ export default function App() {
     void sendToAgent(winId, textToInject)
   }
 
+  function beginQueuedMessageEdit(winId: string, index: number) {
+    let queuedText = ''
+    setPanels((prev) =>
+      prev.map((x) => {
+        if (x.id !== winId) return x
+        if (index < 0 || index >= x.pendingInputs.length) return x
+        queuedText = x.pendingInputs[index]
+        return {
+          ...x,
+          input: queuedText,
+          status: `Editing queued message ${index + 1}. Send to update this slot.`,
+        }
+      }),
+    )
+    if (!queuedText) return
+    setInputDraftEditByPanel((prev) => ({ ...prev, [winId]: { kind: 'queued', index } }))
+    queueMicrotask(() => autoResizeTextarea(winId))
+  }
+
+  function removeQueuedMessage(winId: string, index: number) {
+    setPanels((prev) =>
+      prev.map((x) => {
+        if (x.id !== winId) return x
+        if (index < 0 || index >= x.pendingInputs.length) return x
+        const nextPending = x.pendingInputs.filter((_, j) => j !== index)
+        return { ...x, pendingInputs: nextPending }
+      }),
+    )
+    setInputDraftEditByPanel((prev) => {
+      const draft = prev[winId]
+      if (!draft || draft.kind !== 'queued') return prev
+      if (draft.index === index) return { ...prev, [winId]: null }
+      if (draft.index > index) return { ...prev, [winId]: { kind: 'queued', index: draft.index - 1 } }
+      return prev
+    })
+  }
+
+  function cancelDraftEdit(winId: string) {
+    setInputDraftEditByPanel((prev) => ({ ...prev, [winId]: null }))
+    setPanels((prev) =>
+      prev.map((x) =>
+        x.id !== winId
+          ? x
+          : {
+              ...x,
+              status: 'Draft edit cancelled.',
+            },
+      ),
+    )
+  }
+
+  function recallLastUserMessage(winId: string) {
+    const w = panels.find((x) => x.id === winId)
+    if (!w) return
+    const lastUserMsg = [...w.messages].reverse().find((m) => m.role === 'user' && (m.content ?? '').trim())
+    if (!lastUserMsg?.content) return
+    const isBusy = w.streaming || w.pendingInputs.length > 0
+    setInputDraftEditByPanel((prev) => ({
+      ...prev,
+      [winId]: isBusy ? { kind: 'recalled' } : null,
+    }))
+    setPanels((prev) =>
+      prev.map((x) =>
+        x.id !== winId
+          ? x
+          : {
+              ...x,
+              input: lastUserMsg.content ?? '',
+              status: isBusy
+                ? 'Recalled last message. Edit, then send to queue corrected text next.'
+                : 'Recalled last message. Edit and send when ready.',
+            },
+      ),
+    )
+    queueMicrotask(() => autoResizeTextarea(winId))
+  }
+
   function sendMessage(winId: string) {
     const w = panels.find((x) => x.id === winId)
     if (!w) return
+    const draftEdit = inputDraftEditByPanel[winId] ?? null
     const text = w.input.trim()
     const messageAttachments = w.attachments.map((a) => ({ ...a }))
     const imagePaths = messageAttachments.map((a) => a.path)
     if (!text && imagePaths.length === 0) return
     const hasDirtyEditor = editorPanels.some((p) => p.dirty)
+    const updatingQueuedDraft = draftEdit?.kind === 'queued'
     if (hasDirtyEditor) {
+      if (updatingQueuedDraft) {
+        // Updating queued text does not execute tools yet, so skip unsaved-editor warning.
+      } else {
       const proceed = confirm(
         'You have unsaved changes in the Code Window. Agents may overwrite your edits. Save your changes first, or choose OK to continue anyway.',
       )
       if (!proceed) return
+      }
     }
     const provider = getModelProvider(w.model)
     const usedPercent = provider === 'codex' ? getRateLimitPercent(w.usage) : null
@@ -6678,6 +6881,35 @@ export default function App() {
       prev.map((x) => {
         if (x.id !== winId) return x
         if (isBusy) {
+          if (draftEdit?.kind === 'queued') {
+            const nextPending = [...x.pendingInputs]
+            if (draftEdit.index >= 0 && draftEdit.index < nextPending.length) {
+              nextPending[draftEdit.index] = text
+              appendPanelDebug(winId, 'queue', `Updated queued message #${draftEdit.index + 1} (${text.length} chars)`)
+            } else {
+              nextPending.push(text)
+              appendPanelDebug(winId, 'queue', `Queued edited message at end (${text.length} chars)`)
+            }
+            const updated: AgentPanelState = {
+              ...x,
+              input: '',
+              pendingInputs: nextPending,
+              status: 'Updated queued message.',
+            }
+            snapshotForHistory = updated
+            return updated
+          }
+          if (draftEdit?.kind === 'recalled') {
+            appendPanelDebug(winId, 'queue', `Queued recalled correction at front (${text.length} chars)`)
+            const updated: AgentPanelState = {
+              ...x,
+              input: '',
+              pendingInputs: [text, ...x.pendingInputs],
+              status: 'Correction queued to run next.',
+            }
+            snapshotForHistory = updated
+            return updated
+          }
           appendPanelDebug(winId, 'queue', `Panel busy - queued message (${text.length} chars)`)
           const updated: AgentPanelState = {
             ...x,
@@ -6709,8 +6941,31 @@ export default function App() {
       }),
     )
     if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
+    if (draftEdit) {
+      setInputDraftEditByPanel((prev) => ({ ...prev, [winId]: null }))
+    }
 
     if (!isBusy) void sendToAgent(winId, text, imagePaths)
+  }
+
+  const [resendingPanelId, setResendingPanelId] = useState<string | null>(null)
+
+  function resendLastUserMessage(winId: string) {
+    const w = panels.find((x) => x.id === winId)
+    if (!w || w.streaming) return
+    const lastUserMsg = [...w.messages].reverse().find((m) => m.role === 'user')
+    if (!lastUserMsg) return
+    setResendingPanelId(winId)
+    setTimeout(() => setResendingPanelId(null), 1200)
+    clearPanelTurnComplete(winId)
+    setPanels((prev) =>
+      prev.map((x) =>
+        x.id !== winId
+          ? x
+          : { ...x, streaming: true, status: 'Resending...' },
+      ),
+    )
+    void sendToAgent(winId, lastUserMsg.content)
   }
 
   async function closePanel(panelId: string, opts?: { skipUpsertToHistory?: boolean }) {
@@ -7704,13 +7959,6 @@ export default function App() {
                 <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
               </svg>
             </button>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="flex items-center gap-0.5 shrink-0">
-              {!workspaceDockButtonOnLeft && workspaceDockToggleButton}
-              {!toolsDockButtonsOnLeft && codeDockToggleButton}
-              {!toolsDockButtonsOnLeft && settingsDockToggleButton}
-            </div>
             {/* layoutToolbar: Tile V/H/Grid */}
             <div data-layout-toolbar="true" className="flex items-center gap-1">
               <button
@@ -7754,6 +8002,13 @@ export default function App() {
                   <rect x="8.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor" />
                 </svg>
               </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-0.5 shrink-0">
+              {!workspaceDockButtonOnLeft && workspaceDockToggleButton}
+              {!toolsDockButtonsOnLeft && codeDockToggleButton}
+              {!toolsDockButtonsOnLeft && settingsDockToggleButton}
             </div>
           </div>
         </div>
@@ -8093,6 +8348,7 @@ export default function App() {
                   {view === 'preferences' && 'Preferences'}
                   {view === 'agents' && 'Agents'}
                   {view === 'orchestrator' && 'Orchestrator'}
+                  {view === 'mcp-servers' && 'MCP Servers'}
                   {view === 'diagnostics' && 'Diagnostics'}
                 </button>
               ))}
@@ -8594,7 +8850,7 @@ export default function App() {
                         : !status.installed
                           ? 'Not installed'
                           : status.authenticated
-                            ? 'Connected'
+                            ? (providerVerifiedByName[config.id] ? 'Connected' : 'Authenticated')
                             : 'Login required'
                     const rawStatusDetail = status?.detail?.trim() ?? ''
                     const detailLooksLikeConnected = /^connected[.!]?$/i.test(rawStatusDetail)
@@ -8610,7 +8866,9 @@ export default function App() {
                         : !status.installed
                           ? 'border-red-300 text-red-700 dark:border-red-800 dark:text-red-300'
                           : status.authenticated
-                            ? 'border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300'
+                            ? (providerVerifiedByName[config.id]
+                              ? 'border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300'
+                              : 'border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300')
                             : 'border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300'
                     const isBuiltIn = config.isBuiltIn ?? CONNECTIVITY_PROVIDERS.includes(config.id as ConnectivityProvider)
                     const override = providerRegistry.overrides[config.id]
@@ -8627,6 +8885,33 @@ export default function App() {
                       >
                         <summary className="list-none cursor-pointer flex items-center justify-between gap-3 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/80 hover:bg-neutral-50 dark:hover:bg-neutral-800 px-2.5 py-2">
                           <div className="flex items-center gap-2 flex-wrap min-w-0">
+                            {(() => {
+                              const cVerified = providerVerifiedByName[config.id]
+                              const dotCls = !providerEnabled
+                                ? 'bg-neutral-400 dark:bg-neutral-500'
+                                : !status
+                                  ? 'bg-neutral-400 dark:bg-neutral-500'
+                                  : !status.installed
+                                    ? 'bg-red-500'
+                                    : status.authenticated
+                                      ? (cVerified ? 'bg-emerald-500' : 'bg-amber-500')
+                                      : 'bg-amber-500'
+                              const dotTitle = !providerEnabled
+                                ? 'Disabled'
+                                : !status
+                                  ? 'Checking...'
+                                  : !status.installed
+                                    ? status.detail ?? 'CLI not found'
+                                    : status.authenticated
+                                      ? (cVerified ? status.detail ?? 'Connected' : 'Authenticated. Waiting for first response to verify.')
+                                      : status.detail ?? 'Login required'
+                              return (
+                                <span
+                                  className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${dotCls}`}
+                                  title={dotTitle}
+                                />
+                              )
+                            })()}
                             <span className="font-medium text-sm text-neutral-800 dark:text-neutral-200 truncate">
                               {config.displayName}
                               {!isBuiltIn && (
@@ -9270,6 +9555,285 @@ export default function App() {
                 </>
               )}
 
+              {appSettingsView === 'mcp-servers' && (
+                <>
+              <section className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">MCP Servers</div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                      onClick={() => void refreshMcpServers()}
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      type="button"
+                      className="px-2.5 py-1.5 rounded-md border border-blue-400 bg-blue-50 text-blue-800 hover:bg-blue-100 text-xs dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-900/50"
+                      onClick={() => {
+                        setMcpAddMode(true)
+                        setMcpEditingServer(null)
+                        setMcpJsonDraft('')
+                        setMcpJsonError(null)
+                      }}
+                    >
+                      Add Server
+                    </button>
+                  </div>
+                </div>
+                <div className="text-xs text-neutral-600 dark:text-neutral-400">
+                  MCP (Model Context Protocol) servers provide additional tools to agents. Paste server config JSON below in Claude Desktop format. Tools are automatically available to API-based providers (OpenRouter, OpenAI).
+                </div>
+
+                {mcpAddMode && (
+                  <div className="rounded-lg border border-blue-300 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 p-3 space-y-2">
+                    <div className="text-xs font-medium text-blue-800 dark:text-blue-200">Add MCP Server</div>
+                    <textarea
+                      className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-2 text-xs font-mono dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 resize-y"
+                      rows={8}
+                      value={mcpJsonDraft}
+                      onChange={(e) => { setMcpJsonDraft(e.target.value); setMcpJsonError(null) }}
+                      placeholder={'{\n  "azure-sql": {\n    "command": "npx",\n    "args": ["-y", "@azure/mssql-mcp-server"],\n    "env": {\n      "MSSQL_CONNECTION_STRING": "Server=tcp:..."\n    }\n  }\n}'}
+                      spellCheck={false}
+                    />
+                    {mcpJsonError && (
+                      <div className="text-xs text-red-600 dark:text-red-400">{mcpJsonError}</div>
+                    )}
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        className="px-2.5 py-1.5 rounded-md border border-blue-400 bg-blue-50 text-blue-800 hover:bg-blue-100 text-xs dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-900/50"
+                        onClick={async () => {
+                          try {
+                            let parsed = JSON.parse(mcpJsonDraft.trim()) as Record<string, unknown>
+                            if (parsed.mcpServers && typeof parsed.mcpServers === 'object' && !Array.isArray(parsed.mcpServers)) {
+                              parsed = parsed.mcpServers as Record<string, unknown>
+                            }
+                            const keys = Object.keys(parsed)
+                            if (keys.length === 0) { setMcpJsonError('JSON must have at least one server key.'); return }
+                            for (const key of keys) {
+                              const val = parsed[key] as Record<string, unknown>
+                              if (!val || typeof val !== 'object' || typeof val.command !== 'string' || !val.command) {
+                                setMcpJsonError(`Server "${key}" is missing a "command" field.`); return
+                              }
+                              await api.addMcpServer(key, {
+                                command: val.command as string,
+                                args: Array.isArray(val.args) ? val.args.map(String) : undefined,
+                                env: val.env && typeof val.env === 'object' ? val.env as Record<string, string> : undefined,
+                                enabled: true,
+                              })
+                            }
+                            setMcpAddMode(false)
+                            setMcpJsonDraft('')
+                            setMcpJsonError(null)
+                            void refreshMcpServers()
+                          } catch {
+                            setMcpJsonError('Invalid JSON. Paste a valid config object.')
+                          }
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                        onClick={() => { setMcpAddMode(false); setMcpJsonDraft(''); setMcpJsonError(null) }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-3">
+                  {mcpServers.length === 0 && !mcpAddMode && (
+                    <div className="text-xs text-neutral-500 dark:text-neutral-400 italic py-2">
+                      No MCP servers configured. Click "Add Server" and paste a JSON config block.
+                    </div>
+                  )}
+                  {mcpServers.map((server) => {
+                    const panelOpen = mcpPanelOpenByName[server.name] ?? false
+                    const isEditing = mcpEditingServer === server.name
+                    const statusLabel = server.config.enabled === false
+                      ? 'Disabled'
+                      : server.connected
+                        ? 'Connected'
+                        : server.error
+                          ? 'Error'
+                          : 'Disconnected'
+                    const statusClass = server.config.enabled === false
+                      ? 'border-neutral-300 text-neutral-600 dark:border-neutral-700 dark:text-neutral-400'
+                      : server.connected
+                        ? 'border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300'
+                        : server.error
+                          ? 'border-red-300 text-red-700 dark:border-red-800 dark:text-red-300'
+                          : 'border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300'
+                    return (
+                      <details
+                        key={server.name}
+                        open={panelOpen}
+                        onToggle={(e) => {
+                          const next = e.currentTarget.open
+                          setMcpPanelOpenByName((prev) => (prev[server.name] === next ? prev : { ...prev, [server.name]: next }))
+                        }}
+                        className={`group rounded-lg border border-neutral-300 dark:border-neutral-700 p-3 bg-neutral-100 dark:bg-neutral-900/60 shadow-sm ${server.config.enabled === false ? 'opacity-60' : ''}`}
+                      >
+                        <summary className="list-none cursor-pointer flex items-center justify-between gap-3 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/80 hover:bg-neutral-50 dark:hover:bg-neutral-800 px-2.5 py-2">
+                          <div className="flex items-center gap-2 flex-wrap min-w-0">
+                            <span className="font-medium text-sm text-neutral-800 dark:text-neutral-200 truncate">{server.name}</span>
+                            <div className={`px-2 py-0.5 rounded-full text-[11px] border ${statusClass}`}>{statusLabel}</div>
+                            {server.connected && (
+                              <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                                {server.toolCount} tool{server.toolCount !== 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 12 12"
+                            fill="none"
+                            className="text-neutral-500 dark:text-neutral-400 transition-transform group-open:rotate-180"
+                            aria-hidden
+                          >
+                            <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </summary>
+                        <div className="mt-2 pt-2 border-t border-neutral-200 dark:border-neutral-700 space-y-2 rounded-md bg-white/80 dark:bg-neutral-950/60 px-2.5 pb-2">
+                          {!isEditing && (
+                            <>
+                              <pre className="text-xs font-mono text-neutral-800 dark:text-neutral-200 bg-neutral-50 dark:bg-neutral-900 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all border border-neutral-200 dark:border-neutral-700">
+{JSON.stringify({ [server.name]: { command: server.config.command, ...(server.config.args?.length ? { args: server.config.args } : {}), ...(server.config.env && Object.keys(server.config.env).length ? { env: server.config.env } : {}) } }, null, 2)}
+                              </pre>
+                              {server.error && (
+                                <div className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/30 px-2 py-1 rounded border border-red-200 dark:border-red-900">
+                                  {server.error}
+                                </div>
+                              )}
+                              {server.connected && server.tools.length > 0 && (
+                                <div className="space-y-1">
+                                  <div className="text-[11px] font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Available Tools</div>
+                                  <div className="flex flex-wrap gap-1">
+                                    {server.tools.map((t) => (
+                                      <span
+                                        key={t.name}
+                                        className="px-1.5 py-0.5 rounded text-[11px] font-mono bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-300"
+                                        title={t.description ?? t.name}
+                                      >
+                                        {t.name}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              <div className="flex gap-1.5 pt-1 flex-wrap">
+                                <button
+                                  type="button"
+                                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                  onClick={() => {
+                                    setMcpEditingServer(server.name)
+                                    const configObj: Record<string, unknown> = { command: server.config.command }
+                                    if (server.config.args?.length) configObj.args = server.config.args
+                                    if (server.config.env && Object.keys(server.config.env).length) configObj.env = server.config.env
+                                    setMcpJsonDraft(JSON.stringify({ [server.name]: configObj }, null, 2))
+                                    setMcpJsonError(null)
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="px-2 py-1 text-xs rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                  onClick={async () => {
+                                    await api.restartMcpServer(server.name)
+                                    void refreshMcpServers()
+                                  }}
+                                >
+                                  Restart
+                                </button>
+                                <button
+                                  type="button"
+                                  className="px-2 py-1 text-xs rounded border border-red-200 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+                                  onClick={async () => {
+                                    await api.removeMcpServer(server.name)
+                                    void refreshMcpServers()
+                                  }}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </>
+                          )}
+                          {isEditing && (
+                            <div className="space-y-2">
+                              <textarea
+                                className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-2 text-xs font-mono dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 resize-y"
+                                rows={8}
+                                value={mcpJsonDraft}
+                                onChange={(e) => { setMcpJsonDraft(e.target.value); setMcpJsonError(null) }}
+                                spellCheck={false}
+                              />
+                              {mcpJsonError && (
+                                <div className="text-xs text-red-600 dark:text-red-400">{mcpJsonError}</div>
+                              )}
+                              <div className="flex gap-2 pt-1">
+                                <button
+                                  type="button"
+                                  className="px-2.5 py-1.5 rounded-md border border-blue-400 bg-blue-50 text-blue-800 hover:bg-blue-100 text-xs dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-900/50"
+                                  onClick={async () => {
+                                    try {
+                                      let parsed = JSON.parse(mcpJsonDraft.trim()) as Record<string, unknown>
+                                      if (parsed.mcpServers && typeof parsed.mcpServers === 'object' && !Array.isArray(parsed.mcpServers)) {
+                                        parsed = parsed.mcpServers as Record<string, unknown>
+                                      }
+                                      const keys = Object.keys(parsed)
+                                      if (keys.length !== 1) { setMcpJsonError('Edit JSON must have exactly one server key.'); return }
+                                      const newName = keys[0]
+                                      const val = parsed[newName] as Record<string, unknown>
+                                      if (!val || typeof val !== 'object' || typeof val.command !== 'string' || !val.command) {
+                                        setMcpJsonError('Missing "command" field.'); return
+                                      }
+                                      if (newName !== server.name) {
+                                        await api.removeMcpServer(server.name)
+                                      }
+                                      const fn = newName !== server.name ? api.addMcpServer : api.updateMcpServer
+                                      await fn(newName, {
+                                        command: val.command as string,
+                                        args: Array.isArray(val.args) ? val.args.map(String) : undefined,
+                                        env: val.env && typeof val.env === 'object' ? val.env as Record<string, string> : undefined,
+                                        enabled: server.config.enabled,
+                                      })
+                                      setMcpEditingServer(null)
+                                      setMcpJsonDraft('')
+                                      setMcpJsonError(null)
+                                      void refreshMcpServers()
+                                    } catch {
+                                      setMcpJsonError('Invalid JSON.')
+                                    }
+                                  }}
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  type="button"
+                                  className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                                  onClick={() => { setMcpEditingServer(null); setMcpJsonDraft(''); setMcpJsonError(null) }}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    )
+                  })}
+                </div>
+              </section>
+                </>
+              )}
+
               {appSettingsView === 'diagnostics' && (
                 <>
               <section className="space-y-3">
@@ -9548,7 +10112,7 @@ export default function App() {
                       : !status.installed
                         ? 'Not installed'
                         : status.authenticated
-                          ? 'Connected'
+                          ? (providerVerifiedByName[providerId] ? 'Connected' : 'Authenticated')
                           : 'Setup required'
                     const rawStatusDetail = status?.detail?.trim() ?? ''
                     const statusDetail = !providerEnabled
@@ -9559,7 +10123,22 @@ export default function App() {
                     return (
                       <div key={providerId} className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-2">
                         <div className="flex items-center justify-between">
-                          <div className="font-medium text-sm text-neutral-800 dark:text-neutral-200">
+                          <div className="flex items-center gap-2 font-medium text-sm text-neutral-800 dark:text-neutral-200">
+                            <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${
+                              !providerEnabled ? 'bg-neutral-400 dark:bg-neutral-500'
+                              : !status ? 'bg-neutral-400 dark:bg-neutral-500'
+                              : !status.installed ? 'bg-red-500'
+                              : status.authenticated
+                                ? (providerVerifiedByName[providerId] ? 'bg-emerald-500' : 'bg-amber-500')
+                                : 'bg-amber-500'
+                            }`} title={
+                              !providerEnabled ? 'Disabled'
+                              : !status ? 'Checking...'
+                              : !status.installed ? (status.detail ?? 'CLI not found')
+                              : status.authenticated
+                                ? (providerVerifiedByName[providerId] ? (status.detail ?? 'Connected') : 'Authenticated. Waiting for first response to verify.')
+                                : (status.detail ?? 'Login required')
+                            } />
                             {providerId === 'openrouter' ? 'OpenRouter (Free Models)' : config.displayName}
                           </div>
                           <div className="text-xs text-neutral-600 dark:text-neutral-400">{statusText}</div>
@@ -9594,6 +10173,21 @@ export default function App() {
                           >
                             {config.type === 'api' ? 'Open keys page' : status?.authenticated ? 'Re-authenticate' : 'Open login'}
                           </button>
+                          {config.type === 'cli' &&
+                            ((config as ProviderConfigCli).upgradeCommand || (config as ProviderConfigCli).upgradePackage) && (
+                            <button
+                              className={UI_BUTTON_SECONDARY_CLASS}
+                              disabled={loading}
+                              onClick={() => void startProviderUpgradeFlow(config)}
+                              title={
+                                (config as ProviderConfigCli).upgradePackage
+                                  ? `Clean reinstall: npm uninstall -g ${(config as ProviderConfigCli).upgradePackage}; npm install -g ${(config as ProviderConfigCli).upgradePackage}@latest`
+                                  : (config as ProviderConfigCli).upgradeCommand
+                              }
+                            >
+                              {status?.installed ? 'Upgrade CLI' : 'Install CLI'}
+                            </button>
+                          )}
                           {PROVIDER_SUBSCRIPTION_URLS[providerId] && (
                             <button
                               className={UI_BUTTON_SECONDARY_CLASS}
@@ -9805,7 +10399,32 @@ export default function App() {
             <div className="p-4 min-h-0 flex-1 overflow-auto">
               {workspacePickerPrompt && (
                 <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700/60 dark:bg-amber-900/20 dark:text-amber-100">
-                  {workspacePickerPrompt}
+                  <div>{workspacePickerPrompt}</div>
+                  {isLockedWorkspacePrompt(workspacePickerPrompt) && (
+                    <button
+                      type="button"
+                      className="mt-2 px-3 py-1.5 text-xs rounded border border-amber-400 bg-amber-100 text-amber-900 hover:bg-amber-200 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-100 dark:hover:bg-amber-800/60"
+                      disabled={Boolean(workspacePickerOpening)}
+                      onClick={async () => {
+                        setWorkspacePickerError(null)
+                        for (const p of workspaceList) {
+                          setWorkspacePickerOpening(p)
+                          try {
+                            const result = await api.claimWorkspace?.(p)
+                            if (result?.ok) {
+                              setWorkspacePickerPrompt(null)
+                              requestWorkspaceSwitch(p, 'picker')
+                              return
+                            }
+                          } catch { /* try next */ }
+                        }
+                        setWorkspacePickerOpening(null)
+                        setWorkspacePickerError('Could not override locks. Try closing other Barnaby instances manually.')
+                      }}
+                    >
+                      Force unlock and open
+                    </button>
+                  )}
                 </div>
               )}
               {workspacePickerError && (
@@ -10042,6 +10661,7 @@ export default function App() {
     const hasInput = Boolean(w.input.trim()) || w.attachments.length > 0
     const isBusy = w.streaming
     const queueCount = w.pendingInputs.length
+    const isIdle = !w.streaming && queueCount === 0
     const panelFontSizePx = 14 * w.fontScale
     const panelLineHeightPx = 24 * w.fontScale
     const panelTextStyle = { fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }
@@ -10067,7 +10687,13 @@ export default function App() {
         ? 'bg-sky-500/90'
         : 'bg-neutral-300 dark:bg-neutral-700'
     const activityLabel = isRunning ? 'running' : isQueued ? 'queued' : isFinalComplete ? 'done' : hasRecentActivity ? 'recent' : 'idle'
-    const sendTitle = isBusy
+    const draftEdit = inputDraftEditByPanel[w.id] ?? null
+    const editingQueuedIndex = draftEdit?.kind === 'queued' ? draftEdit.index : null
+    const sendTitle = draftEdit?.kind === 'queued'
+      ? 'Update queued message'
+      : draftEdit?.kind === 'recalled' && isBusy
+        ? 'Queue corrected message next'
+        : isBusy
       ? hasInput
         ? `Queue message${queueCount > 0 ? ` (${queueCount} queued)` : ''}`
         : 'Busy'
@@ -10082,7 +10708,7 @@ export default function App() {
     const formatDurationLabel = (durationMs: number) => `${(durationMs / 1000).toFixed(1).replace(/\.0$/, '')}s`
     const activePromptStartedAt = activePromptStartedAtRef.current.get(w.id)
     const livePromptDurationLabel =
-      applicationSettings.showResponseDurationAfterPrompt && isRunning && typeof activePromptStartedAt === 'number'
+      isRunning && typeof activePromptStartedAt === 'number'
         ? formatDurationLabel(Math.max(0, activityClock - activePromptStartedAt))
         : null
     const completedPromptDurationLabel =
@@ -10095,6 +10721,7 @@ export default function App() {
           .find((unit) => unit.kind === 'assistant' || unit.kind === 'code' || unit.kind === 'thinking')
           ?.id ?? null
         : null
+    const lastUserUnitId = [...timelineUnits].reverse().find((u) => u.kind === 'user')?.id ?? null
     const verbose = Boolean(applicationSettings.verboseDiagnostics)
     const showActivityUpdates = verbose || DEFAULT_DIAGNOSTICS_VISIBILITY.showActivityUpdates
     const showReasoningUpdates = verbose || DEFAULT_DIAGNOSTICS_VISIBILITY.showReasoningUpdates
@@ -10114,19 +10741,20 @@ export default function App() {
     const permissionLockedToVerifyFirst = panelSecurity.permissionLockedToVerifyFirst
     const contextUsage = estimatePanelContextUsage(w)
     const contextUsagePercent = contextUsage ? Math.max(0, Number(contextUsage.usedPercent.toFixed(1))) : null
-    const contextUsageBarClass =
+    const contextUsageStrokeColor =
       contextUsagePercent === null
-        ? ''
+        ? 'currentColor'
         : contextUsagePercent >= 95
-          ? 'bg-red-600'
+          ? '#dc2626'
           : contextUsagePercent >= 85
-            ? 'bg-amber-500'
-            : 'bg-emerald-600'
+            ? '#f59e0b'
+            : '#059669'
 
     return (
       <div
         className={[
-          'h-full min-h-0 min-w-0 flex flex-col rounded-xl border bg-white dark:bg-neutral-950 overflow-hidden outline-none shadow-sm',
+          'relative h-full min-h-0 min-w-0 flex flex-col rounded-xl border bg-white dark:bg-neutral-950 overflow-hidden outline-none shadow-sm',
+          settingsPopover ? 'z-40' : 'z-0',
           activePanelId === w.id
             ? 'border-blue-400 dark:border-blue-600 ring-2 ring-blue-100 dark:ring-blue-900/40'
             : 'border-neutral-200/90 dark:border-neutral-800',
@@ -10274,75 +10902,55 @@ export default function App() {
               i += 1
             }
             return rows.map((row) => {
-              if (row.type === 'operationBatch') {
-                return (
-                  <div key={`op-batch-${row.units.map((u) => u.id).join('-')}`} className="w-full space-y-0 -my-0.5">
-                    {row.units.map((unit) => {
-                      const traceText = unit.body.replace(/\s*\n+\s*/g, ' | ').trim()
-                      return (
-                        <div key={unit.id} className="px-1 py-0">
-                          <div
-                            className="rounded px-2 py-0 text-[11px] leading-[1.2] transition-opacity duration-300"
-                            style={{
-                              color: operationTraceColor,
-                              display: '-webkit-box',
-                              WebkitLineClamp: 2,
-                              WebkitBoxOrient: 'vertical',
-                              overflow: 'hidden',
-                            }}
-                            title={unit.body}
-                          >
-                            {traceText}
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )
-              }
-              if (row.type === 'thinkingBatch') {
-                const THINKING_FOLD_THRESHOLD = 5
+              if (row.type === 'operationBatch' || row.type === 'thinkingBatch') {
+                const INLINE_LIMIT = 10
                 const items = row.units
-                const batchKey = `think-batch-${items.map((u) => u.id).join('-')}`
+                const isOps = row.type === 'operationBatch'
+                const batchKey = `${isOps ? 'op' : 'think'}-batch-${items.map((u) => u.id).join('-')}`
                 const lastInProgress = items[items.length - 1]?.status === 'in_progress'
-                const renderLine = (u: TimelineUnit) => {
-                  const label = u.body.replace(/^\u{1F504}\s*/u, '').trim()
+                const batchColor = isOps ? operationTraceColor : timelineMessageColor
+                const renderItem = (u: TimelineUnit) => {
+                  const rawText = (isOps ? u.body.replace(/\s*\n+\s*/g, ' | ') : u.body.replace(/^\u{1F504}\s*/u, '')).trim()
+                  const text = formatToolTrace(rawText)
                   return (
                     <div key={u.id} className="px-1 py-0">
                       <div
                         className={`text-[11px] leading-[1.4] truncate ${u.status === 'in_progress' ? 'animate-pulse motion-reduce:animate-none' : ''}`}
-                        style={{ color: timelineMessageColor }}
-                        title={label}
+                        style={{ color: batchColor }}
+                        title={rawText}
                       >
-                        {label}
+                        {text}
                       </div>
                     </div>
                   )
                 }
-                if (items.length <= THINKING_FOLD_THRESHOLD) {
+
+                if (items.length <= INLINE_LIMIT) {
                   return (
                     <div key={batchKey} className="w-full space-y-0">
-                      {items.map(renderLine)}
+                      {items.map(renderItem)}
                     </div>
                   )
                 }
-                const batchOpen = timelineOpenByUnitId[batchKey] ?? lastInProgress
+
+                const batchOpen = timelineOpenByUnitId[batchKey] ?? false
+                const label = lastInProgress ? 'Working...' : `${items.length} tool steps`
                 return (
                   <div key={batchKey} className="w-full">
                     <button
                       type="button"
                       className={`w-full text-left cursor-pointer py-1 px-1 text-[11px] flex items-center gap-1.5 select-none hover:opacity-80 bg-transparent border-0 outline-none ${lastInProgress ? 'animate-pulse motion-reduce:animate-none' : ''}`}
-                      style={{ color: timelineMessageColor }}
+                      style={{ color: batchColor }}
                       onClick={() => setTimelineOpenByUnitId((prev) => ({ ...prev, [batchKey]: !batchOpen }))}
                     >
                       <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className={`shrink-0 transition-transform ${batchOpen ? 'rotate-90' : ''}`} aria-hidden>
                         <path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
-                      <span>{items.length} tool steps</span>
+                      <span>{label}</span>
                     </button>
                     {batchOpen && (
                       <div className="space-y-0 pl-3">
-                        {items.map(renderLine)}
+                        {items.map(renderItem)}
                       </div>
                     )}
                   </div>
@@ -10396,6 +11004,7 @@ export default function App() {
               content: unit.body,
               format: (unit.markdown ? 'markdown' : 'text') as MessageFormat,
               attachments: unit.attachments,
+              createdAt: unit.createdAt,
             }
             const isDebugSystemNote = m.role === 'system' && /^Debug \(/.test(m.content)
             const isLimitSystemWarning = m.role === 'system' && m.content.startsWith(LIMIT_WARNING_PREFIX)
@@ -10411,11 +11020,17 @@ export default function App() {
             const showCompletedDurationOnMessage = Boolean(
               completedPromptDurationLabel && lastAgentTimelineUnitId === unit.id,
             )
+            const isLastUserMessage = m.role === 'user' && unit.id === lastUserUnitId
+            const lastUserMessageAgeMs = isLastUserMessage
+              ? Math.max(0, activityClock - (m.createdAt ?? activityClock))
+              : Number.POSITIVE_INFINITY
+            const canRecallLastUserMessage = isLastUserMessage && isIdle && lastUserMessageAgeMs <= LAST_USER_RECALL_EXPIRY_MS
+            const canResendLastUserMessage = isLastUserMessage && isIdle
             return (
             <div key={m.id} className="w-full">
               <div
                 className={[
-                  'w-full',
+                  'w-full relative group',
                   shouldCollapseThinking
                     ? 'py-1'
                     : [
@@ -10436,6 +11051,9 @@ export default function App() {
                 ].filter(Boolean).join(' ')}
                 style={messageContainerStyle}
               >
+                {m.role === 'user' && unit.id === lastUserUnitId && resendingPanelId === w.id && (
+                  <div className="absolute inset-0 rounded-2xl animate-pulse bg-blue-200/30 dark:bg-blue-400/10 pointer-events-none" />
+                )}
                 {isCodeLifecycleUnit && hasFencedCodeBlocks && (
                   <div className="mb-2 flex justify-end">
                     <button
@@ -10505,8 +11123,14 @@ export default function App() {
                                   <div className="group my-2 rounded-lg border border-neutral-300/80 dark:border-neutral-700/80 bg-neutral-100/80 dark:bg-neutral-900/65">
                                     <button
                                       type="button"
+                                      data-chat-code-rollup="true"
                                       className="w-full text-left cursor-pointer px-3 py-2.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between gap-2 bg-transparent border-0 outline-none hover:opacity-80"
-                                      onClick={() => setCodeBlockOpenById((prev) => ({ ...prev, [codeBlockId]: !isOpen }))}
+                                      onClick={() =>
+                                        setCodeBlockOpenById((prev) => {
+                                          const current = prev[codeBlockId] ?? openByDefault
+                                          return { ...prev, [codeBlockId]: !current }
+                                        })
+                                      }
                                     >
                                       <span className="inline-flex items-center gap-1.5">
                                         <span>{lang} - {lineCount} lines</span>
@@ -10634,8 +11258,14 @@ export default function App() {
                             <div className="group my-2 rounded-lg border border-neutral-300/80 dark:border-neutral-700/80 bg-neutral-100/80 dark:bg-neutral-900/65">
                               <button
                                 type="button"
+                                data-chat-code-rollup="true"
                                 className="w-full text-left cursor-pointer px-3 py-2.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between gap-2 bg-transparent border-0 outline-none hover:opacity-80"
-                                onClick={() => setCodeBlockOpenById((prev) => ({ ...prev, [codeBlockId]: !isOpen }))}
+                                onClick={() =>
+                                  setCodeBlockOpenById((prev) => {
+                                    const current = prev[codeBlockId] ?? openByDefault
+                                    return { ...prev, [codeBlockId]: !current }
+                                  })
+                                }
                               >
                                 <span className="inline-flex items-center gap-1.5">
                                   <span>{lang} - {lineCount} lines</span>
@@ -10770,6 +11400,39 @@ export default function App() {
                     </span>
                   </div>
                 )}
+                {isLastUserMessage && (
+                  <div className="flex justify-end mt-1.5 -mb-0.5 -mr-1 gap-1 opacity-0 pointer-events-none transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
+                    {canResendLastUserMessage && (
+                      <button
+                        type="button"
+                        className="h-6 w-6 inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50/70 text-blue-600 hover:bg-blue-100 hover:border-blue-300 dark:border-blue-900/70 dark:bg-blue-950/25 dark:text-blue-300 dark:hover:bg-blue-900/40 dark:hover:border-blue-700"
+                        onClick={() => resendLastUserMessage(w.id)}
+                        title="Resend this message"
+                        aria-label="Resend this message"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+                          <path d="M13 8A5 5 0 1 1 8 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                          <path d="M8 1L10.5 3L8 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                    )}
+                    {canRecallLastUserMessage && (
+                      <button
+                        type="button"
+                        className="h-6 w-6 inline-flex items-center justify-center rounded-md border border-blue-200 bg-white/80 text-blue-700 hover:bg-blue-100 hover:border-blue-300 dark:border-blue-900/70 dark:bg-blue-950/25 dark:text-blue-200 dark:hover:bg-blue-900/40 dark:hover:border-blue-700"
+                        onClick={() => recallLastUserMessage(w.id)}
+                        title="Recall this message for quick correction"
+                        aria-label="Recall this message for editing"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+                          <path d="M3 11.5L2.8 13.2L4.5 13L12.2 5.3L10.7 3.8L3 11.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                          <path d="M9.9 4.6L11.4 6.1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                          <path d="M2.5 13.5H13.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
             )
@@ -10781,15 +11444,34 @@ export default function App() {
               </div>
               {w.pendingInputs.map((text, i) => {
                 const preview = text.length > 80 ? text.slice(0, 80) + '...' : text
+                const isEditingThisQueueItem = editingQueuedIndex === i
                 return (
                   <div
                     key={`queued-${i}-${text.slice(0, 20)}`}
-                    className="flex items-start gap-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/90 dark:bg-amber-950/30 px-3 py-2"
+                    className={`flex items-start gap-2 rounded-xl border px-3 py-2 ${
+                      isEditingThisQueueItem
+                        ? 'border-blue-300 bg-blue-50/90 dark:border-blue-700 dark:bg-blue-950/30'
+                        : 'border-amber-300 dark:border-amber-700 bg-amber-50/90 dark:bg-amber-950/30'
+                    }`}
                   >
-                    <span className="flex-1 min-w-0 text-sm text-amber-950 dark:text-amber-100 whitespace-pre-wrap break-words">
+                    <span className={`flex-1 min-w-0 text-sm whitespace-pre-wrap break-words ${
+                      isEditingThisQueueItem ? 'text-blue-950 dark:text-blue-100' : 'text-amber-950 dark:text-amber-100'
+                    }`}>
                       {preview}
                     </span>
                     <div className="shrink-0 flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        className="h-6 w-6 inline-flex items-center justify-center rounded border border-blue-300 bg-white/90 text-blue-700 hover:bg-blue-100 hover:border-blue-400 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-900/50 dark:hover:border-blue-600"
+                        title="Edit queued message"
+                        aria-label="Edit queued message"
+                        onClick={() => beginQueuedMessageEdit(w.id, i)}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+                          <path d="M3 11.5L2.8 13.2L4.5 13L12.2 5.3L10.7 3.8L3 11.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                          <path d="M9.9 4.6L11.4 6.1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                        </svg>
+                      </button>
                       <button
                         type="button"
                         className="h-6 w-6 inline-flex items-center justify-center rounded border border-amber-400 bg-white/80 text-amber-700 hover:bg-emerald-50 hover:border-emerald-400 hover:text-emerald-700 dark:border-amber-600 dark:bg-amber-900/50 dark:text-amber-200 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300"
@@ -10806,15 +11488,7 @@ export default function App() {
                         className="h-6 w-6 inline-flex items-center justify-center rounded border border-amber-400 bg-white/80 text-amber-700 hover:bg-red-50 hover:border-red-300 hover:text-red-700 dark:border-amber-600 dark:bg-amber-900/50 dark:text-amber-200 dark:hover:bg-red-950/40 dark:hover:text-red-400"
                         title="Remove from queue"
                         aria-label="Remove from queue"
-                        onClick={() => {
-                          setPanels((prev) =>
-                            prev.map((x) => {
-                              if (x.id !== w.id) return x
-                              const nextPending = x.pendingInputs.filter((_, j) => j !== i)
-                              return { ...x, pendingInputs: nextPending }
-                            }),
-                          )
-                        }}
+                        onClick={() => removeQueuedMessage(w.id, i)}
                       >
                         &times;
                       </button>
@@ -10850,55 +11524,22 @@ export default function App() {
               ))}
             </div>
           )}
-          <div className="mb-1 px-0.5 min-w-0 text-[11px]" style={{ color: timelineMessageColor }}>
-            <span className="break-words [overflow-wrap:anywhere]">{w.status}</span>
-          </div>
-          <div className="mb-1.5 px-0.5 flex items-center gap-3 flex-wrap min-w-0">
-            {contextUsage && contextUsagePercent !== null && (
-              <div
-                className="inline-flex items-center gap-2"
-                title={`${contextUsagePercent.toFixed(1)}% used
-Estimated context usage
-Model window: ${contextUsage.modelContextTokens.toLocaleString()} tokens
-Reserved output: ${contextUsage.outputReserveTokens.toLocaleString()} tokens
-Safe input budget: ${contextUsage.safeInputBudgetTokens.toLocaleString()} tokens
-Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
-              >
-                <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
-                  <span
-                    className={`block h-full ${contextUsageBarClass}`}
-                    style={{ width: `${Math.max(0, Math.min(100, contextUsagePercent))}%` }}
-                  />
-                </span>
-                <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{contextUsagePercent.toFixed(1)}%</span>
-              </div>
-            )}
-            <span
-              className="inline-flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-300"
-              title={activityTitle}
-              aria-label={`Panel activity ${activityLabel}`}
-            >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${activityDotClass} ${isRunning ? 'animate-pulse' : ''}`}
-                aria-hidden
-              />
-              {activityLabel}
-            </span>
-            {showCompletionNotice && (
-              <span
-                className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/35 dark:text-emerald-200"
-                aria-live="polite"
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-                complete
+          {draftEdit && (
+            <div className="mb-1.5 flex items-center justify-between gap-2 rounded-md border border-blue-200/80 bg-blue-50/80 px-2 py-1 text-[11px] text-blue-800 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-200">
+              <span>
+                {draftEdit.kind === 'queued'
+                  ? `Editing queued message #${draftEdit.index + 1}.`
+                  : 'Editing recalled message.'}
               </span>
-            )}
-            {livePromptDurationLabel && (
-              <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400" title="Response duration">
-                t+{livePromptDurationLabel}
-              </span>
-            )}
-          </div>
+              <button
+                type="button"
+                className="rounded border border-blue-300/80 px-1.5 py-0.5 text-[10px] hover:bg-blue-100 dark:border-blue-700 dark:hover:bg-blue-900/50"
+                onClick={() => cancelDraftEdit(w.id)}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
           <div className="flex items-end gap-2 min-w-0">
             <textarea
               ref={(el) => registerTextarea(w.id, el)}
@@ -10971,11 +11612,57 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
               )}
             </button>
           </div>
-        </div>
-
-        <div className="relative z-20 border-t border-neutral-200/80 dark:border-neutral-800 px-3 py-2 text-xs min-w-0 overflow-visible bg-white/90 dark:bg-neutral-950">
-          <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
-            <div className="min-w-0 flex-1 text-neutral-600 dark:text-neutral-300">
+          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 min-w-0 text-xs">
+            <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2 text-neutral-600 dark:text-neutral-300">
+              {w.status && (
+                <span className="text-[11px] truncate max-w-[180px]" style={{ color: timelineMessageColor }} title={w.status}>
+                  {w.status}
+                </span>
+              )}
+              {contextUsage && contextUsagePercent !== null && (
+                <div
+                  className="inline-flex items-center gap-1"
+                  title={`${contextUsagePercent.toFixed(1)}% used\nEstimated context usage\nModel window: ${contextUsage.modelContextTokens.toLocaleString()} tokens\nReserved output: ${contextUsage.outputReserveTokens.toLocaleString()} tokens\nSafe input budget: ${contextUsage.safeInputBudgetTokens.toLocaleString()} tokens\nEstimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" className="shrink-0 -rotate-90">
+                    <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.15" strokeWidth="2" />
+                    <circle
+                      cx="8" cy="8" r="6" fill="none"
+                      stroke={contextUsageStrokeColor}
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeDasharray={`${2 * Math.PI * 6}`}
+                      strokeDashoffset={`${2 * Math.PI * 6 * (1 - Math.max(0, Math.min(100, contextUsagePercent)) / 100)}`}
+                    />
+                  </svg>
+                  <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{contextUsagePercent.toFixed(0)}%</span>
+                </div>
+              )}
+              <span
+                className="inline-flex items-center gap-1 text-[11px] text-neutral-500 dark:text-neutral-300"
+                title={activityTitle}
+                aria-label={`Panel activity ${activityLabel}`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${activityDotClass} ${isRunning ? 'animate-pulse' : ''}`}
+                  aria-hidden
+                />
+                {activityLabel}
+              </span>
+              {showCompletionNotice && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/35 dark:text-emerald-200"
+                  aria-live="polite"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
+                  complete
+                </span>
+              )}
+              {livePromptDurationLabel && (
+                <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400" title="Response duration">
+                  t+{livePromptDurationLabel}
+                </span>
+              )}
               {(() => {
                 const pct = getRateLimitPercent(w.usage)
                 const label = formatRateLimitLabel(w.usage)
@@ -10983,11 +11670,11 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                   return null
                 }
                 return (
-                  <div className="inline-flex items-center gap-2">
-                    <span className="h-1.5 w-20 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
+                  <div className="inline-flex items-center gap-1.5">
+                    <span className="h-1.5 w-16 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
                       <span className="block h-full bg-blue-600" style={{ width: `${100 - pct}%` }} />
                     </span>
-                    <span className="text-neutral-500 dark:text-neutral-400">{label}</span>
+                    <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{label}</span>
                   </div>
                 )
               })()}
@@ -11013,7 +11700,7 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                   {renderInteractionModeSymbol(interactionMode)}
                 </button>
                 {settingsPopover === 'mode' && (
-                  <div className="absolute right-0 bottom-[calc(100%+6px)] w-48 rounded-lg border border-neutral-200/90 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:ring-white/10 z-20">
+                  <div className="absolute right-0 bottom-[calc(100%+6px)] z-[120] w-48 rounded-lg border border-neutral-300/90 bg-neutral-50/95 p-1.5 text-neutral-800 shadow-2xl ring-1 ring-black/10 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:ring-white/10">
                     {PANEL_INTERACTION_MODES.map((mode) => (
                       <button
                         key={mode}
@@ -11072,7 +11759,7 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                   {renderSandboxSymbol(effectiveSandbox)}
                 </button>
                 {settingsPopover === 'sandbox' && (
-                  <div className="absolute right-0 bottom-[calc(100%+6px)] w-48 rounded-lg border border-neutral-200/90 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:ring-white/10 z-20">
+                  <div className="absolute right-0 bottom-[calc(100%+6px)] z-[120] w-48 rounded-lg border border-neutral-300/90 bg-neutral-50/95 p-1.5 text-neutral-800 shadow-2xl ring-1 ring-black/10 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:ring-white/10">
                     {sandboxLockedToView ? (
                       <>
                         <div className="w-full text-left text-[11px] px-2 py-1.5 rounded bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200">
@@ -11132,7 +11819,7 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
                   {renderPermissionSymbol(effectivePermissionMode)}
                 </button>
                 {settingsPopover === 'permission' && !permissionDisabledByReadOnlySandbox && (
-                  <div className="absolute right-0 bottom-[calc(100%+6px)] w-52 rounded-lg border border-neutral-200/90 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:ring-white/10 z-20">
+                  <div className="absolute right-0 bottom-[calc(100%+6px)] z-[120] w-52 rounded-lg border border-neutral-300/90 bg-neutral-50/95 p-1.5 text-neutral-800 shadow-2xl ring-1 ring-black/10 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:ring-white/10">
                     {permissionLockedToVerifyFirst ? (
                       <>
                         <div className="w-full text-left text-[11px] px-2 py-1.5 rounded bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200">
@@ -11167,6 +11854,31 @@ Estimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
               </div>
               <div className="rounded-md border border-neutral-200/70 bg-neutral-50/75 px-1.5 py-1 dark:border-neutral-800 dark:bg-neutral-900/60">
                 <div className="flex items-center gap-1.5">
+                  {(() => {
+                    const prov = getModelProvider(w.model)
+                    const pStatus = providerAuthByName[prov]
+                    const pVerified = providerVerifiedByName[prov]
+                    const dotCls = !pStatus
+                      ? 'bg-neutral-400 dark:bg-neutral-500'
+                      : !pStatus.installed
+                        ? 'bg-red-500'
+                        : pStatus.authenticated
+                          ? (pVerified ? 'bg-emerald-500' : 'bg-amber-500')
+                          : 'bg-amber-500'
+                    const dotTitle = !pStatus
+                      ? 'Checking provider status...'
+                      : !pStatus.installed
+                        ? pStatus.detail ?? 'CLI not found'
+                        : pStatus.authenticated
+                          ? (pVerified ? pStatus.detail ?? 'Connected' : 'Authenticated. Waiting for first response to verify.')
+                          : pStatus.detail ?? 'Login required'
+                    return (
+                      <span
+                        className={`inline-block w-2 h-2 rounded-full shrink-0 ${dotCls}`}
+                        title={dotTitle}
+                      />
+                    )
+                  })()}
                   <span className="text-[11px] text-neutral-600 dark:text-neutral-400">Model</span>
                   <select
                     className="h-7 max-w-full text-[11px] rounded border border-neutral-300 bg-white text-neutral-900 px-1.5 py-0.5 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"

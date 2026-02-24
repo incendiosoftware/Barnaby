@@ -4,6 +4,7 @@ import { generateWorkspaceTreeText } from './fileTree'
 import { resolveAtFileReferences } from './atFileResolver'
 import { buildSystemPrompt } from './systemPrompt'
 import { AgentToolRunner, AGENT_MAX_TOOL_ROUNDS } from './agentTools'
+import type { McpServerManager } from './mcpClient'
 
 export type OpenRouterClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
@@ -21,6 +22,7 @@ export type OpenRouterConnectOptions = {
   sandbox?: 'read-only' | 'workspace-write'
   interactionMode?: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
+  mcpServerManager?: McpServerManager
 }
 
 const INITIAL_HISTORY_MAX_MESSAGES = 24
@@ -74,6 +76,7 @@ export class OpenRouterClient extends EventEmitter {
       cwd: this.cwd,
       sandbox: this.sandbox,
       permissionMode: this.permissionMode,
+      mcpServerManager: options.mcpServerManager,
     })
     if (!this.apiKey) throw new Error('OpenRouter API key is missing. Configure it in Settings -> Connectivity.')
     this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })

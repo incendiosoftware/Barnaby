@@ -3,6 +3,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 
 import { generateWorkspaceTreeText } from './fileTree'
+import type { McpServerManager } from './mcpClient'
 
 export const AGENT_MAX_TOOL_ROUNDS = 8
 export const AGENT_MAX_TOOL_OUTPUT_CHARS = 14_000
@@ -26,6 +27,7 @@ export type AgentToolRunnerOptions = {
   sandbox: string
   permissionMode: string
   allowedCommandPrefixes?: string[]
+  mcpServerManager?: McpServerManager
 }
 
 export class AgentToolRunner {
@@ -33,6 +35,7 @@ export class AgentToolRunner {
   private sandbox: string
   private permissionMode: string
   private allowedCommandPrefixes: string[]
+  private mcpServerManager?: McpServerManager
 
   constructor(options: AgentToolRunnerOptions) {
     this.cwd = options.cwd
@@ -41,15 +44,16 @@ export class AgentToolRunner {
     this.allowedCommandPrefixes = Array.isArray(options.allowedCommandPrefixes)
       ? options.allowedCommandPrefixes.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
       : []
+    this.mcpServerManager = options.mcpServerManager
   }
 
   getToolDefinitions(): ToolDefinition[] {
-    return [
+    const defs: ToolDefinition[] = [
       {
         type: 'function',
         function: {
           name: 'list_workspace_tree',
-          description: 'List the current workspace tree (truncated).',
+          description: 'List the current workspace tree (truncated). Automatically excludes node_modules, dist, build, and other noise directories. Use this instead of shell commands like find or ls -R.',
           parameters: {
             type: 'object',
             additionalProperties: false,
@@ -61,7 +65,7 @@ export class AgentToolRunner {
         type: 'function',
         function: {
           name: 'search_workspace',
-          description: 'Search text in workspace files. Returns file:line snippets.',
+          description: 'Search text in workspace files. Returns file:line snippets. Automatically excludes node_modules, dist, build, .git, and binary files. Prefer this over shell commands like rg or grep.',
           parameters: {
             type: 'object',
             additionalProperties: false,
@@ -123,9 +127,19 @@ export class AgentToolRunner {
         },
       },
     ]
+
+    if (this.mcpServerManager) {
+      defs.push(...this.mcpServerManager.getAggregatedToolDefinitions())
+    }
+
+    return defs
   }
 
   async executeTool(name: string, rawArgs: string | undefined): Promise<string> {
+    if (name.startsWith('mcp__') && this.mcpServerManager) {
+      const result = await this.mcpServerManager.executeMcpTool(name, rawArgs)
+      return this.limitOutput(result)
+    }
     let args: Record<string, unknown> = {}
     if (typeof rawArgs === 'string' && rawArgs.trim()) {
       try {

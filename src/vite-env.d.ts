@@ -223,6 +223,21 @@ interface Window {
     getProviderApiKeyState(providerId: string): Promise<{ hasKey: boolean }>
     importProviderApiKeyFromEnv(providerId: string): Promise<{ ok: boolean; hasKey: boolean; imported: boolean; detail: string }>
     resetApplicationData(): Promise<void>
+    getMcpServers(): Promise<
+      Array<{
+        name: string
+        config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }
+        connected: boolean
+        error?: string
+        toolCount: number
+        tools: Array<{ name: string; description?: string }>
+      }>
+    >
+    addMcpServer(name: string, config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }): Promise<{ ok: boolean }>
+    updateMcpServer(name: string, config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }): Promise<{ ok: boolean }>
+    removeMcpServer(name: string): Promise<{ ok: boolean }>
+    restartMcpServer(name: string): Promise<{ ok: boolean }>
+    getMcpServerTools(name: string): Promise<Array<{ name: string; description?: string }>>
     getGeminiAvailableModels(): Promise<{ id: string; displayName: string }[]>
     getAvailableModels(): Promise<{
       codex: { id: string; displayName: string }[]

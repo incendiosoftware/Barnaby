@@ -1,0 +1,62 @@
+---
+description: Claude CLI persistent session architecture and stream-json I/O protocol
+globs: electron/main/claudeClient.ts
+alwaysApply: false
+---
+
+# Claude CLI Persistent Session
+
+## Architecture (Feb 2026)
+
+ClaudeClient spawns ONE long-lived process on `connect()` using stream-json I/O.
+Each `sendUserMessage()` writes a single JSON line to stdin — no per-turn process spawn.
+
+### Key CLI Flags
+
+```
+claude --print
+       --input-format stream-json      # accept JSONL user messages on stdin
+       --output-format stream-json     # emit JSONL events on stdout
+       --include-partial-messages      # stream text deltas in real time
+       --append-system-prompt-file <f> # load system prompt from file (avoids 8K cmd limit)
+       --model <alias>
+       --permission-mode <mode>
+```
+
+### Input Format (stdin JSONL)
+
+```json
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"user message"}]}}
+```
+
+### Output Events (stdout JSONL)
+
+| Event type     | Purpose                                          |
+|----------------|--------------------------------------------------|
+| `system`       | Init event with `session_id`, `model`, `tools`   |
+| `stream_event` | Partial deltas (`content_block_delta` / `text_delta`) |
+| `assistant`    | Accumulated message with text + tool_use blocks  |
+| `result`       | Turn complete — `num_turns`, `total_cost_usd`    |
+
+### Event Processing Order
+
+`stream_event` arrives BEFORE `assistant` for the same text. Process `stream_event`
+for real-time streaming; the `assistant` handler uses `emittedTextLen` guard to avoid
+double-emitting. Tool use blocks (`tool_use`) are only in `assistant` events.
+
+### Process Lifecycle
+
+- Spawned once in `connect()` via `spawnPersistentProcess()`
+- System prompt written to temp file, cleaned up on `close()`
+- On Windows: spawns `node.exe` directly with the CLI `.js` entry point (bypasses cmd.exe 8K limit)
+- If process dies mid-session, `sendUserMessage()` auto-respawns
+- `interruptActiveTurn()` kills the process; next turn respawns
+- `close()` kills process and cleans up temp files
+
+### Discovery Notes
+
+- `--input-format stream-json` requires `--output-format stream-json`
+- The CLI emits a `system` init event before accepting messages
+- Multi-turn works: write JSONL to stdin, get `result` event per turn, write next message
+- `--append-system-prompt-file` avoids the 8K command-line length limit on Windows
+- Session ID is preserved across turns within the same process

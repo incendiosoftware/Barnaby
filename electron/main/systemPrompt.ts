@@ -53,8 +53,11 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
   parts.push('')
   parts.push('## Tool usage')
   parts.push('- Read files before editing them.')
-  parts.push('- Use search to find symbols rather than guessing file locations.')
+  parts.push('- Use search_workspace to find symbols rather than guessing file locations.')
   parts.push('- Use shell commands for build/test/install tasks instead of returning checklists.')
+  parts.push('- IMPORTANT: Prefer search_workspace and list_workspace_tree over shell commands like rg, grep, or find. The built-in tools already exclude node_modules, dist, build, and other noise directories.')
+  parts.push('- Start searches in the most likely directory or file first. Avoid full-repo scans unless a targeted search returned no results.')
+  parts.push('- When searching, use specific terms (function names, class names, unique strings) rather than broad patterns.')
 
   parts.push('')
   parts.push('## Current mode')

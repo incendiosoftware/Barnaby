@@ -243,6 +243,9 @@ const api = {
   releaseWorkspace(workspaceRoot: string) {
     return ipcRenderer.invoke('agentorchestrator:releaseWorkspace', workspaceRoot) as Promise<boolean>
   },
+  forceClaimWorkspace(workspaceRoot: string) {
+    return ipcRenderer.invoke('agentorchestrator:forceClaimWorkspace', workspaceRoot) as Promise<WorkspaceLockAcquireResult>
+  },
   savePastedImage(dataUrl: string, mimeType?: string) {
     return ipcRenderer.invoke('agentorchestrator:savePastedImage', dataUrl, mimeType) as Promise<{
       path: string
@@ -359,6 +362,33 @@ const api = {
   },
   resetApplicationData() {
     return ipcRenderer.invoke('agentorchestrator:resetApplicationData') as Promise<void>
+  },
+  getMcpServers() {
+    return ipcRenderer.invoke('agentorchestrator:getMcpServers') as Promise<
+      Array<{
+        name: string
+        config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }
+        connected: boolean
+        error?: string
+        toolCount: number
+        tools: Array<{ name: string; description?: string }>
+      }>
+    >
+  },
+  addMcpServer(name: string, config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }) {
+    return ipcRenderer.invoke('agentorchestrator:addMcpServer', name, config) as Promise<{ ok: boolean }>
+  },
+  updateMcpServer(name: string, config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }) {
+    return ipcRenderer.invoke('agentorchestrator:updateMcpServer', name, config) as Promise<{ ok: boolean }>
+  },
+  removeMcpServer(name: string) {
+    return ipcRenderer.invoke('agentorchestrator:removeMcpServer', name) as Promise<{ ok: boolean }>
+  },
+  restartMcpServer(name: string) {
+    return ipcRenderer.invoke('agentorchestrator:restartMcpServer', name) as Promise<{ ok: boolean }>
+  },
+  getMcpServerTools(name: string) {
+    return ipcRenderer.invoke('agentorchestrator:getMcpServerTools', name) as Promise<Array<{ name: string; description?: string }>>
   },
   getGeminiAvailableModels() {
     return ipcRenderer.invoke('agentorchestrator:getGeminiAvailableModels') as Promise<{ id: string; displayName: string }[]>

@@ -101,10 +101,14 @@ The Orchestrator is **not** bundled with Barnaby. Install it from Settings (Edit
 
 ## Prerequisites
 
-- Node.js 18+ recommended
-- npm
+- **Node.js 20+** (recommended: Node 22 LTS)
+- **npm**
 - **CLI providers** (optional): Codex, Claude, and/or Gemini CLI installed and authenticated
 - **API provider** (optional): OpenRouter API key from https://openrouter.ai/keys
+
+### Built-in terminal note
+
+The embedded terminal uses `node-pty`, which ships with prebuilt binaries for Windows, macOS, and Linux. No extra tools are needed. If the prebuilds don't load on your platform, `npm install` will attempt a source rebuild (requires Python 3 and C++ build tools). This is rare — the prebuilds work on most systems.
 
 ## Provider Coverage
 
@@ -150,6 +154,8 @@ cd Barnaby
 npm install
 npm run dev
 ```
+
+If the postinstall step reports "Native module rebuild skipped", the terminal may still work via prebuilt binaries. If not, see [Prerequisites](#built-in-terminal-note).
 
 ## Build Commands (Standard Nomenclature)
 

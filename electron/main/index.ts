@@ -12,7 +12,8 @@ const require = createRequire(import.meta.url)
 function getNodePty(): typeof import('node-pty') | null {
   try {
     return require('node-pty') as typeof import('node-pty')
-  } catch {
+  } catch (err) {
+    console.error('[node-pty] Failed to load:', err)
     return null
   }
 }
@@ -24,6 +25,7 @@ import { OpenRouterClient, type OpenRouterClientEvent } from './openRouterClient
 import { OpenAIClient, type OpenAIClientEvent } from './openaiClient'
 import { initializePluginHost, shutdownPluginHost, setPluginHostWindow, setWorkspaceRootGetter, notifyPluginPanelEvent, notifyPluginPanelTurnComplete, getLoadedPlugins } from './pluginHost'
 import { readOrchestratorSecrets, writeOrchestratorSecrets, writeOrchestratorSettings, type OrchestratorSettingsData } from './orchestratorStorage'
+import { McpServerManager, type McpServerConfig } from './mcpClient'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
 const WORKSPACE_LOCK_DIRNAME = '.barnaby'
@@ -222,6 +224,7 @@ let mainWindowRevealed = false
 
 const agentClients = new Map<string, AgentClient>()
 const agentClientCwds = new Map<string, string>()
+const mcpServerManager = new McpServerManager()
 const MAX_GIT_STATUS_FILES_IN_PROMPT = 60
 const workspaceLockInstanceId = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 let terminalPtyProcess: import('node-pty').IPty | null = null
@@ -1433,6 +1436,28 @@ function releaseAllWorkspaceLocks() {
   }
 }
 
+function forceClaimWorkspaceLock(workspaceRoot: string): WorkspaceLockAcquireResult {
+  let root = ''
+  try {
+    root = resolveWorkspaceRootPath(workspaceRoot)
+  } catch (err) {
+    const resolvedPath = path.resolve(workspaceRoot || '.')
+    return {
+      ok: false,
+      reason: 'invalid-workspace',
+      message: errorMessage(err),
+      workspaceRoot: resolvedPath,
+      lockFilePath: getWorkspaceLockFilePath(resolvedPath),
+      owner: null,
+    }
+  }
+  const lockFilePath = getWorkspaceLockFilePath(root)
+  try {
+    fs.rmSync(lockFilePath, { force: true })
+  } catch { /* best-effort */ }
+  return acquireWorkspaceLock(root)
+}
+
 function runCliCommand(executable: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   if (process.platform === 'win32') {
     const fullCmd = [executable, ...args].map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')
@@ -1510,22 +1535,38 @@ async function getProviderAuthStatus(config: ProviderConfigForAuth): Promise<Pro
   const executable = config.cliPath ?? config.cliCommand ?? ''
   const authArgs = (config.authCheckCommand ?? '--version').trim().split(/\s+/).filter(Boolean)
   const isCodexStyle = config.id === 'codex'
+  const isClaudeStyle = config.id === 'claude'
 
   try {
     const result = await runCliCommand(executable, authArgs)
     const out = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim()
     const normalized = out.toLowerCase()
     let authenticated: boolean
+    let detail = ''
     if (isCodexStyle) {
       authenticated = normalized.includes('logged in') && !normalized.includes('not logged in')
+      detail = out
+    } else if (isClaudeStyle) {
+      // `claude auth status` returns JSON: {"loggedIn":true,"email":"...","subscriptionType":"pro",...}
+      try {
+        const parsed = JSON.parse(out)
+        authenticated = Boolean(parsed.loggedIn)
+        const email = parsed.email ? ` (${parsed.email})` : ''
+        const sub = parsed.subscriptionType ? ` [${parsed.subscriptionType}]` : ''
+        detail = authenticated ? `Logged in${email}${sub}` : 'Not logged in.'
+      } catch {
+        authenticated = false
+        detail = out || 'Could not parse auth status.'
+      }
     } else {
       authenticated = true
+      detail = out
     }
     return {
       provider: config.id,
       installed: true,
       authenticated,
-      detail: out || (authenticated ? 'Logged in.' : 'Not logged in.'),
+      detail: detail || (authenticated ? 'Logged in.' : 'Not logged in.'),
       checkedAt: Date.now(),
     }
   } catch (err) {
@@ -2106,6 +2147,7 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
       sandbox: options.sandbox,
       interactionMode: options.interactionMode,
       initialHistory: options.initialHistory,
+      mcpConfigPath: mcpServerManager.getConfigPath(),
     }) as { threadId: string }
     agentClients.set(agentWindowId, client)
     agentClientCwds.set(agentWindowId, path.resolve(options.cwd || process.cwd()))
@@ -2126,6 +2168,7 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
       sandbox: options.sandbox,
       interactionMode: options.interactionMode,
       initialHistory: options.initialHistory,
+      mcpServerManager,
     }) as { threadId: string }
     agentClients.set(agentWindowId, client)
     agentClientCwds.set(agentWindowId, path.resolve(options.cwd || process.cwd()))
@@ -2150,6 +2193,7 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
         interactionMode: options.interactionMode,
         allowedCommandPrefixes: options.allowedCommandPrefixes,
         initialHistory: options.initialHistory,
+        mcpServerManager,
       }) as { threadId: string }
       agentClients.set(agentWindowId, client)
       agentClientCwds.set(agentWindowId, path.resolve(options.cwd || process.cwd()))
@@ -2214,8 +2258,6 @@ async function createWindow() {
 
   if (VITE_DEV_SERVER_URL) { // #298
     win.loadURL(VITE_DEV_SERVER_URL)
-    // Open devTool if the app is not packaged
-    win.webContents.openDevTools()
   } else {
     win.loadFile(indexHtml)
   }
@@ -2261,6 +2303,9 @@ app.whenReady().then(async () => {
       .catch((e) => {
         console.error('[pluginHost] Initialization failed:', e)
       })
+    mcpServerManager.startAll().catch((e) => {
+      console.error('[mcpServerManager] Startup failed:', e)
+    })
   }
 })
 
@@ -2270,6 +2315,7 @@ app.on('window-all-closed', () => {
   clearStartupRevealTimer()
   releaseAllWorkspaceLocks()
   shutdownPluginHost().catch(() => {})
+  mcpServerManager.stopAll().catch(() => {})
   for (const client of agentClients.values()) {
     (client as { close: () => Promise<void> }).close().catch(() => {})
   }
@@ -2653,7 +2699,9 @@ ipcMain.handle('agentorchestrator:terminalSpawn', async (_evt, cwd: string) => {
       rows: 24,
       cwd: resolvedCwd,
       env: process.env as Record<string, string>,
-    })
+      useConptyDll: true,
+      conptyInheritCursor: false,
+    } as Record<string, unknown>)
     terminalPtyProcess.onData((data: string) => {
       win?.webContents.send('agentorchestrator:terminalData', data)
     })
@@ -2701,6 +2749,10 @@ ipcMain.handle('agentorchestrator:claimWorkspace', async (_evt, workspaceRoot: s
 ipcMain.handle('agentorchestrator:releaseWorkspace', async (_evt, workspaceRoot: string) => {
   if (!workspaceRoot?.trim()) return false
   return releaseWorkspaceLock(workspaceRoot)
+})
+
+ipcMain.handle('agentorchestrator:forceClaimWorkspace', async (_evt, workspaceRoot: string) => {
+  return forceClaimWorkspaceLock(workspaceRoot)
 })
 
 ipcMain.handle('agentorchestrator:savePastedImage', async (_evt, dataUrl: string, mimeType?: string) => {
@@ -2828,6 +2880,48 @@ ipcMain.handle('agentorchestrator:resetApplicationData', async () => {
   app.relaunch()
   app.exit(0)
 })
+
+// ── MCP Server management ──────────────────────────────────────────
+
+ipcMain.handle('agentorchestrator:getMcpServers', async () => {
+  return mcpServerManager.getStatuses()
+})
+
+ipcMain.handle('agentorchestrator:addMcpServer', async (_evt, name: string, config: McpServerConfig) => {
+  mcpServerManager.addServer(name, config)
+  if (config.enabled !== false) {
+    await mcpServerManager.startServer(name, config)
+  }
+  return { ok: true }
+})
+
+ipcMain.handle('agentorchestrator:updateMcpServer', async (_evt, name: string, config: McpServerConfig) => {
+  mcpServerManager.updateServer(name, config)
+  await mcpServerManager.stopServer(name)
+  if (config.enabled !== false) {
+    await mcpServerManager.startServer(name, config)
+  }
+  return { ok: true }
+})
+
+ipcMain.handle('agentorchestrator:removeMcpServer', async (_evt, name: string) => {
+  await mcpServerManager.stopServer(name)
+  mcpServerManager.removeServer(name)
+  return { ok: true }
+})
+
+ipcMain.handle('agentorchestrator:restartMcpServer', async (_evt, name: string) => {
+  await mcpServerManager.restartServer(name)
+  return { ok: true }
+})
+
+ipcMain.handle('agentorchestrator:getMcpServerTools', async (_evt, name: string) => {
+  const statuses = mcpServerManager.getStatuses()
+  const server = statuses.find((s) => s.name === name)
+  return server?.tools ?? []
+})
+
+// ────────────────────────────────────────────────────────────────────
 
 ipcMain.handle('agentorchestrator:getGeminiAvailableModels', async () => {
   return getGeminiAvailableModels()

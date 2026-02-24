@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { Client } from '@modelcontextprotocol/sdk/client'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type { ToolDefinition } from './agentTools'
 
@@ -112,7 +112,7 @@ export class McpServerManager extends EventEmitter {
       await Promise.race([connectPromise, timeout])
 
       const toolsResult = await client.listTools()
-      instance.tools = (toolsResult.tools ?? []).map((t) => ({
+      instance.tools = (toolsResult.tools ?? []).map((t: { name: string; description?: string; inputSchema?: unknown }) => ({
         name: t.name,
         description: t.description,
         inputSchema: t.inputSchema as Record<string, unknown> | undefined,
@@ -217,13 +217,13 @@ export class McpServerManager extends EventEmitter {
       const result = await instance.client.callTool({ name: toolName, arguments: args })
       if (result.isError) {
         const errContent = Array.isArray(result.content)
-          ? result.content.map((c) => (c as { text?: string }).text ?? '').join('\n')
+          ? result.content.map((c: { text?: string }) => (c as { text?: string }).text ?? '').join('\n')
           : String(result.content)
         return `MCP tool error: ${errContent}`
       }
       if (Array.isArray(result.content)) {
         return result.content
-          .map((c) => (c as { text?: string }).text ?? JSON.stringify(c))
+          .map((c: { text?: string }) => (c as { text?: string }).text ?? JSON.stringify(c))
           .join('\n')
       }
       return typeof result.content === 'string' ? result.content : JSON.stringify(result.content)

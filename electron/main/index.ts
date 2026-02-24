@@ -1458,18 +1458,48 @@ function forceClaimWorkspaceLock(workspaceRoot: string): WorkspaceLockAcquireRes
   return acquireWorkspaceLock(root)
 }
 
+/** Ensure npm global bin is in PATH so Electron can find claude/gemini/codex CLI on Windows. */
+function getCliSpawnEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  if (process.platform === 'win32') {
+    const npmBin = process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : ''
+    if (npmBin && env.PATH && !env.PATH.includes(npmBin)) {
+      env.PATH = `${npmBin}${path.delimiter}${env.PATH}`
+    }
+  }
+  return env
+}
+
+const CLI_AUTH_CHECK_TIMEOUT_MS = 20_000
+
 function runCliCommand(executable: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  const env = getCliSpawnEnv()
+  const timeoutMs = CLI_AUTH_CHECK_TIMEOUT_MS
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(
+      () => reject(new Error(`CLI check timed out after ${timeoutMs / 1000}s. The CLI may be slow to start or hung.`)),
+      timeoutMs,
+    ),
+  )
   if (process.platform === 'win32') {
     const fullCmd = [executable, ...args].map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')
-    return execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', fullCmd], {
+    return Promise.race([
+      execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', fullCmd], {
+        windowsHide: true,
+        maxBuffer: 1024 * 1024,
+        env,
+      }),
+      timeoutPromise,
+    ])
+  }
+  return Promise.race([
+    execFileAsync(executable, args, {
       windowsHide: true,
       maxBuffer: 1024 * 1024,
-    })
-  }
-  return execFileAsync(executable, args, {
-    windowsHide: true,
-    maxBuffer: 1024 * 1024,
-  })
+      env,
+    }),
+    timeoutPromise,
+  ])
 }
 
 async function isCliInstalled(executable: string): Promise<boolean> {
@@ -1571,7 +1601,8 @@ async function getProviderAuthStatus(config: ProviderConfigForAuth): Promise<Pro
     }
   } catch (err) {
     const msg = errorMessage(err)
-    const installed = await isCliInstalled(executable)
+    const isTimeout = /timed out/i.test(msg)
+    const installed = isTimeout ? true : await isCliInstalled(executable)
     return {
       provider: config.id,
       installed,

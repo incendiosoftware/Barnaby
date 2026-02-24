@@ -212,8 +212,9 @@ export class GeminiClient extends EventEmitter {
         let resolved = false
         let stdoutBuffer = ''
 
-        const GEMINI_NOISE = /quota|retrying after|rate.?limit|capacity.*exhausted|reset after|YOLO mode|Loaded cached credentials|All tool calls will be/i
+        const GEMINI_NOISE = /quota|retrying after|rate.?limit|capacity.*exhausted|reset after|YOLO mode|Loaded cached credentials|All tool calls will be|Subagent|GOAL Result|Termination Reason|"answer":\s*"Based on the provided runtime context/i
         const GEMINI_RETRYABLE = /status 429|Retrying with backoff|Attempt \d+ failed(?!.*Max attempts)|No capacity available/i
+        const SUBAGENT_METADATA = /Subagent|GOAL Result|Termination Reason|"answer":\s*"Based on the provided runtime context/i
 
         proc.stdout.on('data', (chunk: string) => {
           if (!chunk) return
@@ -246,11 +247,12 @@ export class GeminiClient extends EventEmitter {
             switch (evt.type) {
               case 'message':
                 if ((evt.role === 'assistant' || evt.role === 'model') && typeof evt.content === 'string') {
+                  if (SUBAGENT_METADATA.test(evt.content)) break
                   this.emitEvent({ type: 'assistantDelta', delta: evt.content })
                   assistantText += evt.content
                   if (evt.delta) {
                     const snippet = evt.content.trim()
-                    if (snippet.length > 0 && snippet.length < 200) {
+                    if (snippet.length > 0 && snippet.length < 200 && !SUBAGENT_METADATA.test(snippet)) {
                       this.emitEvent({ type: 'thinking', message: snippet })
                     }
                   }
@@ -280,7 +282,7 @@ export class GeminiClient extends EventEmitter {
                 if (isError || /^error/i.test(output)) {
                   const errMsg = output.length > 300 ? output.slice(0, 300) + '...' : output
                   this.emitEvent({ type: 'status', status: 'error', message: errMsg || `Tool "${toolName}" failed` })
-                } else {
+                } else if (!SUBAGENT_METADATA.test(output)) {
                   const short = output.length > 160 ? output.slice(0, 160) + '...' : output
                   this.emitEvent({ type: 'thinking', message: short || toolStatus })
                 }
@@ -291,7 +293,7 @@ export class GeminiClient extends EventEmitter {
                 const text = typeof evt.content === 'string' ? evt.content
                   : typeof evt.message === 'string' ? evt.message
                   : typeof evt.text === 'string' ? evt.text : ''
-                if (text) {
+                if (text && !SUBAGENT_METADATA.test(text)) {
                   const short = text.length > 200 ? text.slice(0, 200) + '...' : text
                   this.emitEvent({ type: 'thinking', message: short })
                 }
@@ -321,7 +323,7 @@ export class GeminiClient extends EventEmitter {
                 break
               default: {
                 const msg = evt.message ?? evt.content ?? evt.text ?? ''
-                if (typeof msg === 'string' && msg.trim()) {
+                if (typeof msg === 'string' && msg.trim() && !SUBAGENT_METADATA.test(msg)) {
                   const short = msg.length > 200 ? msg.slice(0, 200) + '...' : msg
                   this.emitEvent({ type: 'thinking', message: `[${evt.type}] ${short}` })
                 }
@@ -354,8 +356,10 @@ export class GeminiClient extends EventEmitter {
             try {
               const evt: any = JSON.parse(stdoutBuffer.trim())
               if (evt.type === 'message' && evt.role === 'assistant' && typeof evt.content === 'string') {
-                this.emitEvent({ type: 'assistantDelta', delta: evt.content })
-                assistantText += evt.content
+                if (!SUBAGENT_METADATA.test(evt.content)) {
+                  this.emitEvent({ type: 'assistantDelta', delta: evt.content })
+                  assistantText += evt.content
+                }
               } else if (evt.type === 'result' && evt.stats) {
                 this.emitEvent({ type: 'usageUpdated', usage: evt.stats })
               }

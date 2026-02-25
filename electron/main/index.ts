@@ -1061,6 +1061,34 @@ function writeWorkspaceFile(workspaceRoot: string, relativePath: string, content
   }
 }
 
+function openWorkspacePathInExplorer(workspaceRoot: string, relativePath: string) {
+  if (!relativePath?.trim()) throw new Error('File path is required.')
+  const normalizedPath = normalizeRelativePath(relativePath)
+  const absolutePath = resolveWorkspacePath(workspaceRoot, normalizedPath)
+  if (!fs.existsSync(absolutePath)) throw new Error('File does not exist.')
+
+  shell.showItemInFolder(absolutePath)
+  return {
+    ok: true as const,
+    path: absolutePath,
+  }
+}
+
+function deleteWorkspaceFile(workspaceRoot: string, relativePath: string) {
+  if (!relativePath?.trim()) throw new Error('File path is required.')
+  const normalizedPath = normalizeRelativePath(relativePath)
+  const absolutePath = resolveWorkspacePath(workspaceRoot, normalizedPath)
+  if (!fs.existsSync(absolutePath)) throw new Error('File does not exist.')
+  const stat = fs.statSync(absolutePath)
+  if (!stat.isFile()) throw new Error('Path is not a file.')
+
+  fs.unlinkSync(absolutePath)
+  return {
+    ok: true as const,
+    relativePath: normalizedPath,
+  }
+}
+
 async function pickWorkspaceSavePath(workspaceRoot: string, relativePath: string) {
   const root = path.resolve(workspaceRoot)
   if (!fs.existsSync(root)) throw new Error('Workspace path does not exist.')
@@ -3102,6 +3130,14 @@ ipcMain.handle('agentorchestrator:readWorkspaceTextFile', async (_evt, workspace
 
 ipcMain.handle('agentorchestrator:writeWorkspaceFile', async (_evt, workspaceRoot: string, relativePath: string, content: string) => {
   return writeWorkspaceFile(workspaceRoot, relativePath, content)
+})
+
+ipcMain.handle('agentorchestrator:openWorkspacePathInExplorer', async (_evt, workspaceRoot: string, relativePath: string) => {
+  return openWorkspacePathInExplorer(workspaceRoot, relativePath)
+})
+
+ipcMain.handle('agentorchestrator:deleteWorkspaceFile', async (_evt, workspaceRoot: string, relativePath: string) => {
+  return deleteWorkspaceFile(workspaceRoot, relativePath)
 })
 
 ipcMain.handle('agentorchestrator:pickWorkspaceSavePath', async (_evt, workspaceRoot: string, relativePath: string) => {

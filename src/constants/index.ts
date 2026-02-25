@@ -39,7 +39,7 @@ export const CODE_WINDOW_TOOLBAR_BUTTON = 'h-7 w-7 inline-flex items-center just
 export const CODE_WINDOW_TOOLBAR_BUTTON_SM = 'h-7 w-9 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700/80 dark:bg-transparent dark:hover:bg-neutral-800/80 dark:text-neutral-300'
 export const UI_INPUT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 placeholder:text-neutral-500 dark:placeholder:text-neutral-400'
 export const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100'
-export const STATUS_SYMBOL_ICON_CLASS = 'h-[15px] w-[15px] text-neutral-600 dark:text-neutral-300'
+export const STATUS_SYMBOL_ICON_CLASS = 'h-4 w-4 text-neutral-600 dark:text-neutral-300'
 
 export const PROVIDERS_WITH_DUAL_MODE: ConnectivityProvider[] = ['gemini', 'claude', 'codex']
 export const PROVIDERS_CLI_ONLY: ConnectivityProvider[] = []
@@ -197,7 +197,9 @@ export const THEME_EDITABLE_FIELDS: Array<{ key: ThemeEditableField; label: stri
   { key: 'accent700', label: 'Text on primary (light mode)', group: 'Primary / interactive' },
   { key: 'accentText', label: 'Text on primary (dark mode)', group: 'Primary / interactive' },
   { key: 'accentSoft', label: 'Primary tint background (light mode, e.g. user bubbles)', group: 'Primary / interactive' },
-  { key: 'accentSoftDark', label: 'Primary tint background (dark mode)', group: 'Primary / interactive' },
+  { key: 'accentSoftDark', label: 'Primary tint background (dark mode, e.g. user bubbles)', group: 'Primary / interactive' },
+  { key: 'assistantBubbleBgLight', label: 'Assistant bubble background (light mode)', group: 'Chat bubbles' },
+  { key: 'assistantBubbleBgDark', label: 'Assistant bubble background (dark mode)', group: 'Chat bubbles' },
   { key: 'dark950', label: 'Darkest surface (main dark bg, scrollbar track)', group: 'Dark surfaces' },
   { key: 'dark900', label: 'Dark surface (panels, borders, scrollbar)', group: 'Dark surfaces' },
   { key: 'debugNotes', label: 'Debug notes', group: 'Diagnostics' },

@@ -1,7 +1,3 @@
-import ReactMarkdown from 'react-markdown'  
-import remarkGfm from 'remark-gfm'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -9,19 +5,14 @@ import { buildTimelineForPanel } from './chat/timelineParser'
 import type { TimelineUnit } from './chat/timelineTypes'
 import {
   BuildIcon,
-  CloseIcon,
   CollapseAllIcon,
   CommitIcon,
   DeployIcon,
   ExpandAllIcon,
-  FolderIcon,
-  GitIcon,
   PushIcon,
   RefreshIcon,
   ReleaseIcon,
-  RobotIcon,
   SendIcon,
-  SettingsIcon,
   SpinnerIcon,
   StopIcon,
 } from './components/icons'
@@ -84,15 +75,11 @@ import type {
 import {
   ALL_WORKSPACES_LOCKED_PROMPT,
   APP_STATE_AUTOSAVE_MS,
-  APP_SETTINGS_STORAGE_KEY,
   APP_SETTINGS_VIEWS,
   AUTO_CONTINUE_PROMPT,
   CODEX_API_MODELS,
   CODE_WINDOW_TOOLBAR_BUTTON,
   CODE_WINDOW_TOOLBAR_BUTTON_SM,
-  CHAT_HISTORY_STORAGE_KEY,
-  COLLAPSIBLE_CODE_MIN_LINES,
-  CONNECT_TIMEOUT_MS,
   CONTEXT_MAX_OUTPUT_RESERVE_TOKENS,
   CONTEXT_MIN_OUTPUT_RESERVE_TOKENS,
   CONTEXT_OUTPUT_RESERVE_RATIO,
@@ -103,7 +90,6 @@ import {
   DEFAULT_EXPLORER_PREFS,
   DEFAULT_GPT_CONTEXT_TOKENS,
   DEFAULT_MODEL,
-  EXPLORER_PREFS_STORAGE_KEY,
   DEFAULT_MODEL_INTERFACES,
   DEFAULT_THEME_ID,
   DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES,
@@ -113,8 +99,6 @@ import {
   DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES,
   FONT_SCALE_STEP,
   INPUT_MAX_HEIGHT_PX,
-  INTERACTION_MODE_META,
-  LAST_USER_RECALL_EXPIRY_MS,
   LEGACY_PRESET_TO_THEME_ID,
   MAX_AUTO_CONTINUE,
   MAX_EDITOR_FILE_SIZE_BYTES,
@@ -125,18 +109,12 @@ import {
   MIN_FONT_SCALE,
   MODAL_BACKDROP_CLASS,
   MODAL_CARD_CLASS,
-  MODEL_CONFIG_STORAGE_KEY,
   ONGOING_WORK_LABELS,
+  INTERACTION_MODE_META,
   PANEL_COMPLETION_NOTICE_MS,
-  PANEL_INTERACTION_MODES,
-  ORCHESTRATOR_SETTINGS_STORAGE_KEY,
-  PROVIDER_REGISTRY_STORAGE_KEY,
   SETUP_WIZARD_DONE_STORAGE_KEY,
   STARTUP_LOCKED_WORKSPACE_PROMPT,
-  STATUS_SYMBOL_ICON_CLASS,
   THEME_EDITABLE_FIELDS,
-  THEME_ID_STORAGE_KEY,
-  THEME_OVERRIDES_STORAGE_KEY,
   THINKING_MAX_CHARS,
   TOKEN_ESTIMATE_CHARS_PER_TOKEN,
   TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS,
@@ -144,7 +122,6 @@ import {
   TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS,
   TOKEN_ESTIMATE_WORDS_MULTIPLIER,
   STALL_WATCHDOG_MS,
-  TURN_START_TIMEOUT_MS,
   UI_BUTTON_PRIMARY_CLASS,
   UI_BUTTON_SECONDARY_CLASS,
   UI_CLOSE_ICON_BUTTON_CLASS,
@@ -152,11 +129,6 @@ import {
   UI_INPUT_CLASS,
   UI_SELECT_CLASS,
   UI_TOOLBAR_ICON_BUTTON_CLASS,
-  WORKSPACE_DOCK_SIDE_STORAGE_KEY,
-  WORKSPACE_LIST_STORAGE_KEY,
-  WORKSPACE_SETTINGS_STORAGE_KEY,
-  WORKSPACE_STORAGE_KEY,
-  MODEL_BANNER_PREFIX,
   API_CONFIG_BY_PROVIDER,
   PROVIDER_SUBSCRIPTION_URLS,
   PROVIDERS_WITH_DUAL_MODE,
@@ -164,1599 +136,104 @@ import {
   PROVIDERS_API_ONLY,
 } from './constants'
 import { THEMES } from './constants/themes'
-
-function isLockedWorkspacePrompt(prompt: string | null): boolean {
-  return prompt === STARTUP_LOCKED_WORKSPACE_PROMPT || prompt === ALL_WORKSPACES_LOCKED_PROMPT
-}
-
-function syncModelConfigWithCatalog(
-  prev: ModelConfig,
-  available: AvailableCatalogModels,
-  providerRegistry: ProviderRegistry,
-): ModelConfig {
-  const enabledProviders = new Set<ModelProvider>(
-    resolveProviderConfigs(providerRegistry)
-      .filter(
-        (config): config is ProviderConfig & { id: ConnectivityProvider } =>
-          Boolean(config.enabled) && CONNECTIVITY_PROVIDERS.includes(config.id as ConnectivityProvider),
-      )
-      .map((config) => config.id as ModelProvider),
-  )
-  // Codex is the app's default model family; keep it available for stability
-  // even if setup/connectivity toggles were changed unexpectedly.
-  enabledProviders.add('codex')
-  const defaultModelsByProvider: Record<ModelProvider, { id: string; displayName: string }[]> = {
-    codex: DEFAULT_MODEL_INTERFACES.filter((m) => m.provider === 'codex').map(({ id, displayName }) => ({ id, displayName })),
-    claude: DEFAULT_MODEL_INTERFACES.filter((m) => m.provider === 'claude').map(({ id, displayName }) => ({ id, displayName })),
-    gemini: DEFAULT_MODEL_INTERFACES.filter((m) => m.provider === 'gemini').map(({ id, displayName }) => ({ id, displayName })),
-    openrouter: DEFAULT_MODEL_INTERFACES.filter((m) => m.provider === 'openrouter').map(({ id, displayName }) => ({ id, displayName })),
-  }
-  const catalogModelsByProvider: Record<ModelProvider, { id: string; displayName: string }[]> = {
-    codex: [...(available.codex ?? []), ...defaultModelsByProvider.codex],
-    claude: [...(available.claude ?? []), ...defaultModelsByProvider.claude],
-    gemini: [...(available.gemini ?? []), ...defaultModelsByProvider.gemini],
-    openrouter: [...(available.openrouter ?? []), ...defaultModelsByProvider.openrouter],
-  }
-  const keptById = new Map<string, ModelInterface>()
-  for (const model of prev.interfaces) {
-    if (!enabledProviders.has(model.provider)) continue
-    const id = String(model.id ?? '').trim()
-    if (!id) continue
-    const normalized: ModelInterface = {
-      ...model,
-      id,
-      // Show raw model IDs to avoid ambiguous friendly aliases.
-      displayName: id,
-    }
-    const existing = keptById.get(id)
-    if (!existing) {
-      keptById.set(id, normalized)
-      continue
-    }
-    // If duplicates exist, keep whichever entry is enabled.
-    if (!existing.enabled && normalized.enabled) keptById.set(id, normalized)
-  }
-  const nextInterfaces = [...keptById.values()]
-  const existingIds = new Set(nextInterfaces.map((m) => m.id))
-  for (const provider of CONNECTIVITY_PROVIDERS) {
-    if (!enabledProviders.has(provider)) continue
-    for (const model of catalogModelsByProvider[provider]) {
-      const id = String(model.id ?? '').trim()
-      if (!id || existingIds.has(id)) continue
-      nextInterfaces.push({ id, displayName: id, provider, enabled: true })
-      existingIds.add(id)
-    }
-  }
-  return { interfaces: nextInterfaces }
-}
-
-function getModelPingKey(provider: string, modelId: string): string {
-  return `${provider}::${modelId}`
-}
-
-function renderSandboxSymbol(mode: SandboxMode) {
-  if (mode === 'read-only') {
-    return (
-      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-        <rect x="4.1" y="7.1" width="7.8" height="6" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
-        <path d="M5.9 7.1V5.5C5.9 4.34 6.84 3.4 8 3.4C9.16 3.4 10.1 4.34 10.1 5.5V7.1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-        <path d="M8 9.3V10.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      </svg>
-    )
-  }
-  return (
-    <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M2 4.8H6L7.2 6H14V12.8H2V4.8Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-      <path d="M2 6H14" stroke="currentColor" strokeWidth="1.1" />
-    </svg>
-  )
-}
-
-function renderPermissionSymbol(mode: PermissionMode) {
-  if (mode === 'verify-first') {
-    return (
-      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-        <circle cx="6.8" cy="6.8" r="3.5" stroke="currentColor" strokeWidth="1.1" />
-        <path d="M5.4 6.8L6.5 7.9L8.4 6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M9.6 9.6L13.2 13.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      </svg>
-    )
-  }
-  return (
-    <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <circle cx="8" cy="8" r="5.8" stroke="currentColor" strokeWidth="1.1" />
-      <path d="M5.4 8H10.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      <path d="M8.8 6.4L10.6 8L8.8 9.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
-
-function renderInteractionModeSymbol(mode: AgentInteractionMode) {
-  if (mode === 'agent') {
-    return (
-      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-        <rect x="3.1" y="4.5" width="9.8" height="7.5" rx="2" stroke="currentColor" strokeWidth="1.1" />
-        <path d="M8 2.8V4.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-        <circle cx="5.9" cy="8.2" r="0.7" fill="currentColor" />
-        <circle cx="10.1" cy="8.2" r="0.7" fill="currentColor" />
-        <path d="M6.1 10H9.9" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      </svg>
-    )
-  }
-  if (mode === 'plan') {
-    return (
-      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-        <rect x="2.5" y="3.2" width="8.8" height="10.3" rx="1.3" stroke="currentColor" strokeWidth="1.1" />
-        <path d="M4.5 6H9.4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-        <path d="M4.5 8.4H8.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-        <path d="M9.8 10.8L12.9 7.7L14.3 9.1L11.2 12.2L9.4 12.6L9.8 10.8Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-      </svg>
-    )
-  }
-  if (mode === 'debug') {
-    return (
-      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-        <ellipse cx="8" cy="8.5" rx="3" ry="3.3" stroke="currentColor" strokeWidth="1.1" />
-        <path d="M8 3.1V5.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-        <path d="M5.1 6.6L3.2 5.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-        <path d="M10.9 6.6L12.8 5.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-        <path d="M5 10.1L3.1 11.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-        <path d="M11 10.1L12.9 11.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      </svg>
-    )
-  }
-  return (
-    <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <circle cx="8" cy="8" r="5.8" stroke="currentColor" strokeWidth="1.1" />
-      <path d="M6.8 6.2C6.8 5.54 7.34 5 8 5C8.66 5 9.2 5.54 9.2 6.2C9.2 6.72 8.88 7.03 8.42 7.4C7.94 7.78 7.6 8.13 7.6 8.8V9" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      <circle cx="8" cy="11.2" r="0.8" fill="currentColor" />
-    </svg>
-  )
-}
-
-function looksIncomplete(content: string): boolean {
-  const t = content.trim().toLowerCase()
-  if (!t) return false
-  const incompletePhrases = [
-    'i\'m about to',
-    "i'm about to",
-    'about to edit',
-    'about to implement',
-    'i have a concrete',
-    'i\'ll ',
-    "i'll ",
-    'let me ',
-    'i will ',
-    'implementing now',
-    'implementing the',
-    'now and edit',
-  ]
-  for (const p of incompletePhrases) {
-    if (t.includes(p)) return true
-  }
-  if (t.endsWith('...')) return true
-  return false
-}
-
-function isLikelyThinkingUpdate(content: string): boolean {
-  const text = content.trim()
-  if (!text) return false
-  if (text.length > THINKING_MAX_CHARS) return false
-  if (text.includes('```')) return false
-  if (/^#{1,6}\s/m.test(text)) return false
-  const paragraphCount = (text.match(/\n\s*\n/g) || []).length + 1
-  if (paragraphCount >= 2) return false
-  const lower = text.toLowerCase().replace(/\s+/g, ' ')
-  const markers = [
-    "i'll ",
-    'i will ',
-    "i'm ",
-    'i am ',
-    'let me ',
-    'next i',
-    'now i',
-    'working on',
-    'checking',
-    'verifying',
-    'reviewing',
-    'searching',
-    'scanning',
-    'applying',
-    'updating',
-    'editing',
-    'running',
-    'testing',
-    'implementing',
-    'i found ',
-    'i located ',
-    'i patched ',
-    'i fixed ',
-    'i am checking ',
-    "i'm checking ",
-  ]
-  if (markers.some((m) => lower.includes(m))) return true
-
-  if (
-    /^i\s/.test(lower) &&
-    /\b(checking|verifying|reviewing|scanning|searching|looking|working|patching|editing|updating|running|testing|implementing|applying|fixing|changing|replacing|adding|removing|wiring)\b/.test(lower)
-  ) {
-    return true
-  }
-
-  const lines = text.split(/\r?\n/).filter((line) => line.trim())
-  if (
-    lines.length >= 2 &&
-    /\b(i|i'm|i am|i'll|i will)\b/.test(lower) &&
-    /\b(next|then|now)\b/.test(lower)
-  ) {
-    return true
-  }
-
-  return false
-}
-
-function stripSyntheticAutoContinueMessages(messages: ChatMessage[]): ChatMessage[] {
-  const filtered = messages.filter((message) => {
-    if (message.role !== 'user') return true
-    if ((message.attachments?.length ?? 0) > 0) return true
-    return message.content.trim() !== AUTO_CONTINUE_PROMPT
-  })
-  return filtered.length === messages.length ? messages : filtered
-}
-
-function filterMessagesForPresentation(
-  messages: ChatMessage[],
-  responseStyle: 'concise' | 'standard' | 'detailed',
-): ChatMessage[] {
-  const visibleMessages = stripSyntheticAutoContinueMessages(messages)
-  if (responseStyle === 'detailed') return visibleMessages
-  if (responseStyle === 'concise') {
-    return visibleMessages.filter((m) => !(m.role === 'assistant' && isLikelyThinkingUpdate(m.content)))
-  }
-  const next: ChatMessage[] = []
-  for (let i = 0; i < visibleMessages.length; i += 1) {
-    const current = visibleMessages[i]
-    const isThinking = current.role === 'assistant' && isLikelyThinkingUpdate(current.content)
-    if (!isThinking) {
-      next.push(current)
-      continue
-    }
-
-    // Group consecutive thinking updates and keep only the latest one
-    // when there is no final assistant response in the same turn.
-    let endOfThinkingRun = i
-    while (
-      endOfThinkingRun + 1 < visibleMessages.length &&
-      visibleMessages[endOfThinkingRun + 1].role === 'assistant' &&
-      isLikelyThinkingUpdate(visibleMessages[endOfThinkingRun + 1].content)
-    ) {
-      endOfThinkingRun += 1
-    }
-
-    let turnBoundary = endOfThinkingRun + 1
-    while (turnBoundary < visibleMessages.length && visibleMessages[turnBoundary].role !== 'user') {
-      turnBoundary += 1
-    }
-    const hasFinalAssistantInTurn = visibleMessages
-      .slice(endOfThinkingRun + 1, turnBoundary)
-      .some((m) => m.role === 'assistant' && !isLikelyThinkingUpdate(m.content))
-
-    if (!hasFinalAssistantInTurn) {
-      const latestThinking = visibleMessages[endOfThinkingRun]
-      const prev = next[next.length - 1]
-      const isDuplicate =
-        prev &&
-        prev.role === 'assistant' &&
-        isLikelyThinkingUpdate(prev.content) &&
-        prev.content.trim() === latestThinking.content.trim()
-      if (!isDuplicate) {
-        next.push(latestThinking)
-      }
-    }
-    i = endOfThinkingRun
-  }
-  return next
-}
-
-function looksLikeDiff(code: string): boolean {
-  const lines = code.split('\n')
-  let plusCount = 0
-  let minusCount = 0
-  for (const line of lines) {
-    if (line.startsWith('+') && !line.startsWith('+++')) plusCount++
-    else if (line.startsWith('-') && !line.startsWith('---')) minusCount++
-  }
-  return plusCount + minusCount >= 3 && plusCount > 0 && minusCount > 0
-}
-
-function applyThemeOverrides(overrides: ThemeOverrides): StandaloneTheme[] {
-  return THEMES.map((theme) => {
-    const override = overrides[theme.id]
-    if (!override) return theme
-    const next: StandaloneTheme = { ...theme }
-    for (const field of THEME_EDITABLE_FIELDS) {
-      const value = override[field.key]
-      if (typeof value === 'string' && value.trim()) next[field.key] = value.trim()
-    }
-    return next
-  })
-}
-
-function sanitizeThemeOverrides(raw: unknown): ThemeOverrides {
-  if (!raw || typeof raw !== 'object') return {}
-  const knownIds = new Set(THEMES.map((theme) => theme.id))
-  const source = raw as Record<string, unknown>
-  const result: ThemeOverrides = {}
-  for (const [themeId, overrideValue] of Object.entries(source)) {
-    if (!knownIds.has(themeId)) continue
-    if (!overrideValue || typeof overrideValue !== 'object') continue
-    const override = overrideValue as Record<string, unknown>
-    const nextOverride: ThemeOverrideValues = {}
-    for (const field of THEME_EDITABLE_FIELDS) {
-      const value = override[field.key]
-      if (typeof value === 'string' && value.trim()) nextOverride[field.key] = value.trim()
-    }
-    if (Object.keys(nextOverride).length > 0) result[themeId] = nextOverride
-  }
-  return result
-}
-
-function getInitialThemeOverrides(): ThemeOverrides {
-  try {
-    const raw = globalThis.localStorage?.getItem(THEME_OVERRIDES_STORAGE_KEY)
-    if (!raw) return {}
-    return sanitizeThemeOverrides(JSON.parse(raw))
-  } catch {
-    return {}
-  }
-}
-
-function cloneTheme(theme: StandaloneTheme): StandaloneTheme {
-  return { ...theme }
-}
-
-function extractHexColor(value: string): string | null {
-  const raw = String(value ?? '').trim()
-  if (!raw) return null
-  const shortHex = raw.match(/^#([0-9a-fA-F]{3})$/)
-  if (shortHex) {
-    const [r, g, b] = shortHex[1].split('')
-    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase()
-  }
-  const fullHex = raw.match(/^#([0-9a-fA-F]{6})$/)
-  if (fullHex) return `#${fullHex[1].toLowerCase()}`
-  const rgb = raw.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[\d.]+\s*)?\)$/i)
-  if (!rgb) return null
-  const [r, g, b] = [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])]
-  const toHex = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0')
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`
-}
-
-function getNextFontScale(current: number, deltaY: number) {
-  const direction = deltaY < 0 ? 1 : -1
-  return Math.max(MIN_FONT_SCALE, Math.min(MAX_FONT_SCALE, Number((current + direction * FONT_SCALE_STEP).toFixed(2))))
-}
-
-function isZoomWheelGesture(e: { ctrlKey: boolean; metaKey: boolean }) {
-  return e.ctrlKey || e.metaKey
-}
-
-function newId() {
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
-
-/** Format raw "toolName: detail" traces into clean Cursor-style summaries. */
-function formatToolTrace(raw: string): string {
-  const colonIdx = raw.indexOf(':')
-  if (colonIdx < 0) return raw
-  const tool = raw.slice(0, colonIdx).trim().toLowerCase()
-  const detail = raw.slice(colonIdx + 1).trim()
-  const shortPath = (p: string) => {
-    const parts = p.replace(/\\/g, '/').split('/')
-    return parts.length > 3 ? `.../${parts.slice(-3).join('/')}` : p
-  }
-  const shortCmd = (c: string) => {
-    const clean = c.replace(/\s+/g, ' ').trim()
-    return clean.length > 80 ? clean.slice(0, 77) + '...' : clean
-  }
-
-  if (/^(read_file|read|readfile|read_workspace_file|view_file)$/i.test(tool)) {
-    return `Read ${shortPath(detail)}`
-  }
-  if (/^(write_file|write|writefile|write_workspace_file|create_file)$/i.test(tool)) {
-    return `Write ${shortPath(detail)}`
-  }
-  if (/^(edit|edit_file|patch|str_replace_editor|apply_diff)$/i.test(tool)) {
-    return `Edit ${shortPath(detail)}`
-  }
-  if (/^(bash|shell|run_command|run_shell_command|terminal|execute)$/i.test(tool)) {
-    return `Ran ${shortCmd(detail)}`
-  }
-  if (/^(grep|rg|search|search_workspace|ripgrep|find_in_files)$/i.test(tool)) {
-    return `Searched for "${detail.length > 60 ? detail.slice(0, 57) + '...' : detail}"`
-  }
-  if (/^(glob|find|list_dir|list_directory|list_workspace_tree|ls|tree)$/i.test(tool)) {
-    return `Listed ${shortPath(detail) || 'directory'}`
-  }
-  if (/^(web_search|browser|fetch|curl)$/i.test(tool)) {
-    return `Fetched ${detail.length > 60 ? detail.slice(0, 57) + '...' : detail}`
-  }
-
-  // Fallback: clean up the tool name
-  const cleanTool = raw.slice(0, colonIdx).trim()
-    .replace(/_/g, ' ')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/^./, (c) => c.toUpperCase())
-  return `${cleanTool}: ${detail.length > 70 ? detail.slice(0, 67) + '...' : detail}`
-}
-
-function fileNameFromRelativePath(relativePath: string) {
-  const parts = relativePath.split('/')
-  return parts[parts.length - 1] || relativePath
-}
-
-function toLocalFileUrl(filePath: string) {
-  const normalized = String(filePath ?? '').replace(/\\/g, '/')
-  if (!normalized) return ''
-  if (/^file:\/\//i.test(normalized)) return normalized
-  if (normalized.startsWith('//')) return `file:${encodeURI(normalized)}`
-  if (/^[a-zA-Z]:\//.test(normalized)) return `file:///${encodeURI(normalized)}`
-  if (normalized.startsWith('/')) return `file://${encodeURI(normalized)}`
-  return encodeURI(normalized)
-}
-
-function normalizeWorkspacePathForCompare(value: string) {
-  return value.trim().replace(/\//g, '\\').toLowerCase()
-}
-
-function decodeUriComponentSafe(value: string) {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
-}
-
-function stripLinkQueryAndHash(value: string) {
-  const q = value.indexOf('?')
-  const h = value.indexOf('#')
-  const end = Math.min(q >= 0 ? q : Number.POSITIVE_INFINITY, h >= 0 ? h : Number.POSITIVE_INFINITY)
-  return Number.isFinite(end) ? value.slice(0, end) : value
-}
-
-function stripFileLineAndColumnSuffix(pathLike: string) {
-  const m = pathLike.match(/^(.*?)(?::\d+)(?::\d+)?$/)
-  return m?.[1] ? m[1] : pathLike
-}
-
-function normalizeWorkspaceRelativePath(pathLike: string): string | null {
-  const normalized = pathLike
-    .replace(/\\/g, '/')
-    .replace(/\/+/g, '/')
-    .replace(/^\.\/+/, '')
-    .trim()
-  if (!normalized || normalized.startsWith('/')) return null
-  const segments = normalized.split('/').filter(Boolean)
-  if (segments.length === 0) return null
-  if (segments.some((segment) => segment === '.' || segment === '..')) return null
-  return segments.join('/')
-}
-
-function toWorkspaceRelativePathIfInsideRoot(workspaceRoot: string, absolutePath: string): string | null {
-  const root = workspaceRoot.replace(/\\/g, '/').replace(/\/+$/, '')
-  if (!root) return null
-  let target = absolutePath.replace(/\\/g, '/')
-  if (/^\/[a-zA-Z]:\//.test(target)) target = target.slice(1)
-  const rootCompare = root.toLowerCase()
-  const targetCompare = target.toLowerCase()
-  if (targetCompare === rootCompare) return null
-  if (!targetCompare.startsWith(`${rootCompare}/`)) return null
-  return normalizeWorkspaceRelativePath(target.slice(root.length + 1))
-}
-
-function resolveWorkspaceRelativePathFromChatHref(workspaceRoot: string, href: string): string | null {
-  const rawHref = String(href ?? '').trim()
-  if (!workspaceRoot || !rawHref || rawHref.startsWith('#')) return null
-
-  const withoutQueryOrHash = stripLinkQueryAndHash(rawHref)
-  if (!withoutQueryOrHash) return null
-  const decoded = decodeUriComponentSafe(stripFileLineAndColumnSuffix(withoutQueryOrHash)).replace(/\\/g, '/')
-  if (!decoded) return null
-
-  if (/^file:\/\//i.test(decoded)) {
-    try {
-      const parsed = new URL(decoded)
-      let filePath = decodeUriComponentSafe(parsed.pathname || '')
-      if (parsed.host) filePath = `//${parsed.host}${filePath}`
-      return toWorkspaceRelativePathIfInsideRoot(workspaceRoot, filePath)
-    } catch {
-      return null
-    }
-  }
-
-  const isWindowsAbsolute = /^[a-zA-Z]:\//.test(decoded)
-  const hasUriScheme = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(decoded)
-  if (hasUriScheme && !isWindowsAbsolute) return null
-  if (isWindowsAbsolute || decoded.startsWith('/')) {
-    return toWorkspaceRelativePathIfInsideRoot(workspaceRoot, decoded)
-  }
-  return normalizeWorkspaceRelativePath(decoded)
-}
-
-function getInitialThemeId(): string {
-  const stored = globalThis.localStorage?.getItem(THEME_ID_STORAGE_KEY) ?? ''
-  if (THEMES.some((t) => t.id === stored)) return stored
-  const legacyTheme = (globalThis.localStorage?.getItem('agentorchestrator.theme') ?? '').toLowerCase()
-  let legacyPreset: string | null = null
-  try {
-    const app = globalThis.localStorage?.getItem(APP_SETTINGS_STORAGE_KEY)
-    if (app) {
-      const p = JSON.parse(app) as { themePresetId?: string }
-      legacyPreset = p?.themePresetId ?? null
-    }
-  } catch {
-    /* ignore */
-  }
-  const mapping = legacyPreset && LEGACY_PRESET_TO_THEME_ID[legacyPreset]
-  if (mapping) {
-    const id = legacyTheme === 'light' ? mapping.light : mapping.dark
-    if (THEMES.some((t) => t.id === id)) return id
-  }
-  if (legacyPreset && THEMES.some((t) => t.id === legacyPreset)) return legacyPreset
-  if (legacyTheme === 'light') return 'default-light'
-  return DEFAULT_THEME_ID
-}
-
-function getInitialWorkspaceRoot() {
-  return (globalThis.localStorage?.getItem(WORKSPACE_STORAGE_KEY) ?? '').trim()
-}
-
-function getInitialSetupWizardDone() {
-  return (globalThis.localStorage?.getItem(SETUP_WIZARD_DONE_STORAGE_KEY) ?? '') === '1'
-}
-
-function getDefaultSetupWizardSelection(): Record<ConnectivityProvider, boolean> {
-  return {
-    codex: true,
-    claude: false,
-    gemini: false,
-    openrouter: false,
-  }
-}
-
-function getInitialWorkspaceDockSide(): WorkspaceDockSide {
-  const stored = (globalThis.localStorage?.getItem(WORKSPACE_DOCK_SIDE_STORAGE_KEY) ?? '').toLowerCase()
-  return stored === 'right' ? 'right' : 'left'
-}
-
-function getInitialModelConfig(): ModelConfig {
-  try {
-    const stored = globalThis.localStorage?.getItem(MODEL_CONFIG_STORAGE_KEY)
-    if (!stored) return { interfaces: DEFAULT_MODEL_INTERFACES }
-    const parsed = JSON.parse(stored) as ModelConfig
-    if (!parsed?.interfaces?.length) return { interfaces: DEFAULT_MODEL_INTERFACES }
-    return parsed
-  } catch {
-    return { interfaces: DEFAULT_MODEL_INTERFACES }
-  }
-}
-
-function getInitialProviderRegistry(): ProviderRegistry {
-  try {
-    const stored = globalThis.localStorage?.getItem(PROVIDER_REGISTRY_STORAGE_KEY)
-    if (!stored) return { overrides: {}, customProviders: [] }
-    const parsed = JSON.parse(stored) as ProviderRegistry
-    if (!parsed || typeof parsed !== 'object') return { overrides: {}, customProviders: [] }
-    return {
-      overrides: parsed.overrides && typeof parsed.overrides === 'object' ? parsed.overrides : {},
-      customProviders: Array.isArray(parsed.customProviders) ? parsed.customProviders : [],
-    }
-  } catch {
-    return { overrides: {}, customProviders: [] }
-  }
-}
-
-function resolveProviderConfigs(registry: ProviderRegistry): ProviderConfig[] {
-  const result: ProviderConfig[] = []
-  for (const id of CONNECTIVITY_PROVIDERS) {
-    const builtIn = DEFAULT_BUILTIN_PROVIDER_CONFIGS[id]
-    const override = registry.overrides[id]
-    if (builtIn.type === 'cli') {
-      result.push({
-        ...builtIn,
-        ...(override && {
-          displayName: override.displayName ?? builtIn.displayName,
-          enabled: override.enabled ?? builtIn.enabled,
-          cliPath: override.cliPath,
-        }),
-      })
-    } else {
-      result.push({
-        ...builtIn,
-        ...(override && {
-          displayName: override.displayName ?? builtIn.displayName,
-          enabled: override.enabled ?? builtIn.enabled,
-          apiBaseUrl: override.apiBaseUrl ?? builtIn.apiBaseUrl,
-        }),
-      })
-    }
-  }
-  for (const custom of registry.customProviders) {
-    result.push({ ...custom, isBuiltIn: false })
-  }
-  return result
-}
-
-function getInitialWorkspaceList(): string[] {
-  const root = getInitialWorkspaceRoot()
-  try {
-    const stored = globalThis.localStorage?.getItem(WORKSPACE_LIST_STORAGE_KEY)
-    if (!stored) return root ? [root] : []
-    const list = JSON.parse(stored) as string[]
-    if (!Array.isArray(list)) return root ? [root] : []
-    const deduped = [...new Set([root, ...list])]
-    return deduped.filter(Boolean)
-  } catch {
-    return root ? [root] : []
-  }
-}
-
-function cloneChatMessages(messages: ChatMessage[]): ChatMessage[] {
-  return messages.map((m) => ({
-    ...m,
-    attachments: m.attachments ? m.attachments.map((a) => ({ ...a })) : undefined,
-  }))
-}
-
-const INITIAL_HISTORY_MAX_MESSAGES = 24
-
-function panelMessagesToInitialHistory(
-  messages: ChatMessage[],
-  maxMessages = INITIAL_HISTORY_MAX_MESSAGES,
-): Array<{ role: 'user' | 'assistant'; text: string }> {
-  const trimmed = messages.slice(-maxMessages)
-  return trimmed
-    .filter((m): m is ChatMessage & { role: 'user' | 'assistant' } => m.role === 'user' || m.role === 'assistant')
-    .map((m) => ({ role: m.role, text: (m.content ?? '').trim() }))
-    .filter((m) => m.text.length > 0)
-}
-
-function parseHistoryMessages(raw: unknown): ChatMessage[] {
-  if (!Array.isArray(raw)) return []
-  const next: ChatMessage[] = []
-  for (const message of raw) {
-    if (!message || typeof message !== 'object') continue
-    const record = message as Partial<ChatMessage>
-    const role: ChatRole =
-      record.role === 'user' || record.role === 'assistant' || record.role === 'system'
-        ? record.role
-        : 'system'
-    const format: MessageFormat | undefined =
-      record.format === 'text' || record.format === 'markdown' ? record.format : undefined
-    const attachments = Array.isArray(record.attachments)
-      ? record.attachments
-        .filter((x): x is PastedImageAttachment => Boolean(x && typeof x === 'object'))
-        .map((x) => ({
-          id: typeof x.id === 'string' && x.id ? x.id : newId(),
-          path: typeof x.path === 'string' ? x.path : '',
-          label: typeof x.label === 'string' ? x.label : 'attachment',
-          mimeType: typeof x.mimeType === 'string' ? x.mimeType : undefined,
-        }))
-        .filter((x) => Boolean(x.path))
-      : undefined
-
-    next.push({
-      id: typeof record.id === 'string' && record.id ? record.id : newId(),
-      role,
-      content: typeof record.content === 'string' ? record.content : '',
-      format,
-      attachments: attachments && attachments.length > 0 ? attachments : undefined,
-      createdAt: typeof record.createdAt === 'number' && Number.isFinite(record.createdAt) ? record.createdAt : undefined,
-    })
-  }
-  return stripSyntheticAutoContinueMessages(next)
-}
-
-function parseChatHistoryEntries(raw: unknown, fallbackWorkspaceRoot: string): ChatHistoryEntry[] {
-  if (!Array.isArray(raw)) return []
-  const entries: ChatHistoryEntry[] = []
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue
-    const record = item as Partial<ChatHistoryEntry>
-    const messages = parseHistoryMessages(record.messages)
-    if (messages.length === 0) continue
-    const title = typeof record.title === 'string' && record.title.trim() ? record.title.trim() : 'Untitled chat'
-    const savedAt = typeof record.savedAt === 'number' ? record.savedAt : Date.now()
-    const sandbox: SandboxMode =
-      record.sandbox === 'read-only' || record.sandbox === 'workspace-write'
-        ? record.sandbox
-        : 'workspace-write'
-    const permissionMode: PermissionMode = record.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
-    entries.push({
-      id: typeof record.id === 'string' && record.id ? record.id : newId(),
-      title,
-      savedAt,
-      workspaceRoot:
-        typeof record.workspaceRoot === 'string' && record.workspaceRoot ? record.workspaceRoot : fallbackWorkspaceRoot,
-      model: typeof record.model === 'string' && record.model ? record.model : DEFAULT_MODEL,
-      permissionMode,
-      sandbox,
-      fontScale: typeof record.fontScale === 'number' ? Math.max(MIN_FONT_SCALE, Math.min(MAX_FONT_SCALE, record.fontScale)) : 1,
-      messages,
-    })
-  }
-  return entries
-}
-
-function getInitialChatHistory(): ChatHistoryEntry[] {
-  try {
-    const raw = globalThis.localStorage?.getItem(CHAT_HISTORY_STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return parseChatHistoryEntries(parsed, getInitialWorkspaceRoot())
-      .sort((a, b) => b.savedAt - a.savedAt)
-      .slice(0, MAX_CHAT_HISTORY_ENTRIES)
-  } catch {
-    return []
-  }
-}
-
-
-function parseApplicationSettings(parsed: Partial<ApplicationSettings> | null | undefined): ApplicationSettings {
-  const defaults: ApplicationSettings = {
-    restoreSessionOnStartup: true,
-    themeId: DEFAULT_THEME_ID,
-    responseStyle: 'standard',
-    showDebugNotesInTimeline: false,
-    verboseDiagnostics: false,
-    showResponseDurationAfterPrompt: false,
-    editorWordWrap: true,
-  }
-  if (!parsed || typeof parsed !== 'object') return defaults
-  return {
-    restoreSessionOnStartup:
-      typeof parsed.restoreSessionOnStartup === 'boolean' ? parsed.restoreSessionOnStartup : true,
-    themeId: (() => {
-      if (typeof parsed.themeId === 'string' && THEMES.some((t) => t.id === parsed.themeId)) return parsed.themeId
-      return getInitialThemeId()
-    })(),
-    responseStyle:
-      parsed.responseStyle === 'concise' || parsed.responseStyle === 'standard' || parsed.responseStyle === 'detailed'
-        ? parsed.responseStyle
-        : 'standard',
-    showDebugNotesInTimeline: Boolean(parsed.showDebugNotesInTimeline),
-    verboseDiagnostics: Boolean(parsed.verboseDiagnostics),
-    showResponseDurationAfterPrompt: Boolean(parsed.showResponseDurationAfterPrompt),
-    editorWordWrap: typeof parsed.editorWordWrap === 'boolean' ? parsed.editorWordWrap : true,
-  }
-}
-
-function getInitialApplicationSettings(): ApplicationSettings {
-  try {
-    const raw = globalThis.localStorage?.getItem(APP_SETTINGS_STORAGE_KEY)
-    if (!raw) return parseApplicationSettings(null)
-    return parseApplicationSettings(JSON.parse(raw) as Partial<ApplicationSettings>)
-  } catch {
-    return parseApplicationSettings(null)
-  }
-}
-
-function mergeChatHistoryEntries(primary: ChatHistoryEntry[], secondary: ChatHistoryEntry[]): ChatHistoryEntry[] {
-  const byId = new Map<string, ChatHistoryEntry>()
-  for (const entry of [...primary, ...secondary]) {
-    if (byId.has(entry.id)) continue
-    byId.set(entry.id, entry)
-  }
-  return Array.from(byId.values())
-    .sort((a, b) => b.savedAt - a.savedAt)
-    .slice(0, MAX_CHAT_HISTORY_ENTRIES)
-}
-
-function parsePanelAttachments(raw: unknown): PastedImageAttachment[] {
-  if (!Array.isArray(raw)) return []
-  return raw
-    .filter((x): x is PastedImageAttachment => Boolean(x && typeof x === 'object'))
-    .map((x) => ({
-      id: typeof x.id === 'string' && x.id ? x.id : newId(),
-      path: typeof x.path === 'string' ? x.path : '',
-      label: typeof x.label === 'string' && x.label ? x.label : 'attachment',
-      mimeType: typeof x.mimeType === 'string' && x.mimeType ? x.mimeType : undefined,
-    }))
-    .filter((x) => Boolean(x.path))
-}
-
-function clampFontScale(value: unknown, fallback = 1) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
-  return Math.max(MIN_FONT_SCALE, Math.min(MAX_FONT_SCALE, value))
-}
-
-function parseInteractionMode(value: unknown): AgentInteractionMode {
-  return value === 'plan' || value === 'debug' || value === 'ask' ? value : 'agent'
-}
-
-function normalizeAllowedCommandPrefixes(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return []
-  const seen = new Set<string>()
-  const next: string[] = []
-  for (const value of raw) {
-    if (typeof value !== 'string') continue
-    const trimmed = value.trim()
-    if (!trimmed) continue
-    const key = trimmed.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    next.push(trimmed)
-  }
-  return next.slice(0, 64)
-}
-
-function parseAllowedCommandPrefixesInput(raw: string): string[] {
-  return raw.split(/\r?\n/g)
-}
-
-function workspaceSettingsToTextDraft(settings: WorkspaceSettings): WorkspaceSettingsTextDraft {
-  return {
-    allowedCommandPrefixes: settings.allowedCommandPrefixes.join('\n'),
-    allowedAutoReadPrefixes: settings.allowedAutoReadPrefixes.join('\n'),
-    allowedAutoWritePrefixes: settings.allowedAutoWritePrefixes.join('\n'),
-    deniedAutoReadPrefixes: settings.deniedAutoReadPrefixes.join('\n'),
-    deniedAutoWritePrefixes: settings.deniedAutoWritePrefixes.join('\n'),
-  }
-}
-
-function applyWorkspaceTextDraftField(
-  form: WorkspaceSettings,
-  field: keyof WorkspaceSettingsTextDraft,
-  raw: string,
-): WorkspaceSettings {
-  const parsed = parseAllowedCommandPrefixesInput(raw)
-  if (field === 'allowedCommandPrefixes') {
-    return { ...form, allowedCommandPrefixes: parsed }
-  }
-  if (field === 'allowedAutoReadPrefixes') {
-    return { ...form, allowedAutoReadPrefixes: parsed }
-  }
-  if (field === 'allowedAutoWritePrefixes') {
-    return { ...form, allowedAutoWritePrefixes: parsed }
-  }
-  if (field === 'deniedAutoReadPrefixes') {
-    return { ...form, deniedAutoReadPrefixes: parsed }
-  }
-  return { ...form, deniedAutoWritePrefixes: parsed }
-}
-
-function parsePersistedAgentPanel(raw: unknown, fallbackWorkspaceRoot: string): AgentPanelState | null {
-  if (!raw || typeof raw !== 'object') return null
-  const rec = raw as PersistedAgentPanelState
-  const messages = parseHistoryMessages(rec.messages)
-  if (messages.length === 0) return null
-  const id = typeof rec.id === 'string' && rec.id ? rec.id : newId()
-  const title = typeof rec.title === 'string' && rec.title.trim() ? rec.title.trim() : `Agent ${id.slice(-4)}`
-  const permissionMode: PermissionMode = rec.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
-  const sandbox: SandboxMode =
-    rec.sandbox === 'read-only' || rec.sandbox === 'workspace-write'
-      ? rec.sandbox
-      : 'workspace-write'
-  const cwd =
-    typeof rec.cwd === 'string' && rec.cwd.trim()
-      ? rec.cwd
-      : fallbackWorkspaceRoot || ''
-  return {
-    id,
-    historyId: typeof rec.historyId === 'string' && rec.historyId ? rec.historyId : newId(),
-    title,
-    cwd,
-    model: typeof rec.model === 'string' && rec.model ? rec.model : DEFAULT_MODEL,
-    interactionMode: parseInteractionMode(rec.interactionMode),
-    permissionMode,
-    sandbox,
-    status: typeof rec.status === 'string' && rec.status.trim() ? rec.status.trim() : 'Restored from previous session.',
-    connected: false,
-    streaming: false,
-    messages,
-    attachments: parsePanelAttachments(rec.attachments),
-    input: typeof rec.input === 'string' ? rec.input : '',
-    pendingInputs: Array.isArray(rec.pendingInputs) ? rec.pendingInputs.filter((x): x is string => typeof x === 'string') : [],
-    fontScale: clampFontScale(rec.fontScale),
-    usage: undefined,
-  }
-}
-
-function parsePersistedEditorPanel(raw: unknown, fallbackWorkspaceRoot: string): EditorPanelState | null {
-  if (!raw || typeof raw !== 'object') return null
-  const rec = raw as PersistedEditorPanelState
-  const relativePath = typeof rec.relativePath === 'string' && rec.relativePath ? rec.relativePath : ''
-  if (!relativePath) return null
-  const content = typeof rec.content === 'string' ? rec.content : ''
-  return {
-    id: typeof rec.id === 'string' && rec.id ? rec.id : `editor-${newId()}`,
-    workspaceRoot:
-      typeof rec.workspaceRoot === 'string' && rec.workspaceRoot.trim()
-        ? rec.workspaceRoot
-        : fallbackWorkspaceRoot || '',
-    relativePath,
-    title: typeof rec.title === 'string' && rec.title.trim() ? rec.title.trim() : fileNameFromRelativePath(relativePath),
-    fontScale: clampFontScale(rec.fontScale),
-    content,
-    size: typeof rec.size === 'number' && Number.isFinite(rec.size) ? Math.max(0, rec.size) : content.length,
-    loading: false,
-    saving: false,
-    dirty: Boolean(rec.dirty),
-    binary: Boolean(rec.binary),
-    error: typeof rec.error === 'string' && rec.error ? rec.error : undefined,
-    savedAt: typeof rec.savedAt === 'number' && Number.isFinite(rec.savedAt) ? rec.savedAt : undefined,
-    editMode: rec.editMode === undefined ? true : Boolean(rec.editMode),
-  }
-}
-
-function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: string): ParsedAppState | null {
-  if (!raw || typeof raw !== 'object') return null
-  const rec = raw as PersistedAppState
-  const workspaceRoot =
-    typeof rec.workspaceRoot === 'string' && rec.workspaceRoot.trim()
-      ? rec.workspaceRoot.trim()
-      : null
-  const workspaceList = Array.isArray(rec.workspaceList)
-    ? rec.workspaceList
-      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-      .map((x) => x.trim())
-    : null
-  const workspaceSnapshotsByRoot: ParsedAppState['workspaceSnapshotsByRoot'] = {}
-  if (rec.workspaceSnapshotsByRoot && typeof rec.workspaceSnapshotsByRoot === 'object') {
-    const snapshotsRecord = rec.workspaceSnapshotsByRoot as Record<string, unknown>
-    for (const [workspacePath, snapshotRaw] of Object.entries(snapshotsRecord)) {
-      if (!workspacePath || typeof workspacePath !== 'string') continue
-      if (!snapshotRaw || typeof snapshotRaw !== 'object') continue
-      const snapshot = snapshotRaw as Partial<WorkspaceUiSnapshot>
-      const parsedPanels = Array.isArray(snapshot.panels)
-        ? snapshot.panels
-            .map((panel) => parsePersistedAgentPanel(panel, workspacePath))
-            .filter((panel): panel is AgentPanelState => Boolean(panel))
-        : []
-      const parsedEditors = Array.isArray(snapshot.editorPanels)
-        ? snapshot.editorPanels
-            .map((panel) => parsePersistedEditorPanel(panel, workspacePath))
-            .filter((panel): panel is EditorPanelState => Boolean(panel))
-        : []
-      workspaceSnapshotsByRoot[workspacePath] = {
-        layoutMode:
-          snapshot.layoutMode === 'vertical' || snapshot.layoutMode === 'horizontal' || snapshot.layoutMode === 'grid'
-            ? snapshot.layoutMode
-            : 'vertical',
-        showWorkspaceWindow: typeof snapshot.showWorkspaceWindow === 'boolean' ? snapshot.showWorkspaceWindow : true,
-        showCodeWindow: typeof snapshot.showCodeWindow === 'boolean' ? snapshot.showCodeWindow : true,
-        codeWindowTab: snapshot.codeWindowTab === 'code' || snapshot.codeWindowTab === 'settings' ? snapshot.codeWindowTab : 'code',
-        dockTab:
-          snapshot.dockTab === 'orchestrator' || snapshot.dockTab === 'explorer' || snapshot.dockTab === 'git' || snapshot.dockTab === 'settings'
-            ? snapshot.dockTab
-            : 'explorer',
-        workspaceDockSide: snapshot.workspaceDockSide === 'left' || snapshot.workspaceDockSide === 'right' ? snapshot.workspaceDockSide : 'right',
-        panels: parsedPanels,
-        editorPanels: parsedEditors,
-        activePanelId: typeof snapshot.activePanelId === 'string' ? snapshot.activePanelId : null,
-        focusedEditorId: typeof snapshot.focusedEditorId === 'string' ? snapshot.focusedEditorId : null,
-        selectedWorkspaceFile: typeof snapshot.selectedWorkspaceFile === 'string' ? snapshot.selectedWorkspaceFile : null,
-        expandedDirectories:
-          snapshot.expandedDirectories && typeof snapshot.expandedDirectories === 'object'
-            ? Object.fromEntries(
-                Object.entries(snapshot.expandedDirectories as Record<string, unknown>).filter(
-                  ([k, v]) => typeof k === 'string' && typeof v === 'boolean',
-                ),
-              ) as Record<string, boolean>
-            : {},
-      }
-    }
-  }
-  const panels = Array.isArray(rec.panels)
-    ? rec.panels
-      .map((item) => parsePersistedAgentPanel(item, fallbackWorkspaceRoot))
-      .filter((x): x is AgentPanelState => Boolean(x))
-      .slice(0, MAX_PANELS)
-    : []
-  const editorPanels = Array.isArray(rec.editorPanels)
-    ? rec.editorPanels
-      .map((item) => parsePersistedEditorPanel(item, fallbackWorkspaceRoot))
-      .filter((x): x is EditorPanelState => Boolean(x))
-    : []
-  const dockTab: ParsedAppState['dockTab'] =
-    rec.dockTab === 'orchestrator' || rec.dockTab === 'explorer' || rec.dockTab === 'git' || rec.dockTab === 'settings'
-      ? rec.dockTab
-      : null
-  const codeWindowTab: ParsedAppState['codeWindowTab'] =
-    rec.codeWindowTab === 'code' || rec.codeWindowTab === 'settings'
-      ? rec.codeWindowTab
-      : null
-  const layoutMode: ParsedAppState['layoutMode'] =
-    rec.layoutMode === 'vertical' || rec.layoutMode === 'horizontal' || rec.layoutMode === 'grid'
-    ? rec.layoutMode
-    : null
-  const workspaceDockSide: ParsedAppState['workspaceDockSide'] =
-    rec.workspaceDockSide === 'left' || rec.workspaceDockSide === 'right' ? rec.workspaceDockSide : null
-  const selectedWorkspaceFile: ParsedAppState['selectedWorkspaceFile'] =
-    typeof rec.selectedWorkspaceFile === 'string' && rec.selectedWorkspaceFile
-      ? rec.selectedWorkspaceFile
-      : rec.selectedWorkspaceFile === null
-        ? null
-        : undefined
-  const activePanelId: ParsedAppState['activePanelId'] =
-    typeof rec.activePanelId === 'string' && rec.activePanelId ? rec.activePanelId : null
-  const focusedEditorId: ParsedAppState['focusedEditorId'] =
-    typeof rec.focusedEditorId === 'string' && rec.focusedEditorId
-      ? rec.focusedEditorId
-      : rec.focusedEditorId === null
-        ? null
-        : undefined
-  const expandedDirectories: ParsedAppState['expandedDirectories'] =
-    rec.expandedDirectories && typeof rec.expandedDirectories === 'object'
-      ? (Object.fromEntries(
-          Object.entries(rec.expandedDirectories as Record<string, unknown>).filter(
-            ([k, v]) => typeof k === 'string' && typeof v === 'boolean',
-          ),
-        ) as Record<string, boolean>)
-      : undefined
-  return {
-    workspaceRoot,
-    workspaceList,
-    workspaceSnapshotsByRoot,
-    panels,
-    editorPanels,
-    dockTab,
-    codeWindowTab,
-    layoutMode,
-    workspaceDockSide,
-    selectedWorkspaceFile,
-    activePanelId,
-    focusedEditorId,
-    showWorkspaceWindow: typeof rec.showWorkspaceWindow === 'boolean' ? rec.showWorkspaceWindow : undefined,
-    showCodeWindow: typeof rec.showCodeWindow === 'boolean' ? rec.showCodeWindow : undefined,
-    expandedDirectories,
-    applicationSettings:
-      rec.applicationSettings && typeof rec.applicationSettings === 'object'
-        ? parseApplicationSettings(rec.applicationSettings as Partial<ApplicationSettings>)
-        : undefined,
-    themeOverrides:
-      rec.themeOverrides && typeof rec.themeOverrides === 'object'
-        ? sanitizeThemeOverrides(rec.themeOverrides)
-        : undefined,
-  }
-}
-
-function formatHistoryOptionLabel(entry: ChatHistoryEntry): string {
-  const dt = new Date(entry.savedAt)
-  const when = Number.isFinite(dt.getTime())
-    ? dt.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-    : ''
-  return when ? `${entry.title} (${when})` : entry.title
-}
-
-function getConversationPrecis(panel: AgentPanelState): string {
-  const firstUser = stripSyntheticAutoContinueMessages(panel.messages).find((m) => m.role === 'user')
-  if (!firstUser?.content?.trim()) return panel.title
-  const text = firstUser.content.trim().replace(/\s+/g, ' ')
-  const maxLen = 36
-  if (text.length <= maxLen) return text
-  return text.slice(0, maxLen).trim() + '...'
-}
-
-function toShortJson(value: unknown, maxLen = 280): string {
-  try {
-    const s = JSON.stringify(value)
-    if (!s) return ''
-    return s.length > maxLen ? `${s.slice(0, maxLen)}...` : s
-  } catch {
-    return String(value ?? '')
-  }
-}
-
-function truncateText(value: string, maxLen = 200): string {
-  const text = String(value ?? '').trim()
-  if (!text) return ''
-  return text.length > maxLen ? `${text.slice(0, maxLen)}...` : text
-}
-
-function pickString(obj: any, keys: string[]): string | null {
-  for (const key of keys) {
-    const v = obj?.[key]
-    if (typeof v === 'string' && v.trim()) return v.trim()
-  }
-  return null
-}
-
-function summarizeRawNotification(method: string, params: any): string | null {
-  if (!method) return null
-
-  if (method.endsWith('/requestApproval')) {
-    const reason =
-      pickString(params, ['reason', 'message', 'description']) ??
-      pickString(params?.request, ['reason', 'message', 'description']) ??
-      pickString(params?.action, ['reason', 'message', 'description'])
-    const command =
-      pickString(params, ['command', 'cmd']) ??
-      pickString(params?.command, ['command', 'cmd', 'raw']) ??
-      pickString(params?.action, ['command', 'cmd'])
-    const filePath =
-      pickString(params, ['path', 'file']) ??
-      pickString(params?.action, ['path', 'file']) ??
-      pickString(params?.edit, ['path', 'file'])
-    const bits = ['Approval requested']
-    if (reason) bits.push(reason)
-    if (command) bits.push(`cmd: ${command}`)
-    if (filePath) bits.push(`file: ${filePath}`)
-    if (!reason && !command && !filePath) bits.push(toShortJson(params))
-    return `${bits.join(' | ')}`
-  }
-
-  if (method === 'item/completed') {
-    const itemType = params?.item?.type
-    if (!itemType || itemType === 'agentMessage') return null
-    const command =
-      pickString(params?.item, ['command', 'cmd']) ??
-      pickString(params?.item?.command, ['command', 'cmd', 'raw']) ??
-      pickString(params?.item?.input, ['command', 'cmd'])
-    const pathLike =
-      pickString(params?.item, ['path', 'file']) ??
-      pickString(params?.item?.target, ['path', 'file']) ??
-      pickString(params?.item?.edit, ['path', 'file'])
-    const out = [`Activity: ${itemType}`]
-    if (command) out.push(`cmd: ${command}`)
-    if (pathLike) out.push(`file: ${pathLike}`)
-    return out.join(' | ')
-  }
-
-  return null
-}
-
-function simplifyCommand(raw: string): string {
-  const trimmed = raw.trim()
-  const m = trimmed.match(/-Command\s+'([^']+)'/i)
-  const reduced = m?.[1]?.trim() || trimmed
-  return reduced.length > 140 ? `${reduced.slice(0, 140)}...` : reduced
-}
-
-function describeOperationTrace(method: string, params: any): { label: string; detail?: string } | null {
-  const methodLower = method.toLowerCase()
-  const pathLike =
-    pickString(params, ['path', 'file', 'targetPath']) ??
-    pickString(params?.target, ['path', 'file']) ??
-    pickString(params?.edit, ['path', 'file']) ??
-    pickString(params?.item, ['path', 'file']) ??
-    pickString(params?.item?.target, ['path', 'file'])
-  const queryLike =
-    pickString(params, ['query', 'pattern', 'text']) ??
-    pickString(params?.search, ['query', 'pattern', 'text']) ??
-    pickString(params?.input, ['query', 'pattern', 'text'])
-  const cmdLike =
-    pickString(params, ['command', 'cmd']) ??
-    pickString(params?.command, ['command', 'cmd', 'raw']) ??
-    pickString(params?.item, ['command', 'cmd']) ??
-    pickString(params?.item?.command, ['command', 'cmd', 'raw']) ??
-    pickString(params?.item?.input, ['command', 'cmd'])
-  const cmdLower = (cmdLike ?? '').toLowerCase()
-
-  if (
-    methodLower.includes('readfile') ||
-    methodLower.includes('read_workspace') ||
-    methodLower.includes('readworkspace') ||
-    methodLower.includes('openfile') ||
-    (cmdLower.startsWith('readfile') && cmdLike)
-  ) {
-    const detail = pathLike ?? simplifyCommand(cmdLike ?? '')
-    return { label: 'Read file', detail: detail || undefined }
-  }
-  if (
-    methodLower.includes('glob') ||
-    methodLower.includes('search') ||
-    methodLower.includes('grep') ||
-    methodLower.includes('rg') ||
-    methodLower.includes('scan') ||
-    (cmdLower.startsWith('rg ') && cmdLike) ||
-    (cmdLower.startsWith('glob') && cmdLike)
-  ) {
-    return { label: 'Searched workspace', detail: truncateText(queryLike ?? pathLike ?? cmdLike ?? '', 180) || undefined }
-  }
-  if (
-    methodLower.includes('applypatch') ||
-    methodLower.includes('editfile') ||
-    methodLower.includes('writefile') ||
-    methodLower.includes('write_workspace') ||
-    methodLower.includes('filechange')
-  ) {
-    return { label: 'Edited file', detail: pathLike ?? undefined }
-  }
-  const isCommandLikeMethod = methodLower.includes('shell') || methodLower.includes('commandexecution')
-  if (isCommandLikeMethod && !cmdLike) {
-    return null
-  }
-  if (isCommandLikeMethod || cmdLike) {
-    if (cmdLower.startsWith('readfile')) {
-      return { label: 'Read file', detail: simplifyCommand(cmdLike ?? '') || undefined }
-    }
-    if (cmdLower.startsWith('glob') || cmdLower.startsWith('rg ') || cmdLower.startsWith('grep ')) {
-      return { label: 'Searched workspace', detail: simplifyCommand(cmdLike ?? '') || undefined }
-    }
-    if (cmdLower.startsWith('applypatch') || cmdLower.startsWith('editnotebook')) {
-      return { label: 'Updated code', detail: simplifyCommand(cmdLike ?? '') || undefined }
-    }
-    return { label: 'Ran command', detail: cmdLike ? simplifyCommand(cmdLike) : undefined }
-  }
-
-  return null
-}
-
-function describeActivityEntry(evt: any): { label: string; detail?: string; kind: ActivityKind } | null {
-  if (!evt) return null
-  if (evt.type === 'assistantDelta') return null
-  if (evt.type === 'usageUpdated') return null
-  if (evt.type === 'planUpdated') return null
-  if (evt.type === 'status') {
-    return {
-      label: `Status: ${String(evt.status ?? 'unknown')}`,
-      detail: typeof evt.message === 'string' ? evt.message : undefined,
-      kind: 'event',
-    }
-  }
-  if (evt.type === 'thinking') {
-    return {
-      label: 'Thinking',
-      detail: typeof evt.message === 'string' ? evt.message : undefined,
-      kind: 'event',
-    }
-  }
-  if (evt.type === 'assistantCompleted') return { label: 'Turn complete', kind: 'event' }
-  if (evt.type === 'rawNotification' && typeof evt.method === 'string') {
-    const method = evt.method
-    const params = evt.params
-    const methodLower = method.toLowerCase()
-    if (method.endsWith('/requestApproval')) {
-      return {
-        label: 'Approval requested',
-        detail: summarizeRawNotification(method, params) ?? undefined,
-        kind: 'approval',
-      }
-    }
-    const trace = describeOperationTrace(method, params)
-    if (trace) {
-      return {
-        label: trace.label,
-        detail: trace.detail,
-        kind: 'operation',
-      }
-    }
-    if (/commandExecution/i.test(method) || methodLower.includes('command')) {
-      const cmd =
-        pickString(params, ['command', 'cmd']) ??
-        pickString(params?.command, ['command', 'cmd', 'raw']) ??
-        pickString(params?.action, ['command', 'cmd'])
-      if (!cmd) return null
-      return { label: 'Running command', detail: simplifyCommand(cmd), kind: 'command' }
-    }
-    if (/reasoning/i.test(method)) {
-      const detail =
-        pickString(params, ['summary', 'text', 'reasoning', 'message']) ??
-        pickString(params?.reasoning, ['summary', 'text']) ??
-        pickString(params?.step, ['summary', 'text'])
-      // Ignore opaque reasoning pings that provide no human-meaningful content.
-      if (!detail) return null
-      return { label: 'Reasoning update', detail: truncateText(detail, 220), kind: 'reasoning' }
-    }
-    if (method === 'item/completed') {
-      const itemType = params?.item?.type
-      if (!itemType || itemType === 'agentMessage') return null
-      if (itemType === 'commandExecution') {
-        const cmd =
-          pickString(params?.item, ['command', 'cmd']) ??
-          pickString(params?.item?.command, ['command', 'cmd', 'raw']) ??
-          pickString(params?.item?.input, ['command', 'cmd'])
-        const exitCode =
-          typeof params?.item?.exitCode === 'number'
-            ? params.item.exitCode
-            : typeof params?.item?.statusCode === 'number'
-              ? params.item.statusCode
-              : null
-        const parts = ['Command finished']
-        if (cmd) parts.push(simplifyCommand(cmd))
-        if (exitCode !== null) parts.push(`exit ${exitCode}`)
-        return { label: parts[0], detail: parts.slice(1).join(' | ') || undefined, kind: 'command' }
-      }
-      if (itemType === 'fileChange') {
-        const filePath =
-          pickString(params?.item, ['path', 'file']) ??
-          pickString(params?.item?.target, ['path', 'file']) ??
-          pickString(params?.item?.edit, ['path', 'file'])
-        return { label: 'Edited file', detail: filePath ?? undefined, kind: 'event' }
-      }
-      if (itemType === 'reasoning') {
-        const detail =
-          pickString(params?.item, ['summary', 'text', 'reasoning']) ??
-          pickString(params?.item?.reasoning, ['summary', 'text'])
-        if (!detail) return null
-        return { label: 'Reasoning step', detail: truncateText(detail, 220), kind: 'reasoning' }
-      }
-      if (itemType === 'userMessage') return null
-      return { label: `Completed ${itemType}`, kind: 'event' }
-    }
-    if (methodLower.includes('file') || methodLower.includes('edit')) {
-      const filePath =
-        pickString(params, ['path', 'file']) ??
-        pickString(params?.target, ['path', 'file']) ??
-        pickString(params?.edit, ['path', 'file'])
-      if (filePath) return { label: 'Edited file', detail: filePath, kind: 'event' }
-    }
-    if (methodLower.includes('search') || methodLower.includes('scan')) {
-      const query =
-        pickString(params, ['query', 'pattern', 'text']) ??
-        pickString(params?.search, ['query', 'pattern', 'text'])
-      return { label: 'Scanning workspace', detail: query ? truncateText(query, 140) : undefined, kind: 'event' }
-    }
-    if (methodLower.includes('task') && methodLower.includes('complete')) {
-      return { label: 'Task step complete', kind: 'event' }
-    }
-    if (methodLower.includes('turn') && methodLower.includes('complete')) {
-      return { label: 'Turn complete', kind: 'event' }
-    }
-    if (methodLower.includes('agent_message')) {
-      return null
-    }
-    return null
-  }
-  if (typeof evt.type === 'string') return null
-  return null
-}
-
-function shouldSurfaceRawNoteInChat(method: string): boolean {
-  if (method.endsWith('/requestApproval')) return true
-  return false
-}
-
-function isTurnCompletionRawNotification(method: string, params: any): boolean {
-  const methodLower = method.toLowerCase()
-  if (method === 'item/completed' && params?.item?.type === 'agentMessage') return true
-  if (methodLower.includes('turn') && methodLower.includes('complete')) return true
-  if (methodLower.includes('response') && methodLower.includes('complete')) return true
-  return false
-}
-
-const LIMIT_WARNING_PREFIX = 'Warning (Limits):'
-
-function isPermissionEscalationMessage(message: string): boolean {
-  const lower = message.trim().toLowerCase()
-  if (!lower) return false
-  return (
-    lower.includes('approval requested') ||
-    lower.includes('action requires approval') ||
-    lower.includes('requires approval') ||
-    lower.includes('set permissions to proceed always') ||
-    lower.includes('write denied in verify-first mode') ||
-    lower.includes('command execution denied in verify-first mode') ||
-    (lower.includes('verify-first') &&
-      (lower.includes('permission') || lower.includes('write') || lower.includes('command')) &&
-      (lower.includes('denied') || lower.includes('approval')))
-  )
-}
-
-function isUsageLimitMessage(message: string): boolean {
-  const lower = message.toLowerCase()
-  return (
-    lower.includes('limit reached') ||
-    lower.includes('rate limit') ||
-    lower.includes('quota exceeded') ||
-    lower.includes('usage limit') ||
-    lower.includes('too many requests') ||
-    lower.includes('429') ||
-    (lower.includes('exhaust') && lower.includes('limit'))
-  )
-}
-
-function withLimitWarningMessage(messages: ChatMessage[], rawMessage: string): ChatMessage[] {
-  const trimmed = rawMessage.trim()
-  if (!trimmed || !isUsageLimitMessage(trimmed)) return messages
-  const content = `${LIMIT_WARNING_PREFIX} ${trimmed}\n\nSwitch to another model/provider (for example Gemini) or wait for your limit window to reset.`
-  const duplicate = messages.slice(-8).some((m) => m.role === 'system' && m.content === content)
-  if (duplicate) return messages
-  return [...messages, { id: newId(), role: 'system' as const, content, format: 'text' as const, createdAt: Date.now() }]
-}
-
-function formatLimitResetHint(usage: AgentPanelState['usage']) {
-  const raw = usage?.primary?.resetsAt
-  if (raw === null || raw === undefined) return null
-  const date =
-    typeof raw === 'number'
-      ? new Date(raw > 1_000_000_000_000 ? raw : raw * 1000)
-      : typeof raw === 'string'
-        ? new Date(raw)
-        : null
-  if (!date || Number.isNaN(date.getTime())) return null
-  return `Resets at ${date.toLocaleString()}.`
-}
-
-function getRateLimitPercent(usage: AgentPanelState['usage']) {
-  const p = usage?.primary
-  if (!p || typeof p.usedPercent !== 'number') return null
-  return Math.max(0, Math.min(100, p.usedPercent))
-}
-
-function formatRateLimitLabel(usage: AgentPanelState['usage']) {
-  const p = usage?.primary
-  if (!p || typeof p.usedPercent !== 'number') return null
-  const used = Math.max(0, Math.min(100, p.usedPercent))
-  const left = 100 - used
-  const windowMinutes = typeof p.windowMinutes === 'number' ? p.windowMinutes : null
-  const windowLabel = windowMinutes === 300 ? '5h' : windowMinutes ? `${Math.round(windowMinutes / 60)}h` : null
-  return `${windowLabel ? `${windowLabel} ` : ''}${left}% left`
-}
-
-function withExhaustedRateLimitWarning(messages: ChatMessage[], usage: AgentPanelState['usage']) {
-  const usedPercent = getRateLimitPercent(usage)
-  if (usedPercent === null || usedPercent < 99.5) return messages
-  const label = formatRateLimitLabel(usage) ?? `${Math.max(0, Math.round(100 - usedPercent))}% left`
-  const resetHint = formatLimitResetHint(usage)
-  const content = `${LIMIT_WARNING_PREFIX} Codex usage window exhausted (${label}). ${resetHint ?? 'Wait for reset or switch model/provider.'}\n\nYour message was not sent.`
-  const duplicate = messages
-    .slice(-8)
-    .some((m) => m.role === 'system' && m.content.startsWith(`${LIMIT_WARNING_PREFIX} Codex usage window exhausted`))
-  if (duplicate) return messages
-  return [...messages, { id: newId(), role: 'system' as const, content, format: 'text' as const, createdAt: Date.now() }]
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
-    promise
-      .then((v) => {
-        clearTimeout(t)
-        resolve(v)
-      })
-      .catch((e) => {
-        clearTimeout(t)
-        reject(e)
-      })
-  })
-}
-
-function makeDefaultPanel(id: string, cwd: string, historyId = newId()): AgentPanelState {
-  const startupModel = DEFAULT_MODEL
-  return {
-    id,
-    historyId,
-    title: `Agent ${id.slice(-4)}`,
-    cwd,
-    model: startupModel,
-    interactionMode: 'agent',
-    permissionMode: 'verify-first',
-    sandbox: 'workspace-write',
-    status: 'Not connected',
-    connected: false,
-    streaming: false,
-    messages: [
-      {
-        id: newId(),
-        role: 'system',
-        content: `Model: ${startupModel}`,
-        format: 'text',
-        createdAt: Date.now(),
-      },
-    ],
-    attachments: [],
-    input: '',
-    pendingInputs: [],
-    fontScale: 1,
-    usage: undefined,
-  }
-}
-
-function withModelBanner(messages: ChatMessage[], model: string): ChatMessage[] {
-  const banner = `${MODEL_BANNER_PREFIX}${model}`
-  if (messages[0]?.role === 'system' && messages[0].content.startsWith(MODEL_BANNER_PREFIX)) {
-    return [{ ...messages[0], content: banner, format: 'text' }, ...messages.slice(1)]
-  }
-  return [{ id: newId(), role: 'system', content: banner, format: 'text', createdAt: Date.now() }, ...messages]
-}
-
-function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSettings> {
-  try {
-    const raw = globalThis.localStorage?.getItem(WORKSPACE_SETTINGS_STORAGE_KEY)
-    const parsed = raw ? (JSON.parse(raw) as Record<string, Partial<WorkspaceSettings>>) : {}
-    const result: Record<string, WorkspaceSettings> = {}
-    for (const [key, value] of Object.entries(parsed)) {
-      const path = typeof value?.path === 'string' && value.path.trim() ? value.path : key
-      if (!path) continue
-      const hasAllowedCommandPrefixes = Array.isArray((value as Partial<WorkspaceSettings>)?.allowedCommandPrefixes)
-      const hasAllowedAutoReadPrefixes = Array.isArray((value as Partial<WorkspaceSettings>)?.allowedAutoReadPrefixes)
-      const hasAllowedAutoWritePrefixes = Array.isArray((value as Partial<WorkspaceSettings>)?.allowedAutoWritePrefixes)
-      const hasDeniedAutoReadPrefixes = Array.isArray((value as Partial<WorkspaceSettings>)?.deniedAutoReadPrefixes)
-      const hasDeniedAutoWritePrefixes = Array.isArray((value as Partial<WorkspaceSettings>)?.deniedAutoWritePrefixes)
-      const allowedCommandPrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedCommandPrefixes)
-      const allowedAutoReadPrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedAutoReadPrefixes)
-      const allowedAutoWritePrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.allowedAutoWritePrefixes)
-      const deniedAutoReadPrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.deniedAutoReadPrefixes)
-      const deniedAutoWritePrefixes = normalizeAllowedCommandPrefixes((value as Partial<WorkspaceSettings>)?.deniedAutoWritePrefixes)
-      result[path] = {
-        path,
-        defaultModel: typeof value?.defaultModel === 'string' && value.defaultModel ? value.defaultModel : DEFAULT_MODEL,
-        permissionMode: value?.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first',
-        sandbox:
-          value?.sandbox === 'read-only'
-            ? value.sandbox
-            : 'workspace-write',
-        allowedCommandPrefixes: hasAllowedCommandPrefixes ? allowedCommandPrefixes : [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
-        allowedAutoReadPrefixes: hasAllowedAutoReadPrefixes ? allowedAutoReadPrefixes : [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
-        allowedAutoWritePrefixes: hasAllowedAutoWritePrefixes ? allowedAutoWritePrefixes : [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
-        deniedAutoReadPrefixes: hasDeniedAutoReadPrefixes ? deniedAutoReadPrefixes : [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
-        deniedAutoWritePrefixes: hasDeniedAutoWritePrefixes ? deniedAutoWritePrefixes : [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
-      }
-    }
-    for (const p of list) {
-      if (!result[p]) {
-        result[p] = {
-          path: p,
-          defaultModel: DEFAULT_MODEL,
-          permissionMode: 'verify-first',
-          sandbox: 'workspace-write',
-          allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
-          allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
-          allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
-          deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
-          deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
-        }
-      }
-    }
-    return result
-  } catch {
-    const result: Record<string, WorkspaceSettings> = {}
-    for (const p of list) {
-      result[p] = {
-        path: p,
-        defaultModel: DEFAULT_MODEL,
-        permissionMode: 'verify-first',
-        sandbox: 'workspace-write',
-        allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
-        allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
-        allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
-        deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
-        deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
-      }
-    }
-    return result
-  }
-}
-
-function getInitialExplorerPrefsByWorkspace(): Record<string, ExplorerPrefs> {
-  try {
-    const raw = globalThis.localStorage?.getItem(EXPLORER_PREFS_STORAGE_KEY)
-    const parsed = raw ? (JSON.parse(raw) as Record<string, ExplorerPrefs>) : {}
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    return {}
-  }
-}
-
-function getInitialOrchestratorSettings(): OrchestratorSettings {
-  const defaults: OrchestratorSettings = {
-    orchestratorModel: '',
-    workerProvider: 'codex',
-    workerModel: '',
-    maxParallelPanels: 2,
-    maxTaskAttempts: 3,
-  }
-  try {
-    const raw = globalThis.localStorage?.getItem(ORCHESTRATOR_SETTINGS_STORAGE_KEY)
-    if (!raw) return defaults
-    const parsed = JSON.parse(raw) as Partial<OrchestratorSettings>
-    return {
-      orchestratorModel: typeof parsed?.orchestratorModel === 'string' ? parsed.orchestratorModel : defaults.orchestratorModel,
-      workerProvider: typeof parsed?.workerProvider === 'string' ? parsed.workerProvider : defaults.workerProvider,
-      workerModel: typeof parsed?.workerModel === 'string' ? parsed.workerModel : defaults.workerModel,
-      maxParallelPanels: typeof parsed?.maxParallelPanels === 'number' && parsed.maxParallelPanels >= 1 && parsed.maxParallelPanels <= 8
-        ? parsed.maxParallelPanels
-        : defaults.maxParallelPanels,
-      maxTaskAttempts: typeof parsed?.maxTaskAttempts === 'number' && parsed.maxTaskAttempts >= 1 && parsed.maxTaskAttempts <= 10
-        ? parsed.maxTaskAttempts
-        : defaults.maxTaskAttempts,
-    }
-  } catch {
-    return defaults
-  }
-}
+import { THEME_PRESET_CSS } from './constants/themeStyles'
+import { ExplorerPane } from './components/ExplorerPane'
+import { GitPane } from './components/GitPane'
+import { WorkspaceSettingsPane } from './components/WorkspaceSettingsPane'
+import { ChatInputSection } from './components/chat/ChatInputSection'
+import { AgentPanelMessageViewport } from './components/chat/AgentPanelMessageViewport'
+import { ChatTimeline } from './components/chat/timeline'
+import { createEditorFileController } from './controllers/editorFileController'
+import { createPanelLifecycleController } from './controllers/panelLifecycleController'
+import { createAgentPipelineController } from './controllers/agentPipelineController'
+import { useLocalStoragePersistence } from './hooks/useLocalStoragePersistence'
+import { createProviderConnectivityController, PROVIDERS_WITH_DEDICATED_PING } from './controllers/providerConnectivityController'
+import { createExplorerWorkflowController } from './controllers/explorerWorkflowController'
+import { createGitWorkflowController } from './controllers/gitWorkflowController'
+import { createWorkspaceSettingsController } from './controllers/workspaceSettingsController'
+import { AgentPanelHeader } from './components/panels/AgentPanelHeader'
+import { EditorPanel } from './components/panels/EditorPanel'
+import { WorkspaceTile } from './components/workspace/WorkspaceTile'
+import { AgentPanelShell } from './components/panels/AgentPanelShell'
+import { CodeWindowTile } from './components/panels/CodeWindowTile'
+import {
+  applyThemeOverrides,
+  applyWorkspaceTextDraftField,
+  clampFontScale,
+  cloneChatMessages,
+  cloneTheme,
+  decodeUriComponentSafe,
+  describeActivityEntry,
+  describeOperationTrace,
+  extractHexColor,
+  filterMessagesForPresentation,
+  formatError,
+  formatHistoryOptionLabel,
+  formatLimitResetHint,
+  formatRateLimitLabel,
+  formatToolTrace,
+  getConversationPrecis,
+  getDefaultSetupWizardSelection,
+  getInitialApplicationSettings,
+  getInitialChatHistory,
+  getInitialExplorerPrefsByWorkspace,
+  getInitialModelConfig,
+  getInitialOrchestratorSettings,
+  getInitialProviderRegistry,
+  getInitialThemeId,
+  getInitialThemeOverrides,
+  getInitialWorkspaceDockSide,
+  getInitialWorkspaceList,
+  getInitialWorkspaceRoot,
+  getInitialWorkspaceSettings,
+  getInitialSetupWizardDone,
+  getModelPingKey,
+  getNextFontScale,
+  getRateLimitPercent,
+  isLockedWorkspacePrompt,
+  isLikelyThinkingUpdate,
+  isTurnCompletionRawNotification,
+  isUsageLimitMessage,
+  isZoomWheelGesture,
+  looksIncomplete,
+  makeDefaultPanel,
+  mergeChatHistoryEntries,
+  newId,
+  normalizeAllowedCommandPrefixes,
+  normalizeWorkspacePathForCompare,
+  normalizeWorkspaceRelativePath,
+  panelMessagesToInitialHistory,
+  parseAllowedCommandPrefixesInput,
+  parseApplicationSettings,
+  parseChatHistoryEntries,
+  parseHistoryMessages,
+  parseInteractionMode,
+  parsePanelAttachments,
+  parsePersistedAgentPanel,
+  parsePersistedAppState,
+  parsePersistedEditorPanel,
+  pickString,
+  resolveProviderConfigs,
+  resolveWorkspaceRelativePathFromChatHref,
+  sanitizeThemeOverrides,
+  shouldSurfaceRawNoteInChat,
+  simplifyCommand,
+  stripFileLineAndColumnSuffix,
+  stripLinkQueryAndHash,
+  stripSyntheticAutoContinueMessages,
+  summarizeRawNotification,
+  syncModelConfigWithCatalog,
+  toShortJson,
+  toWorkspaceRelativePathIfInsideRoot,
+  truncateText,
+  withExhaustedRateLimitWarning,
+  withLimitWarningMessage,
+  withModelBanner,
+  workspaceSettingsToTextDraft,
+  fileNameFromRelativePath,
+  formatCheckedAt,
+  toLocalFileUrl,
+} from './utils/appCore'
 
 export default function App() {
   const api = useMemo(() => window.agentOrchestrator ?? window.fireharness, [])
@@ -2043,14 +520,22 @@ export default function App() {
   }, [effectiveThemeId, themeCatalog, themeEditorDraft])
   const effectiveTheme: Theme = activeTheme.mode
 
-  useEffect(() => {
-    localStorage.setItem(THEME_ID_STORAGE_KEY, applicationSettings.themeId)
-  }, [applicationSettings.themeId])
+  // ── localStorage persistence (delegated to hook) ───────────────────
+  useLocalStoragePersistence({
+    applicationSettings,
+    themeOverrides,
+    workspaceRoot,
+    workspaceList,
+    workspaceSettingsByPath,
+    explorerPrefsByWorkspace,
+    workspaceDockSide,
+    modelConfig,
+    providerRegistry,
+    orchestratorSettings,
+    chatHistory,
+  })
 
-  useEffect(() => {
-    localStorage.setItem(THEME_OVERRIDES_STORAGE_KEY, JSON.stringify(themeOverrides))
-  }, [themeOverrides])
-
+  // ── Theme DOM + API side-effects ──────────────────────────────────
   useEffect(() => {
     const selectedTheme =
       themeCatalog.find((theme) => theme.id === selectedThemeEditorId)
@@ -2061,12 +546,10 @@ export default function App() {
     if (selectedThemeEditorId !== selectedTheme.id) setSelectedThemeEditorId(selectedTheme.id)
     setThemeEditorDraft((prev) => (prev && prev.id === selectedTheme.id ? prev : cloneTheme(selectedTheme)))
   }, [themeCatalog, selectedThemeEditorId, applicationSettings.themeId])
-
   useEffect(() => {
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
     void api.setWindowTheme?.(effectiveTheme).catch(() => {})
   }, [api, effectiveTheme])
-
   useEffect(() => {
     const root = document.documentElement
     root.style.setProperty('--theme-accent-500', activeTheme.accent500)
@@ -2075,18 +558,43 @@ export default function App() {
     root.style.setProperty('--theme-accent-text', activeTheme.accentText)
     root.style.setProperty('--theme-accent-soft', activeTheme.accentSoft)
     root.style.setProperty('--theme-accent-soft-dark', activeTheme.accentSoftDark)
+    root.style.setProperty('--theme-assistant-bubble-bg-light', activeTheme.assistantBubbleBgLight)
+    root.style.setProperty('--theme-assistant-bubble-bg-dark', activeTheme.assistantBubbleBgDark)
     root.style.setProperty('--theme-dark-950', activeTheme.dark950)
     root.style.setProperty('--theme-dark-900', activeTheme.dark900)
   }, [activeTheme])
 
+  // ── Workspace list + API sync (non-localStorage side-effects) ─────
   useEffect(() => {
-    workspaceRootRef.current = workspaceRoot
-  }, [workspaceRoot])
-
+    api.setRecentWorkspaces?.(workspaceList)
+  }, [workspaceList, api])
   useEffect(() => {
-    workspaceListRef.current = workspaceList
-  }, [workspaceList])
+    void api.syncOrchestratorSettings?.(orchestratorSettings)
+  }, [api, orchestratorSettings])
 
+  // ── Chat history API sync ─────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const loaded = await api.loadChatHistory?.()
+        if (cancelled) return
+        const parsed = parseChatHistoryEntries(loaded, workspaceRootRef.current || getInitialWorkspaceRoot())
+        if (parsed.length === 0) return
+        setChatHistory((prev) => mergeChatHistoryEntries(parsed, prev))
+      } catch { /* best-effort */ }
+    })()
+    return () => { cancelled = true }
+  }, [api])
+  useEffect(() => {
+    void api.saveChatHistory?.(chatHistory).catch(() => {})
+  }, [api, chatHistory])
+
+  // ── Ref syncs ─────────────────────────────────────────────────────
+  useEffect(() => { workspaceRootRef.current = workspaceRoot }, [workspaceRoot])
+  useEffect(() => { workspaceListRef.current = workspaceList }, [workspaceList])
+
+  // ── UI side-effects ───────────────────────────────────────────────
   useEffect(() => {
     if (!historyDropdownOpen) return
     const onMouseDown = (e: MouseEvent) => {
@@ -2097,91 +605,15 @@ export default function App() {
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [historyDropdownOpen])
-
-  useEffect(() => {
-    localStorage.setItem(WORKSPACE_STORAGE_KEY, workspaceRoot)
-  }, [workspaceRoot])
-
-  useEffect(() => {
-    localStorage.setItem(WORKSPACE_LIST_STORAGE_KEY, JSON.stringify(workspaceList))
-    api.setRecentWorkspaces?.(workspaceList)
-  }, [workspaceList, api])
-
-  useEffect(() => {
-    localStorage.setItem(WORKSPACE_SETTINGS_STORAGE_KEY, JSON.stringify(workspaceSettingsByPath))
-  }, [workspaceSettingsByPath])
-
-  useEffect(() => {
-    localStorage.setItem(MODEL_CONFIG_STORAGE_KEY, JSON.stringify(modelConfig))
-  }, [modelConfig])
-
-  useEffect(() => {
-    localStorage.setItem(PROVIDER_REGISTRY_STORAGE_KEY, JSON.stringify(providerRegistry))
-  }, [providerRegistry])
-
-  useEffect(() => {
-    localStorage.setItem(ORCHESTRATOR_SETTINGS_STORAGE_KEY, JSON.stringify(orchestratorSettings))
-    void api.syncOrchestratorSettings?.(orchestratorSettings)
-  }, [api, orchestratorSettings])
-
-  useEffect(() => {
-    localStorage.setItem(EXPLORER_PREFS_STORAGE_KEY, JSON.stringify(explorerPrefsByWorkspace))
-  }, [explorerPrefsByWorkspace])
-
-  useEffect(() => {
-    localStorage.setItem(WORKSPACE_DOCK_SIDE_STORAGE_KEY, workspaceDockSide)
-  }, [workspaceDockSide])
-
   useEffect(() => {
     if (appSettingsView === 'mcp-servers') void refreshMcpServers()
   }, [appSettingsView])
-
   useEffect(() => {
     if (draggingPanelId) {
       document.body.style.userSelect = 'none'
-      return () => {
-        document.body.style.userSelect = ''
-      }
+      return () => { document.body.style.userSelect = '' }
     }
   }, [draggingPanelId])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(applicationSettings))
-    } catch {
-      // best-effort only
-    }
-  }, [applicationSettings])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(CHAT_HISTORY_STORAGE_KEY, JSON.stringify(chatHistory))
-    } catch {
-      // best-effort only
-    }
-  }, [chatHistory])
-
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const loaded = await api.loadChatHistory?.()
-        if (cancelled) return
-        const parsed = parseChatHistoryEntries(loaded, workspaceRootRef.current || getInitialWorkspaceRoot())
-        if (parsed.length === 0) return
-        setChatHistory((prev) => mergeChatHistoryEntries(parsed, prev))
-      } catch {
-        // best-effort only
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [api])
-
-  useEffect(() => {
-    void api.saveChatHistory?.(chatHistory).catch(() => {})
-  }, [api, chatHistory])
 
   // Keep workspaceRoot in the list when it changes (e.g. manually selected)
   useEffect(() => {
@@ -2213,36 +645,27 @@ export default function App() {
     }
   }, [panels, activePanelId])
 
-  useEffect(() => {
-    panelsRef.current = panels
-  }, [panels])
+  // ── Ref syncs (panels, editors, workspace) ─────────────────────────
+  useEffect(() => { panelsRef.current = panels }, [panels])
+  useEffect(() => { activePanelIdRef.current = activePanelId }, [activePanelId])
+  useEffect(() => { editorPanelsRef.current = editorPanels }, [editorPanels])
+  useEffect(() => { focusedEditorIdRef.current = focusedEditorId }, [focusedEditorId])
+  useEffect(() => { showWorkspaceWindowRef.current = showWorkspaceWindow }, [showWorkspaceWindow])
+  useEffect(() => { workspaceTreeRef.current = workspaceTree }, [workspaceTree])
+  useEffect(() => { showHiddenFilesRef.current = showHiddenFiles }, [showHiddenFiles])
+  useEffect(() => { showNodeModulesRef.current = showNodeModules }, [showNodeModules])
+  useEffect(() => { selectedWorkspaceFileRef.current = selectedWorkspaceFile }, [selectedWorkspaceFile])
 
-  useEffect(() => {
-    activePanelIdRef.current = activePanelId
-  }, [activePanelId])
-
+  // ── Panel focus / active panel scroll-to-bottom ───────────────────
   useEffect(() => {
     if (!activePanelId) return
     stickToBottomByPanelRef.current.set(activePanelId, true)
     const viewport = messageViewportRefs.current.get(activePanelId)
     if (viewport) {
-      const scrollToBottom = () => {
-        viewport.scrollTop = viewport.scrollHeight
-      }
-      requestAnimationFrame(() => {
-        scrollToBottom()
-        requestAnimationFrame(scrollToBottom)
-      })
+      const scrollToBottom = () => { viewport.scrollTop = viewport.scrollHeight }
+      requestAnimationFrame(() => { scrollToBottom(); requestAnimationFrame(scrollToBottom) })
     }
   }, [activePanelId])
-
-  useEffect(() => {
-    editorPanelsRef.current = editorPanels
-  }, [editorPanels])
-
-  useEffect(() => {
-    focusedEditorIdRef.current = focusedEditorId
-  }, [focusedEditorId])
 
   function setFocusedEditor(next: string | null) {
     focusedEditorIdRef.current = next
@@ -2250,38 +673,12 @@ export default function App() {
   }
 
   useEffect(() => {
-    showWorkspaceWindowRef.current = showWorkspaceWindow
-  }, [showWorkspaceWindow])
-
-  useEffect(() => {
     const level = api.getZoomLevel?.()
     if (level !== undefined) setZoomLevel(level)
   }, [api])
-
+  useEffect(() => { api.setEditorMenuState?.(Boolean(focusedEditorId)) }, [api, focusedEditorId])
   useEffect(() => {
-    workspaceTreeRef.current = workspaceTree
-  }, [workspaceTree])
-
-  useEffect(() => {
-    showHiddenFilesRef.current = showHiddenFiles
-  }, [showHiddenFiles])
-
-  useEffect(() => {
-    showNodeModulesRef.current = showNodeModules
-  }, [showNodeModules])
-
-  useEffect(() => {
-    selectedWorkspaceFileRef.current = selectedWorkspaceFile
-  }, [selectedWorkspaceFile])
-
-  useEffect(() => {
-    api.setEditorMenuState?.(Boolean(focusedEditorId))
-  }, [api, focusedEditorId])
-
-  useEffect(() => {
-    if (focusedEditorId && !editorPanels.some((p) => p.id === focusedEditorId)) {
-      setFocusedEditor(null)
-    }
+    if (focusedEditorId && !editorPanels.some((p) => p.id === focusedEditorId)) setFocusedEditor(null)
   }, [editorPanels, focusedEditorId])
 
   useEffect(() => {
@@ -2429,7 +826,6 @@ export default function App() {
   // Warm up provider auth status on startup so status dots are available immediately.
   // Times the auth check; for providers with a deeper ping (claude, codex) runs that too.
   // Gemini's auth check is already --version, so a separate ping would be redundant.
-  const PROVIDERS_WITH_DEDICATED_PING = new Set(['claude', 'codex'])
   const startupAuthCheckedRef = useRef(false)
   useEffect(() => {
     if (startupAuthCheckedRef.current) return
@@ -3155,6 +1551,37 @@ export default function App() {
     await doWorkspaceSwitch(pending.targetRoot, pending.source)
   }
 
+  const workspaceSettings = useMemo(
+    () =>
+      createWorkspaceSettingsController({
+        workspaceRoot,
+        workspaceList,
+        workspaceSettingsByPath,
+        setWorkspaceModalMode,
+        setWorkspaceForm,
+        setWorkspaceFormTextDraft,
+        setShowWorkspaceModal,
+        setDockTab,
+        setWorkspaceSettingsByPath,
+        setWorkspaceList,
+        setWorkspaceRoot,
+        workspaceRootRef,
+        activeWorkspaceLockRef,
+        api,
+        requestWorkspaceSwitch: (path) => requestWorkspaceSwitch(path, 'workspace-create'),
+        applyWorkspaceRoot,
+        applyWorkspaceSnapshot,
+      }),
+    [
+      workspaceRoot,
+      workspaceList,
+      workspaceSettingsByPath,
+      requestWorkspaceSwitch,
+      applyWorkspaceRoot,
+      applyWorkspaceSnapshot,
+    ],
+  )
+
   useEffect(() => {
     if (!appStateHydrated) return
     setWorkspaceBootstrapComplete(false)
@@ -3483,234 +1910,15 @@ export default function App() {
     if (!path) return
     setWorkspaceForm((prev) => {
       const nextForm = { ...prev, path }
-      if (showWorkspaceModal) {
-        const normalized = normalizeWorkspaceSettingsForm(nextForm)
+      if (showWorkspaceModal || dockTab === 'settings') {
+        const normalized = workspaceSettings.normalizeWorkspaceSettingsForm(nextForm)
         queueMicrotask(() => {
-          void persistWorkspaceSettings(normalized, { requestSwitch: true })
-        })
-      } else if (dockTab === 'settings') {
-        const normalized = normalizeWorkspaceSettingsForm(nextForm)
-        queueMicrotask(() => {
-          void persistWorkspaceSettings(normalized, { requestSwitch: true })
+          void workspaceSettings.persistWorkspaceSettings(normalized, { requestSwitch: true })
         })
       }
       return nextForm
     })
   }
-
-  function buildWorkspaceForm(mode: 'new' | 'edit') {
-    const current =
-      workspaceSettingsByPath[workspaceRoot] ??
-      ({
-        path: workspaceRoot,
-        defaultModel: DEFAULT_MODEL,
-        permissionMode: 'verify-first',
-        sandbox: 'workspace-write',
-        allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
-        allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
-        allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
-        deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
-        deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
-      } as WorkspaceSettings)
-
-    const cmdPrefixes = normalizeAllowedCommandPrefixes(current.allowedCommandPrefixes)
-    const readPrefixes = normalizeAllowedCommandPrefixes(current.allowedAutoReadPrefixes)
-    const writePrefixes = normalizeAllowedCommandPrefixes(current.allowedAutoWritePrefixes)
-    const deniedRead = normalizeAllowedCommandPrefixes(current.deniedAutoReadPrefixes)
-    const deniedWrite = normalizeAllowedCommandPrefixes(current.deniedAutoWritePrefixes)
-
-    if (mode === 'new') {
-      return {
-        path: workspaceRoot,
-        defaultModel: current.defaultModel ?? DEFAULT_MODEL,
-        permissionMode: current.permissionMode ?? 'verify-first',
-        sandbox: current.sandbox ?? 'workspace-write',
-        allowedCommandPrefixes: cmdPrefixes,
-        allowedAutoReadPrefixes: readPrefixes,
-        allowedAutoWritePrefixes: writePrefixes,
-        deniedAutoReadPrefixes: deniedRead,
-        deniedAutoWritePrefixes: deniedWrite,
-      } satisfies WorkspaceSettings
-    }
-
-    return {
-      path: current.path || workspaceRoot,
-      defaultModel: current.defaultModel ?? DEFAULT_MODEL,
-      permissionMode: current.permissionMode ?? 'verify-first',
-      sandbox: current.sandbox ?? 'workspace-write',
-      allowedCommandPrefixes: cmdPrefixes,
-      allowedAutoReadPrefixes: readPrefixes,
-      allowedAutoWritePrefixes: writePrefixes,
-      deniedAutoReadPrefixes: deniedRead,
-      deniedAutoWritePrefixes: deniedWrite,
-    } satisfies WorkspaceSettings
-  }
-
-  function normalizeWorkspaceSettingsForm(form: WorkspaceSettings): WorkspaceSettings {
-    const sandbox = form.sandbox
-    const permissionMode = sandbox === 'read-only' ? 'verify-first' : form.permissionMode
-    return {
-      path: form.path.trim(),
-      defaultModel: form.defaultModel.trim() || DEFAULT_MODEL,
-      permissionMode,
-      sandbox,
-      allowedCommandPrefixes: normalizeAllowedCommandPrefixes(form.allowedCommandPrefixes),
-      allowedAutoReadPrefixes: normalizeAllowedCommandPrefixes(form.allowedAutoReadPrefixes),
-      allowedAutoWritePrefixes: normalizeAllowedCommandPrefixes(form.allowedAutoWritePrefixes),
-      deniedAutoReadPrefixes: normalizeAllowedCommandPrefixes(form.deniedAutoReadPrefixes),
-      deniedAutoWritePrefixes: normalizeAllowedCommandPrefixes(form.deniedAutoWritePrefixes),
-    }
-  }
-
-  function workspaceFormsEqual(a: WorkspaceSettings, b: WorkspaceSettings): boolean {
-    const left = normalizeWorkspaceSettingsForm(a)
-    const right = normalizeWorkspaceSettingsForm(b)
-    return (
-      left.path === right.path &&
-      left.defaultModel === right.defaultModel &&
-      left.permissionMode === right.permissionMode &&
-      left.sandbox === right.sandbox &&
-      left.allowedCommandPrefixes.join('\n') === right.allowedCommandPrefixes.join('\n') &&
-      left.allowedAutoReadPrefixes.join('\n') === right.allowedAutoReadPrefixes.join('\n') &&
-      left.allowedAutoWritePrefixes.join('\n') === right.allowedAutoWritePrefixes.join('\n') &&
-      left.deniedAutoReadPrefixes.join('\n') === right.deniedAutoReadPrefixes.join('\n') &&
-      left.deniedAutoWritePrefixes.join('\n') === right.deniedAutoWritePrefixes.join('\n')
-    )
-  }
-
-  function openWorkspaceSettings(mode: 'new' | 'edit') {
-    setWorkspaceModalMode(mode)
-    const nextForm = buildWorkspaceForm(mode)
-    setWorkspaceForm(nextForm)
-    setWorkspaceFormTextDraft(workspaceSettingsToTextDraft(nextForm))
-    setShowWorkspaceModal(true)
-  }
-
-  function openWorkspaceSettingsTab() {
-    const nextForm = buildWorkspaceForm('edit')
-    setWorkspaceForm(nextForm)
-    setWorkspaceFormTextDraft(workspaceSettingsToTextDraft(nextForm))
-    setShowWorkspaceModal(false)
-    setDockTab('settings')
-  }
-
-  async function persistWorkspaceSettings(
-    next: WorkspaceSettings,
-    options?: { closeModal?: boolean; requestSwitch?: boolean },
-  ) {
-    if (!next.path) return
-
-    setWorkspaceSettingsByPath((prev) => {
-      const existing = prev[next.path]
-      if (existing && workspaceFormsEqual(existing, next)) return prev
-      return { ...prev, [next.path]: next }
-    })
-    setWorkspaceList((prev) => (prev.includes(next.path) ? prev : [next.path, ...prev]))
-    if (options?.closeModal) setShowWorkspaceModal(false)
-    if (options?.requestSwitch) {
-      const normalizedCurrentRoot = normalizeWorkspacePathForCompare(workspaceRootRef.current || '')
-      const normalizedNextPath = normalizeWorkspacePathForCompare(next.path)
-      if (normalizedCurrentRoot !== normalizedNextPath) {
-        requestWorkspaceSwitch(next.path, 'workspace-create')
-      }
-    }
-
-    try {
-      await api.writeWorkspaceConfig?.(next.path)
-    } catch {
-      // best-effort only
-    }
-  }
-
-  function updateDockedWorkspaceForm(updater: (prev: WorkspaceSettings) => WorkspaceSettings) {
-    setWorkspaceForm((prev) => {
-      const nextForm = updater(prev)
-      const normalized = normalizeWorkspaceSettingsForm(nextForm)
-      queueMicrotask(() => {
-        const normalizedCurrentRoot = normalizeWorkspacePathForCompare(workspaceRootRef.current || '')
-        const normalizedFormPath = normalizeWorkspacePathForCompare(normalized.path)
-        if (normalizedCurrentRoot !== normalizedFormPath) return
-        void persistWorkspaceSettings(normalized)
-      })
-      return nextForm
-    })
-  }
-
-  function updateWorkspaceModalForm(
-    updater: (prev: WorkspaceSettings) => WorkspaceSettings,
-    options?: { requestSwitch?: boolean },
-  ) {
-    setWorkspaceForm((prev) => {
-      const nextForm = updater(prev)
-      const normalized = normalizeWorkspaceSettingsForm(nextForm)
-      queueMicrotask(() => {
-        void persistWorkspaceSettings(normalized, options?.requestSwitch ? { requestSwitch: true } : undefined)
-      })
-      return nextForm
-    })
-  }
-
-  function updateDockedWorkspaceTextDraft(
-    field: keyof WorkspaceSettingsTextDraft,
-    raw: string,
-  ) {
-    setWorkspaceFormTextDraft((prev) => ({ ...prev, [field]: raw }))
-    setWorkspaceForm((prev) => {
-      const nextForm = applyWorkspaceTextDraftField(prev, field, raw)
-      const normalized = normalizeWorkspaceSettingsForm(nextForm)
-      queueMicrotask(() => {
-        const normalizedCurrentRoot = normalizeWorkspacePathForCompare(workspaceRootRef.current || '')
-        const normalizedFormPath = normalizeWorkspacePathForCompare(normalized.path)
-        if (normalizedCurrentRoot !== normalizedFormPath) return
-        void persistWorkspaceSettings(normalized)
-      })
-      return nextForm
-    })
-  }
-
-  function updateWorkspaceModalTextDraft(
-    field: keyof WorkspaceSettingsTextDraft,
-    raw: string,
-  ) {
-    setWorkspaceFormTextDraft((prev) => ({ ...prev, [field]: raw }))
-    updateWorkspaceModalForm((prev) => applyWorkspaceTextDraftField(prev, field, raw))
-  }
-
-  async function deleteWorkspace(pathToDelete: string) {
-    const remaining = workspaceList.filter((p) => p !== pathToDelete)
-    setWorkspaceList(remaining)
-    setWorkspaceSettingsByPath((prev) => {
-      const next = { ...prev }
-      delete next[pathToDelete]
-      return next
-    })
-
-    if (activeWorkspaceLockRef.current === pathToDelete) {
-      try {
-        await api.releaseWorkspace(pathToDelete)
-      } catch {
-        // best effort only
-      }
-      activeWorkspaceLockRef.current = ''
-    }
-
-    if (workspaceRootRef.current === pathToDelete) {
-      let switched = false
-      for (const nextRoot of remaining) {
-        const opened = await applyWorkspaceRoot(nextRoot, { showFailureAlert: false, rebindPanels: false })
-        if (opened) {
-          applyWorkspaceSnapshot(opened)
-          switched = true
-          break
-        }
-      }
-      if (!switched) {
-        setWorkspaceRoot('')
-      }
-    }
-    setShowWorkspaceModal(false)
-  }
-
 
   function flushWindowDelta(agentWindowId: string) {
     const buf = deltaBuffers.current.get(agentWindowId) ?? ''
@@ -4043,7 +2251,7 @@ export default function App() {
         return
       }
       if (action === 'newWorkspace') {
-        openWorkspaceSettings('new')
+        workspaceSettings.openWorkspaceSettings('new')
         return
       }
       if (action === 'openWorkspacePicker') {
@@ -4065,7 +2273,7 @@ export default function App() {
       }
       if (action === 'closeWorkspace') {
         if (workspaceList.length <= 1) return
-        void deleteWorkspace(workspaceRoot)
+        void workspaceSettings.deleteWorkspace(workspaceRoot)
         return
       }
       if (action === 'findInPage') {
@@ -4327,11 +2535,6 @@ export default function App() {
     }
   }
 
-  function formatError(err: unknown) {
-    if (err instanceof Error && err.message) return err.message
-    return String(err ?? 'Unknown error')
-  }
-
   function openDiagnosticsTarget(
     target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog',
     label: string,
@@ -4472,236 +2675,33 @@ export default function App() {
     return modelConfig.interfaces.find((m) => m.id === model)?.provider ?? 'codex'
   }
 
-  async function ensureProviderReady(provider: ModelProvider, reason: string) {
-    const config = resolvedProviderConfigs.find((c) => c.id === provider) ?? DEFAULT_BUILTIN_PROVIDER_CONFIGS[provider as ConnectivityProvider]
-    const status = (await api.getProviderAuthStatus(
-      config.type === 'cli'
-        ? {
-            id: config.id,
-            type: 'cli',
-            cliCommand: config.cliCommand,
-            cliPath: config.cliPath,
-            authCheckCommand: config.authCheckCommand,
-            loginCommand: config.loginCommand,
-          }
-        : {
-            id: config.id,
-            type: 'api',
-            apiBaseUrl: config.apiBaseUrl,
-            loginUrl: config.loginUrl,
-          },
-    )) as ProviderAuthStatus
-    if (!status.installed) {
-      throw new Error(`${config.displayName} CLI is not installed. ${status.detail}`.trim())
-    }
-    if (status.authenticated) return
-    throw new Error(
-      `${config.displayName} login required for ${reason}. ${status.detail}\nLogin outside the app, then send again.`,
-    )
-  }
-
-  async function refreshProviderAuthStatus(config: ProviderConfig): Promise<ProviderAuthStatus | null> {
-    setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: true }))
-    try {
-      const status = (await api.getProviderAuthStatus(
-        config.type === 'cli'
-          ? {
-              id: config.id,
-              type: 'cli',
-              cliCommand: config.cliCommand,
-              cliPath: config.cliPath,
-              authCheckCommand: config.authCheckCommand,
-              loginCommand: config.loginCommand,
-            }
-          : {
-              id: config.id,
-              type: 'api',
-              apiBaseUrl: config.apiBaseUrl,
-              loginUrl: config.loginUrl,
-            },
-      )) as ProviderAuthStatus
-      setProviderAuthByName((prev) => ({ ...prev, [config.id]: status }))
-      setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
-      if (config.type === 'api') await refreshProviderApiKeyState(config.id)
-      return status
-    } catch (err) {
-      setProviderAuthActionByName((prev) => ({
-        ...prev,
-        [config.id]: `Could not check ${config.displayName}: ${formatError(err)}`,
-      }))
-      return null
-    } finally {
-      setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: false }))
-    }
-  }
-
-  async function refreshProviderApiAuthStatus(providerId: string) {
-    const apiConfig = API_CONFIG_BY_PROVIDER[providerId]
-    if (!apiConfig || !api.getProviderAuthStatus) return
-    setProviderAuthLoadingByName((prev) => ({ ...prev, [providerId]: true }))
-    try {
-      const status = (await api.getProviderAuthStatus({
-        id: providerId,
-        type: 'api',
-        apiBaseUrl: apiConfig.apiBaseUrl,
-        loginUrl: apiConfig.loginUrl,
-      })) as ProviderAuthStatus
-      setProviderAuthByName((prev) => ({ ...prev, [providerId]: status }))
-      setProviderAuthActionByName((prev) => ({ ...prev, [providerId]: null }))
-      await refreshProviderApiKeyState(providerId)
-      return status
-    } catch (err) {
-      setProviderAuthActionByName((prev) => ({
-        ...prev,
-        [providerId]: `API check failed: ${formatError(err)}`,
-      }))
-      return null
-    } finally {
-      setProviderAuthLoadingByName((prev) => ({ ...prev, [providerId]: false }))
-    }
-  }
-
-  async function refreshAllProviderAuthStatuses() {
-    await Promise.all(
-      resolvedProviderConfigs
-        .filter((config) => config.id !== 'openrouter')
-        .map(async (config) => {
-          const authStart = Date.now()
-          const s = await refreshProviderAuthStatus(config)
-          const authDurationMs = Date.now() - authStart
-          if (!s?.authenticated) return
-          if (PROVIDERS_WITH_DEDICATED_PING.has(config.id) && api.pingProvider) {
-            try {
-              const ping = await api.pingProvider(config.id)
-              setProviderPingDurationByName((prev) => ({ ...prev, [config.id]: ping.durationMs }))
-              if (ping.ok) setProviderVerifiedByName((prev) => prev[config.id] ? prev : { ...prev, [config.id]: true })
-            } catch { /* ignore */ }
-          } else {
-            setProviderPingDurationByName((prev) => ({ ...prev, [config.id]: authDurationMs }))
-            setProviderVerifiedByName((prev) => prev[config.id] ? prev : { ...prev, [config.id]: true })
-          }
-        }),
-    )
-  }
-
-  async function refreshMcpServers() {
-    try {
-      const servers = await api.getMcpServers()
-      setMcpServers(servers)
-    } catch {
-      // ignore
-    }
-  }
-
-  async function refreshProviderApiKeyState(providerId: string) {
-    if (!api.getProviderApiKeyState) return
-    try {
-      const state = await api.getProviderApiKeyState(providerId)
-      setProviderApiKeyStateByName((prev) => ({ ...prev, [providerId]: Boolean(state?.hasKey) }))
-    } catch {
-      setProviderApiKeyStateByName((prev) => ({ ...prev, [providerId]: false }))
-    }
-  }
-
-  async function saveProviderApiKey(providerId: string, explicitValue?: string) {
-    if (!api.setProviderApiKey) return
-    const next = typeof explicitValue === 'string' ? explicitValue : providerApiKeyDraftByName[providerId] ?? ''
-    try {
-      const result = await api.setProviderApiKey(providerId, next)
-      setProviderApiKeyStateByName((prev) => ({ ...prev, [providerId]: Boolean(result?.hasKey) }))
-      setProviderApiKeyDraftByName((prev) => ({ ...prev, [providerId]: '' }))
-      setProviderAuthActionByName((prev) => ({ ...prev, [providerId]: result?.hasKey ? 'API key saved.' : 'API key cleared.' }))
-      const cfg = resolvedProviderConfigs.find((p) => p.id === providerId)
-      if (cfg) await refreshProviderAuthStatus(cfg)
-    } catch (err) {
-      setProviderAuthActionByName((prev) => ({ ...prev, [providerId]: `Could not save API key: ${formatError(err)}` }))
-    }
-  }
-
-  async function clearProviderApiKey(providerId: string) {
-    setProviderApiKeyDraftByName((prev) => ({ ...prev, [providerId]: '' }))
-    await saveProviderApiKey(providerId, '')
-  }
-
-  async function importProviderApiKeyFromEnv(providerId: string) {
-    if (!api.importProviderApiKeyFromEnv) return
-    try {
-      const result = await api.importProviderApiKeyFromEnv(providerId)
-      setProviderApiKeyStateByName((prev) => ({ ...prev, [providerId]: Boolean(result?.hasKey) }))
-      setProviderAuthActionByName((prev) => ({
-        ...prev,
-        [providerId]: result?.detail || (result?.ok ? 'Imported API key from environment.' : 'Could not import API key from environment.'),
-      }))
-      const cfg = resolvedProviderConfigs.find((p) => p.id === providerId)
-      if (cfg) await refreshProviderAuthStatus(cfg)
-    } catch (err) {
-      setProviderAuthActionByName((prev) => ({ ...prev, [providerId]: `Could not import API key: ${formatError(err)}` }))
-    }
-  }
-
-  async function startProviderLoginFlow(config: ProviderConfig) {
-    setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
-    try {
-      const result = await api.startProviderLogin(
-        config.type === 'cli'
-          ? {
-              id: config.id,
-              type: 'cli',
-              cliCommand: config.cliCommand,
-              cliPath: config.cliPath,
-              authCheckCommand: config.authCheckCommand,
-              loginCommand: config.loginCommand,
-            }
-          : {
-              id: config.id,
-              type: 'api',
-              apiBaseUrl: config.apiBaseUrl,
-              loginUrl: config.loginUrl,
-            },
-      )
-      setProviderAuthActionByName((prev) => ({
-        ...prev,
-        [config.id]:
-          result?.started
-            ? `${result.detail} Complete login in the terminal, then click Re-check.`
-            : `Could not start login for ${config.displayName}.`,
-      }))
-    } catch (err) {
-      setProviderAuthActionByName((prev) => ({
-        ...prev,
-        [config.id]: `Could not start login for ${config.displayName}: ${formatError(err)}`,
-      }))
-    }
-  }
-
-  async function startProviderUpgradeFlow(config: ProviderConfig) {
-    if (config.type !== 'cli') return
-    if (!config.upgradeCommand && !config.upgradePackage) return
-    setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
-    try {
-      const result = await api.upgradeProviderCli({
-        id: config.id,
-        cliCommand: config.cliCommand,
-        cliPath: config.cliPath,
-        authCheckCommand: config.authCheckCommand,
-        loginCommand: config.loginCommand,
-        upgradeCommand: config.upgradeCommand,
-        upgradePackage: config.upgradePackage,
-      })
-      setProviderAuthActionByName((prev) => ({
-        ...prev,
-        [config.id]:
-          result?.started
-            ? result.detail
-            : result?.detail ?? `Could not upgrade ${config.displayName} CLI.`,
-      }))
-    } catch (err) {
-      setProviderAuthActionByName((prev) => ({
-        ...prev,
-        [config.id]: `Could not upgrade ${config.displayName}: ${formatError(err)}`,
-      }))
-    }
-  }
+  // ── Provider connectivity (auth, ping, API keys, login, upgrade) ──
+  const providerCtrl = useMemo(() => createProviderConnectivityController({
+    resolvedProviderConfigs,
+    providerApiKeyDraftByName,
+    api,
+    setProviderAuthByName,
+    setProviderAuthLoadingByName,
+    setProviderAuthActionByName,
+    setProviderPingDurationByName,
+    setProviderVerifiedByName,
+    setProviderApiKeyStateByName,
+    setProviderApiKeyDraftByName,
+    setMcpServers,
+  }), [resolvedProviderConfigs, providerApiKeyDraftByName, api])
+  const {
+    ensureProviderReady,
+    refreshProviderAuthStatus,
+    refreshProviderApiAuthStatus,
+    refreshAllProviderAuthStatuses,
+    refreshMcpServers,
+    refreshProviderApiKeyState,
+    saveProviderApiKey,
+    clearProviderApiKey,
+    importProviderApiKeyFromEnv,
+    startProviderLoginFlow,
+    startProviderUpgradeFlow,
+  } = providerCtrl
 
   async function refreshWorkspaceTree(prefs?: ExplorerPrefs) {
     if (!workspaceRoot) {
@@ -4729,71 +2729,43 @@ export default function App() {
     }
   }
 
-  async function refreshGitStatus() {
-    if (!workspaceRoot) {
-      setGitStatus(null)
-      setGitStatusError(null)
-      return
-    }
-    setGitStatusLoading(true)
-    setGitStatusError(null)
-    try {
-      const result = await api.getGitStatus(workspaceRoot)
-      setGitStatus(result)
-      setGitStatusError(result.ok ? null : result.error ?? 'Unable to load git status.')
-    } catch (err) {
-      setGitStatus(null)
-      setGitStatusError(formatError(err))
-    } finally {
-      setGitStatusLoading(false)
-    }
-  }
-
-  function resolveGitSelection(candidatePaths?: string[]) {
-    const entries = gitStatus?.entries ?? []
-    if (entries.length === 0) return []
-    const source = candidatePaths && candidatePaths.length > 0 ? candidatePaths : selectedGitPaths
-    if (source.length === 0) return []
-    const valid = new Set(entries.map((entry) => entry.relativePath))
-    const resolved: string[] = []
-    for (const path of source) {
-      if (!valid.has(path)) continue
-      if (!resolved.includes(path)) resolved.push(path)
-    }
-    return resolved
-  }
-
-  async function runGitOperation(op: GitOperation, candidatePaths?: string[]) {
-    if (!workspaceRoot || gitOperationPending) return
-    const selectedPaths = resolveGitSelection(candidatePaths)
-    setGitOperationPending(op)
-    setGitOperationSuccess(null)
-    setGitStatusError(null)
-    try {
-      const fn =
-        op === 'commit'
-          ? api.gitCommit
-          : op === 'push'
-            ? api.gitPush
-            : op === 'deploy'
-            ? api.gitDeploy
-            : op === 'build'
-                ? api.gitBuild
-                : api.gitRelease
-      const result = await fn(workspaceRoot, selectedPaths.length > 0 ? selectedPaths : undefined)
-      if (result.ok) {
-        setGitContextMenu(null)
-        setGitOperationSuccess({ op, at: Date.now() })
-        void refreshGitStatus()
-      } else {
-        setGitStatusError(result.error ?? `${op} failed`)
-      }
-    } catch (err) {
-      setGitStatusError(`${op}: ${formatError(err)}`)
-    } finally {
-      setGitOperationPending(null)
-    }
-  }
+  const gitWorkflow = useMemo(
+    () =>
+      createGitWorkflowController({
+        workspaceRoot,
+        gitStatus,
+        selectedGitPaths,
+        gitSelectionAnchorPath,
+        gitOperationPending,
+        setGitStatus,
+        setGitStatusLoading,
+        setGitStatusError,
+        setGitOperationPending,
+        setGitOperationSuccess,
+        setGitContextMenu,
+        setSelectedWorkspaceFile,
+        setSelectedGitPaths,
+        setGitSelectionAnchorPath,
+        setExplorerContextMenu,
+        api,
+        formatError,
+      }),
+    [
+      workspaceRoot,
+      gitStatus,
+      selectedGitPaths,
+      gitSelectionAnchorPath,
+      gitOperationPending,
+      api,
+    ],
+  )
+  const {
+    refreshGitStatus,
+    resolveGitSelection,
+    runGitOperation,
+    handleGitEntryClick,
+    openGitContextMenu,
+  } = gitWorkflow
 
   function setExplorerPrefs(next: ExplorerPrefs) {
     setShowHiddenFiles(next.showHiddenFiles)
@@ -4802,96 +2774,85 @@ export default function App() {
     setExplorerPrefsByWorkspace((prev) => ({ ...prev, [workspaceRoot]: next }))
   }
 
-  async function openEditorForRelativePath(relativePath: string) {
-    if (!workspaceRoot || !relativePath) return
-    setShowCodeWindow(true)
-    const existing = editorPanelsRef.current.find((p) => p.workspaceRoot === workspaceRoot && p.relativePath === relativePath)
-    if (existing) {
-      setFocusedEditor(existing.id)
-      return
-    }
-
-    const panels = editorPanelsRef.current
-    if (panels.length >= MAX_EDITOR_PANELS) {
-      const hasUnedited = panels.some((p) => !p.dirty)
-      if (!hasUnedited) {
-        alert(
-          `Maximum ${MAX_EDITOR_PANELS} code files open. All files have unsaved changes. Save or close some files to open more.`,
-        )
-        return
-      }
-    }
-
-    const id = `editor-${newId()}`
-    const title = fileNameFromRelativePath(relativePath)
-    const newPanel: EditorPanelState = {
-      id,
+  const editorFile = useMemo(
+    () =>
+      createEditorFileController({
+        workspaceRoot,
+        setShowCodeWindow,
+        setCodeWindowTab,
+        setEditorPanels,
+        setFocusedEditor,
+        setSelectedWorkspaceFile,
+        editorPanelsRef,
+        focusedEditorIdRef,
+        api,
+        refreshWorkspaceTree,
+        fileNameFromRelativePath,
+        formatError,
+        newId,
+        MAX_EDITOR_PANELS,
+        MAX_EDITOR_FILE_SIZE_BYTES,
+      }),
+    [
       workspaceRoot,
-      relativePath,
-      title,
-      fontScale: 1,
-      content: '',
-      size: 0,
-      loading: true,
-      saving: false,
-      dirty: false,
-      binary: false,
-      editMode: true,
-    }
-    setEditorPanels((prev) => {
-      if (prev.length < MAX_EDITOR_PANELS) return [...prev, newPanel]
-      const oldestUneditedIdx = prev.findIndex((p) => !p.dirty)
-      const next = oldestUneditedIdx >= 0 ? prev.filter((_, i) => i !== oldestUneditedIdx) : prev
-      return [...next, newPanel]
-    })
-    setFocusedEditor(id)
-    try {
-      const result = await api.readWorkspaceTextFile(workspaceRoot, relativePath)
-      if (result.size > MAX_EDITOR_FILE_SIZE_BYTES && !result.binary) {
-        setEditorPanels((prev) =>
-          prev.map((p) =>
-            p.id !== id
-              ? p
-              : {
-                  ...p,
-                  loading: false,
-                  error: `File too large (${Math.round(result.size / 1024)} KB). Maximum ${Math.round(MAX_EDITOR_FILE_SIZE_BYTES / 1024)} KB.`,
-                },
-          ),
-        )
-        return
-      }
-      setEditorPanels((prev) =>
-        prev.map((p) =>
-          p.id !== id
-            ? p
-            : {
-                ...p,
-                title: fileNameFromRelativePath(result.relativePath),
-                relativePath: result.relativePath,
-                content: result.content,
-                size: result.size,
-                binary: result.binary,
-                loading: false,
-                dirty: false,
-                error: result.binary ? 'Binary files cannot be edited in this editor.' : undefined,
-              },
-        ),
-      )
-    } catch (err) {
-      setEditorPanels((prev) =>
-        prev.map((p) =>
-          p.id !== id
-            ? p
-            : {
-                ...p,
-                loading: false,
-                error: formatError(err),
-              },
-        ),
-      )
-    }
-  }
+      setShowCodeWindow,
+      setCodeWindowTab,
+      setEditorPanels,
+      setFocusedEditor,
+      setSelectedWorkspaceFile,
+      api,
+      refreshWorkspaceTree,
+    ],
+  )
+  const {
+    openEditorForRelativePath,
+    updateEditorContent,
+    saveEditorPanel,
+    saveEditorPanelAs,
+    closeEditorPanel,
+    createNewFileFromMenu,
+    openFileFromMenu,
+  } = editorFile
+
+  const explorerWorkflow = useMemo(
+    () =>
+      createExplorerWorkflowController({
+        workspaceRoot,
+        workspaceTree,
+        expandedDirectories,
+        setExpandedDirectories,
+        setSelectedWorkspaceFile,
+        setDockTab,
+        setExplorerContextMenu,
+        workspaceTreeRef,
+        lastFindInPageQueryRef,
+        lastFindInFilesQueryRef,
+        selectedWorkspaceFileRef,
+        showHiddenFilesRef,
+        showNodeModulesRef,
+        api,
+        openEditorForRelativePath,
+        formatError,
+      }),
+    [
+      workspaceRoot,
+      workspaceTree,
+      expandedDirectories,
+      api,
+      openEditorForRelativePath,
+    ],
+  )
+  const {
+    findInPageFromMenu,
+    findInFilesFromMenu,
+    toggleDirectory,
+    isDirectoryExpanded,
+    expandAllDirectories,
+    collapseAllDirectories,
+    openExplorerContextMenu,
+    closeExplorerContextMenu,
+    openFileFromExplorerContextMenu,
+  } = explorerWorkflow
 
   async function onChatLinkClick(href: string) {
     const target = String(href ?? '').trim()
@@ -4907,174 +2868,6 @@ export default function App() {
     }
     if (/^https?:\/\//i.test(target)) {
       window.open(target, '_blank', 'noopener,noreferrer')
-    }
-  }
-
-  function updateEditorContent(editorId: string, nextContent: string) {
-    setEditorPanels((prev) =>
-      prev.map((p) =>
-        p.id !== editorId
-          ? p
-          : p.diagnosticsReadOnly
-            ? p
-          : {
-              ...p,
-              content: nextContent,
-              dirty: true,
-              error: undefined,
-            },
-      ),
-    )
-  }
-
-  async function saveEditorPanel(editorId: string) {
-    const panel = editorPanelsRef.current.find((p) => p.id === editorId)
-    if (!panel || panel.loading || panel.binary) return
-    if (panel.diagnosticsReadOnly) return
-    setEditorPanels((prev) => prev.map((p) => (p.id === editorId ? { ...p, saving: true, error: undefined } : p)))
-    try {
-      if (panel.diagnosticsTarget) {
-        const result = await api.writeDiagnosticsFile?.(panel.diagnosticsTarget, panel.content)
-        if (!result?.ok) throw new Error(result?.error || 'Failed to save diagnostics file')
-        setEditorPanels((prev) =>
-          prev.map((p) =>
-            p.id !== editorId
-              ? p
-              : {
-                  ...p,
-                  size: typeof result.size === 'number' ? result.size : p.content.length,
-                  saving: false,
-                  dirty: false,
-                  savedAt: Date.now(),
-                },
-          ),
-        )
-        return
-      }
-      const result = await api.writeWorkspaceFile(panel.workspaceRoot, panel.relativePath, panel.content)
-      setEditorPanels((prev) =>
-        prev.map((p) =>
-          p.id !== editorId
-            ? p
-            : {
-                ...p,
-                relativePath: result.relativePath,
-                title: fileNameFromRelativePath(result.relativePath),
-                size: result.size,
-                saving: false,
-                dirty: false,
-                savedAt: Date.now(),
-              },
-        ),
-      )
-      setSelectedWorkspaceFile(result.relativePath)
-      void refreshWorkspaceTree()
-    } catch (err) {
-      setEditorPanels((prev) =>
-        prev.map((p) =>
-          p.id !== editorId
-            ? p
-            : {
-                ...p,
-                saving: false,
-                error: formatError(err),
-              },
-        ),
-      )
-    }
-  }
-
-  async function saveEditorPanelAs(editorId: string) {
-    const panel = editorPanelsRef.current.find((p) => p.id === editorId)
-    if (!panel || panel.loading || panel.binary) return
-    if (panel.diagnosticsTarget) {
-      setEditorPanels((prev) =>
-        prev.map((p) =>
-          p.id !== editorId
-            ? p
-            : {
-                ...p,
-                error: 'Save As is not available for diagnostics files.',
-              },
-        ),
-      )
-      return
-    }
-
-    try {
-      const nextRelativePath = await api.pickWorkspaceSavePath(panel.workspaceRoot, panel.relativePath)
-      if (!nextRelativePath) return
-
-      setEditorPanels((prev) => prev.map((p) => (p.id === editorId ? { ...p, saving: true, error: undefined } : p)))
-      const result = await api.writeWorkspaceFile(panel.workspaceRoot, nextRelativePath, panel.content)
-      setEditorPanels((prev) =>
-        prev.map((p) =>
-          p.id !== editorId
-            ? p
-            : {
-                ...p,
-                relativePath: result.relativePath,
-                title: fileNameFromRelativePath(result.relativePath),
-                size: result.size,
-                saving: false,
-                dirty: false,
-                savedAt: Date.now(),
-              },
-        ),
-      )
-      setSelectedWorkspaceFile(result.relativePath)
-      void refreshWorkspaceTree()
-    } catch (err) {
-      setEditorPanels((prev) =>
-        prev.map((p) =>
-          p.id !== editorId
-            ? p
-            : {
-                ...p,
-                saving: false,
-                error: formatError(err),
-              },
-        ),
-      )
-    }
-  }
-
-  function closeEditorPanel(editorId: string) {
-    const panel = editorPanelsRef.current.find((p) => p.id === editorId)
-    if (!panel) return
-    if (panel.dirty && !confirm(`Close "${panel.title}" without saving changes?`)) return
-    const idx = editorPanels.findIndex((p) => p.id === editorId)
-    setEditorPanels((prev) => prev.filter((p) => p.id !== editorId))
-    if (focusedEditorId === editorId) {
-      const remaining = editorPanels.filter((p) => p.id !== editorId)
-      const nextIdx = Math.min(idx, Math.max(0, remaining.length - 1))
-      setFocusedEditor(remaining[nextIdx]?.id ?? null)
-    }
-  }
-
-  async function createNewFileFromMenu() {
-    if (!workspaceRoot) return
-    try {
-      const relativePath = await api.pickWorkspaceSavePath(workspaceRoot, 'untitled.txt')
-      if (!relativePath) return
-      await api.writeWorkspaceFile(workspaceRoot, relativePath, '')
-      await openEditorForRelativePath(relativePath)
-      setSelectedWorkspaceFile(relativePath)
-      void refreshWorkspaceTree()
-    } catch (err) {
-      alert(`Could not create file: ${formatError(err)}`)
-    }
-  }
-
-  async function openFileFromMenu() {
-    if (!workspaceRoot) return
-    try {
-      const relativePath = await api.pickWorkspaceOpenPath(workspaceRoot)
-      if (!relativePath) return
-      await openEditorForRelativePath(relativePath)
-      setSelectedWorkspaceFile(relativePath)
-    } catch (err) {
-      alert(`Could not open file: ${formatError(err)}`)
     }
   }
 
@@ -5101,184 +2894,6 @@ export default function App() {
     if (showWorkspaceWindowRef.current) {
       setShowWorkspaceWindow(false)
     }
-  }
-
-  function findInPageFromMenu() {
-    const input = prompt('Find', lastFindInPageQueryRef.current)
-    if (input === null) return
-    const query = input.trim()
-    if (!query) return
-    lastFindInPageQueryRef.current = query
-    void api.findInPage?.(query)
-  }
-
-  function collectWorkspaceFilePaths(nodes: WorkspaceTreeNode[]): string[] {
-    const paths: string[] = []
-    const walk = (items: WorkspaceTreeNode[]) => {
-      for (const item of items) {
-        if (item.type === 'file') {
-          paths.push(item.relativePath)
-          continue
-        }
-        if (item.children?.length) {
-          walk(item.children)
-        }
-      }
-    }
-    walk(nodes)
-    return paths
-  }
-
-  async function findInFilesFromMenu() {
-    const input = prompt('Find in Files (file name contains)', lastFindInFilesQueryRef.current || selectedWorkspaceFileRef.current || '')
-    if (input === null) return
-    const query = input.trim()
-    if (!query) return
-    lastFindInFilesQueryRef.current = query
-
-    let nodes = workspaceTreeRef.current
-    if (nodes.length === 0 && workspaceRoot) {
-      try {
-        const result = await api.listWorkspaceTree(workspaceRoot, {
-          includeHidden: showHiddenFilesRef.current,
-          includeNodeModules: showNodeModulesRef.current,
-        })
-        nodes = result?.nodes ?? []
-      } catch (err) {
-        alert(`Could not scan workspace files: ${formatError(err)}`)
-        return
-      }
-    }
-
-    const normalized = query.toLowerCase()
-    const matches = collectWorkspaceFilePaths(nodes).filter((relativePath) =>
-      relativePath.toLowerCase().includes(normalized),
-    )
-    if (matches.length === 0) {
-      alert(`No files found for "${query}".`)
-      return
-    }
-
-    const first = matches[0]
-    await openEditorForRelativePath(first)
-    setSelectedWorkspaceFile(first)
-    setDockTab('explorer')
-  }
-
-  function toggleDirectory(relativePath: string) {
-    setExpandedDirectories((prev) => ({ ...prev, [relativePath]: !prev[relativePath] }))
-  }
-
-  function isDirectoryExpanded(relativePath: string, depth: number) {
-    if (relativePath in expandedDirectories) return Boolean(expandedDirectories[relativePath])
-    return depth < 1
-  }
-
-  function collectDirectoryPaths(nodes: WorkspaceTreeNode[]): string[] {
-    const paths: string[] = []
-    const walk = (items: WorkspaceTreeNode[]) => {
-      for (const item of items) {
-        if (item.type !== 'directory') continue
-        paths.push(item.relativePath)
-        if (item.children?.length) walk(item.children)
-      }
-    }
-    walk(nodes)
-    return paths
-  }
-
-  function expandAllDirectories() {
-    const next: Record<string, boolean> = {}
-    for (const relativePath of collectDirectoryPaths(workspaceTree)) {
-      next[relativePath] = true
-    }
-    setExpandedDirectories(next)
-  }
-
-  function collapseAllDirectories() {
-    const next: Record<string, boolean> = {}
-    for (const relativePath of collectDirectoryPaths(workspaceTree)) {
-      next[relativePath] = false
-    }
-    setExpandedDirectories(next)
-  }
-
-  function gitStatusText(entry: GitStatusEntry) {
-    if (entry.untracked) return '??'
-    return `${entry.indexStatus}${entry.workingTreeStatus}`
-  }
-
-  function gitEntryClass(entry: GitStatusEntry) {
-    if (entry.untracked) return 'border border-amber-300 text-amber-900 dark:border-amber-800 dark:text-amber-200'
-    if (entry.staged && entry.unstaged) return 'border border-purple-300 text-purple-900 dark:border-purple-800 dark:text-purple-200'
-    if (entry.staged) return 'border border-green-300 text-green-900 dark:border-green-800 dark:text-green-200'
-    if (entry.unstaged) return 'border border-orange-300 text-orange-900 dark:border-orange-800 dark:text-orange-200'
-    return 'border border-neutral-300 text-neutral-800 dark:border-neutral-700 dark:text-neutral-100'
-  }
-
-  function isDeletedGitEntry(entry: GitStatusEntry) {
-    if (entry.untracked) return false
-    return entry.indexStatus === 'D' || entry.workingTreeStatus === 'D'
-  }
-
-  function selectSingleGitEntry(relativePath: string) {
-    setSelectedWorkspaceFile(relativePath)
-    setSelectedGitPaths([relativePath])
-    setGitSelectionAnchorPath(relativePath)
-  }
-
-  function handleGitEntryClick(entry: GitStatusEntry, event: React.MouseEvent<HTMLButtonElement>) {
-    const entries = gitStatus?.entries ?? []
-    const clickedPath = entry.relativePath
-    const additive = event.metaKey || event.ctrlKey
-    setSelectedWorkspaceFile(clickedPath)
-
-    if (event.shiftKey) {
-      const anchorPath = gitSelectionAnchorPath ?? selectedGitPaths[selectedGitPaths.length - 1] ?? clickedPath
-      const anchorIndex = entries.findIndex((item) => item.relativePath === anchorPath)
-      const clickedIndex = entries.findIndex((item) => item.relativePath === clickedPath)
-      if (anchorIndex >= 0 && clickedIndex >= 0) {
-        const start = Math.min(anchorIndex, clickedIndex)
-        const end = Math.max(anchorIndex, clickedIndex)
-        const rangePaths = entries.slice(start, end + 1).map((item) => item.relativePath)
-        setSelectedGitPaths((prev) => (additive ? [...new Set([...prev, ...rangePaths])] : rangePaths))
-        setGitSelectionAnchorPath(anchorPath)
-        return
-      }
-    }
-
-    if (additive) {
-      setSelectedGitPaths((prev) => {
-        if (prev.includes(clickedPath)) return prev.filter((path) => path !== clickedPath)
-        return [...prev, clickedPath]
-      })
-      setGitSelectionAnchorPath(clickedPath)
-      return
-    }
-
-    selectSingleGitEntry(clickedPath)
-  }
-
-  function openGitContextMenu(event: React.MouseEvent<HTMLButtonElement>, entry: GitStatusEntry) {
-    event.preventDefault()
-    if (!selectedGitPaths.includes(entry.relativePath)) {
-      selectSingleGitEntry(entry.relativePath)
-    } else {
-      setSelectedWorkspaceFile(entry.relativePath)
-    }
-    setExplorerContextMenu(null)
-    setGitContextMenu({
-      x: event.clientX,
-      y: event.clientY,
-      relativePath: entry.relativePath,
-      deleted: isDeletedGitEntry(entry),
-    })
-  }
-
-  function formatCheckedAt(ts?: number) {
-    if (!ts) return 'Never'
-    const dt = new Date(ts)
-    return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
   function createAgentPanel(sourcePanelId?: string) {
@@ -5373,8 +2988,6 @@ export default function App() {
     }
   }
 
-  const DROP_ZONE_OVERLAY_STYLE = { backgroundColor: 'color-mix(in srgb, var(--theme-accent-500) 28%, transparent)' }
-
   function handleDragOver(
     e: React.DragEvent,
     opts: { acceptDock?: boolean; acceptAgent?: boolean; targetId?: string },
@@ -5390,13 +3003,90 @@ export default function App() {
   }
 
   function renderWorkspaceTile() {
+    const dockContent =
+      dockTab === 'orchestrator'
+        ? renderAgentOrchestratorPane()
+        : dockTab === 'explorer'
+          ? (
+              <ExplorerPane
+                workspaceTree={workspaceTree}
+                workspaceTreeLoading={workspaceTreeLoading}
+                workspaceTreeError={workspaceTreeError}
+                workspaceTreeTruncated={workspaceTreeTruncated}
+                showHiddenFiles={showHiddenFiles}
+                showNodeModules={showNodeModules}
+                onExplorerPrefsChange={setExplorerPrefs}
+                onRefresh={() => void refreshWorkspaceTree()}
+                onExpandAll={expandAllDirectories}
+                onCollapseAll={collapseAllDirectories}
+                expandedDirectories={expandedDirectories}
+                isDirectoryExpanded={isDirectoryExpanded}
+                onToggleDirectory={toggleDirectory}
+                selectedWorkspaceFile={selectedWorkspaceFile}
+                onSelectFile={setSelectedWorkspaceFile}
+                onOpenFile={(relativePath) => void openEditorForRelativePath(relativePath)}
+                onOpenContextMenu={openExplorerContextMenu}
+                onCloseGitContextMenu={() => setGitContextMenu(null)}
+              />
+            )
+          : dockTab === 'git'
+            ? (
+                <GitPane
+                  gitStatus={gitStatus}
+                  gitStatusLoading={gitStatusLoading}
+                  gitStatusError={gitStatusError}
+                  gitOperationPending={gitOperationPending}
+                  gitOperationSuccess={gitOperationSuccess}
+                  workspaceRoot={workspaceRoot ?? ''}
+                  resolvedSelectedPaths={resolveGitSelection()}
+                  onRunOperation={(op) => void runGitOperation(op)}
+                  onRefresh={() => void refreshGitStatus()}
+                  onEntryClick={handleGitEntryClick}
+                  onEntryDoubleClick={(relativePath) => void openEditorForRelativePath(relativePath)}
+                  onEntryContextMenu={openGitContextMenu}
+                />
+              )
+            : (
+                <WorkspaceSettingsPane
+                  workspaceForm={workspaceForm}
+                  workspaceFormTextDraft={workspaceFormTextDraft}
+                  modelOptions={getModelOptions(workspaceForm.defaultModel)}
+                  onPathChange={(path) => setWorkspaceForm((prev) => ({ ...prev, path }))}
+                  onPathBlur={(path) => {
+                    const next = workspaceSettings.normalizeWorkspaceSettingsForm({ ...workspaceForm, path })
+                    if (!next.path) return
+                    void workspaceSettings.persistWorkspaceSettings(next, { requestSwitch: true })
+                  }}
+                  onBrowse={browseForWorkspaceIntoForm}
+                  onDefaultModelChange={(value) =>
+                    workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, defaultModel: value }))
+                  }
+                  onSandboxChange={(value) =>
+                    workspaceSettings.updateDockedWorkspaceForm((prev) => ({
+                      ...prev,
+                      sandbox: value,
+                      permissionMode: value === 'read-only' ? 'verify-first' : prev.permissionMode,
+                    }))
+                  }
+                  onPermissionModeChange={(value) =>
+                    workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, permissionMode: value }))
+                  }
+                  onTextDraftChange={workspaceSettings.updateDockedWorkspaceTextDraft}
+                />
+              )
     return (
-      <div
-        data-workspace-window-root="true"
-        className="relative h-full min-h-0 min-w-0 flex flex-col border border-neutral-200/80 dark:border-neutral-800 rounded-lg overflow-hidden bg-neutral-50 dark:bg-neutral-900 font-mono"
+      <WorkspaceTile
+        dockTab={dockTab}
+        workspaceDockSide={workspaceDockSide}
+        showCodeWindow={showCodeWindow}
+        draggingPanelId={draggingPanelId}
+        dragOverTarget={dragOverTarget}
+        dockContent={dockContent}
         onMouseDownCapture={() => setFocusedEditorId(null)}
         onDragOver={(e) => showCodeWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
         onDrop={(e) => showCodeWindow && handleDockDrop(e)}
+        onDragStart={(e) => showCodeWindow && handleDragStart(e, 'workspace', 'workspace-window')}
+        onDragEnd={handleDragEnd}
         onWheel={(e) => {
           if (!isZoomWheelGesture(e)) return
           e.preventDefault()
@@ -5408,112 +3098,11 @@ export default function App() {
           if (level !== undefined) setZoomLevel(level)
           setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
         }}
-      >
-        {/* workspaceTitleBar: bar with "Workspace Window" label */}
-        <div
-          data-workspace-title-bar="true"
-          className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 shrink-0 select-none"
-          draggable={showCodeWindow}
-          onDragStart={(e) => showCodeWindow && handleDragStart(e, 'workspace', 'workspace-window')}
-          onDragEnd={handleDragEnd}
-          onDragOver={(e) => showCodeWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
-          onDrop={(e) => showCodeWindow && handleDockDrop(e)}
-        >
-          <div className="text-xs font-semibold text-neutral-700 dark:text-neutral-200">Workspace Window</div>
-        </div>
-        {draggingPanelId && dragOverTarget === 'dock-workspace' && (
-          <div className="absolute inset-0 rounded-lg pointer-events-none z-10" style={DROP_ZONE_OVERLAY_STYLE} />
-        )}
-        {/* workspaceDockTabBar: bar with orchestrator/explorer/git/settings tab icons */}
-        <div data-workspace-dock-tab-bar="true" className="px-2.5 py-2 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center gap-1.5 bg-neutral-100 dark:bg-neutral-900/80">
-          <div className="inline-flex items-center gap-1.5">
-            <button
-              type="button"
-              title="Agent Orchestrator"
-              aria-label="Agent Orchestrator"
-              className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
-                dockTab === 'orchestrator'
-                  ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-              }`}
-              onClick={() => setDockTab('orchestrator')}
-            >
-            <RobotIcon size={18} />
-            </button>
-            <button
-              type="button"
-              title="Workspace Folder"
-              aria-label="Workspace Folder"
-              className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
-                dockTab === 'explorer'
-                  ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-              }`}
-              onClick={() => setDockTab('explorer')}
-            >
-              <FolderIcon size={18} />
-            </button>
-            <button
-              type="button"
-              title="Git"
-              aria-label="Git"
-              className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
-                dockTab === 'git'
-                  ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-              }`}
-              onClick={() => setDockTab('git')}
-            >
-              <GitIcon size={18} />
-            </button>
-            <button
-              type="button"
-              title="Workspace settings"
-              aria-label="Workspace settings"
-              className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
-                dockTab === 'settings'
-                  ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                  : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-              }`}
-              onClick={openWorkspaceSettingsTab}
-            >
-              <SettingsIcon size={18} />
-            </button>
-          </div>
-          <button
-            type="button"
-            title={`Dock workspace window to ${workspaceDockSide === 'right' ? 'left' : 'right'}`}
-            aria-label={`Dock workspace window to ${workspaceDockSide === 'right' ? 'left' : 'right'}`}
-            className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
-            onClick={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
-          >
-            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M3 5.5H11.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-              <path d="M5.5 3.5L3 5.5L5.5 7.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M13 10.5H4.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-              <path d="M10.5 8.5L13 10.5L10.5 12.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            title="Close workspace window"
-            aria-label="Close workspace window"
-            className="h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
-            onClick={() => setShowWorkspaceWindow(false)}
-          >
-            <CloseIcon size={12} />
-          </button>
-        </div>
-        <div className="flex-1 min-h-0">
-          {dockTab === 'orchestrator'
-            ? renderAgentOrchestratorPane()
-            : dockTab === 'explorer'
-              ? renderExplorerPane()
-              : dockTab === 'git'
-                ? renderGitPane()
-                : renderWorkspaceSettingsPane()}
-        </div>
-      </div>
+        onDockTabChange={(tab) => setDockTab(tab)}
+        onWorkspaceSettingsTab={workspaceSettings.openWorkspaceSettingsTab}
+        onDockSideToggle={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
+        onClose={() => setShowWorkspaceWindow(false)}
+      />
     )
   }
 
@@ -5538,260 +3127,14 @@ export default function App() {
     if (!showCodeWindow) setShowCodeWindow(true)
   }
 
-  function renderCodeWindowTile() {
-    const activePanel =
-      (focusedEditorId ? editorPanels.find((p) => p.id === focusedEditorId) : null) ??
-      editorPanels[0] ??
-      null
-    const hasTabs = editorPanels.length > 0
-    const showingSettingsPanel = codeWindowTab === 'settings'
-
-    return (
-      <div
-        className="relative h-full min-h-0 min-w-0 flex flex-col border border-neutral-200/80 dark:border-neutral-800 rounded-lg overflow-hidden bg-neutral-50 dark:bg-neutral-900 font-mono"
-        onMouseDownCapture={(e) => {
-          const target = e.target
-          if (target instanceof HTMLElement) {
-            // Avoid fighting with the dropdown/buttons; keep current selection stable.
-            if (target.closest('select') || target.closest('button') || target.closest('textarea') || target.closest('.cm-editor') || target.closest('a')) return
-          }
-          const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
-          if (id) setFocusedEditor(id)
-        }}
-        onDragOver={(e) => showWorkspaceWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-code' })}
-        onDrop={(e) => showWorkspaceWindow && handleDockDrop(e)}
-        onWheel={(e) => {
-          if (!isZoomWheelGesture(e)) return
-          e.preventDefault()
-          if (zoomWheelThrottleRef.current) return
-          zoomWheelThrottleRef.current = true
-          if (e.deltaY < 0) api.zoomIn?.()
-          else if (e.deltaY > 0) api.zoomOut?.()
-          const level = api.getZoomLevel?.()
-          if (level !== undefined) setZoomLevel(level)
-          setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
-        }}
-      >
-        <div
-          className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 shrink-0 select-none"
-          draggable={showWorkspaceWindow}
-          onDragStart={(e) => showWorkspaceWindow && handleDragStart(e, 'code', 'code-window')}
-          onDragEnd={handleDragEnd}
-          onDragOver={(e) => showWorkspaceWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-code' })}
-          onDrop={(e) => showWorkspaceWindow && handleDockDrop(e)}
-        >
-          <div className="flex items-center gap-2">
-            <div className="text-xs font-semibold text-neutral-700 dark:text-neutral-200">
-              {showingSettingsPanel ? 'Settings Window' : 'Code Window'}
-            </div>
-            <button
-              type="button"
-              title={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
-              aria-label={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
-              className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
-              onClick={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
-            >
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M3 5.5H11.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-                <path d="M5.5 3.5L3 5.5L5.5 7.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M13 10.5H4.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-                <path d="M10.5 8.5L13 10.5L10.5 12.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              title={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
-              aria-label={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
-              className="h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
-              onClick={() => setShowCodeWindow(false)}
-            >
-              <svg width="12" height="12" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-                <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </button>
-          </div>
-        </div>
-        {draggingPanelId && dragOverTarget === 'dock-code' && (
-          <div className="absolute inset-0 rounded-lg pointer-events-none z-10" style={DROP_ZONE_OVERLAY_STYLE} />
-        )}
-        {!showingSettingsPanel && hasTabs && activePanel && (
-          <div className="px-2 py-2 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center gap-2 flex-wrap bg-neutral-100 dark:bg-neutral-900/80 shrink-0">
-            <span className="text-xs text-neutral-600 dark:text-neutral-400">Current file:</span>
-            <select
-              className={`flex-1 min-w-0 max-w-[240px] text-[11px] font-mono ${UI_SELECT_CLASS} dark:border-neutral-700/80 dark:bg-neutral-800/80 dark:text-neutral-200`}
-              value={focusedEditorId ?? ''}
-              onChange={(e) => {
-                const id = e.target.value
-                if (id) setFocusedEditor(id)
-              }}
-              title={activePanel.relativePath}
-            >
-              {editorPanels.map((tab) => (
-                <option key={tab.id} value={tab.id} title={tab.relativePath + (tab.dirty ? ' (unsaved)' : '')}>
-                  {tab.title}{tab.dirty ? ' *' : ''}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className={`px-2 py-1 text-xs rounded border ${
-                activePanel.editMode ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100' : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700/80 dark:bg-transparent dark:text-neutral-300 dark:hover:bg-neutral-800/80 dark:hover:border-neutral-600'
-              }`}
-              onClick={() => {
-                const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
-                if (!id) return
-                const panel = editorPanelsRef.current.find((p) => p.id === id)
-                const nextMode = !(panel?.editMode ?? false)
-                setEditorTabEditMode(id, nextMode)
-                setFocusedEditor(id)
-              }}
-              disabled={activePanel.loading || activePanel.binary}
-              title={activePanel.editMode ? 'Switch to view-only' : 'Enable editing'}
-            >
-              {activePanel.editMode ? 'View' : 'Edit'}
-            </button>
-            <button
-              type="button"
-              className={`${CODE_WINDOW_TOOLBAR_BUTTON} ${applicationSettings.editorWordWrap ? 'shadow-inner bg-neutral-200 border-neutral-400 text-neutral-800 dark:bg-neutral-700/80 dark:border-neutral-600 dark:text-neutral-100' : ''}`}
-              onClick={() => setApplicationSettings((p) => ({ ...p, editorWordWrap: !p.editorWordWrap }))}
-              aria-label={applicationSettings.editorWordWrap ? 'Word wrap on' : 'Word wrap off'}
-              title={applicationSettings.editorWordWrap ? 'Word wrap on (click to turn off)' : 'Word wrap off (click to turn on)'}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M5 4L2 8l3 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M11 4l3 4-3 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M9 6L7 10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={CODE_WINDOW_TOOLBAR_BUTTON}
-              disabled={activePanel.loading || activePanel.saving || activePanel.binary || !activePanel.dirty}
-              onClick={() => {
-                const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
-                if (!id) return
-                setFocusedEditor(id)
-                void saveEditorPanel(id)
-              }}
-              aria-label="Save"
-              title="Save (Ctrl+S)"
-            >
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-                <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M5.2 9.5H10.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={CODE_WINDOW_TOOLBAR_BUTTON}
-              disabled={activePanel.loading || activePanel.saving || activePanel.binary}
-              onClick={() => {
-                const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
-                if (!id) return
-                setFocusedEditor(id)
-                void saveEditorPanelAs(id)
-              }}
-              aria-label="Save As"
-              title="Save As (Ctrl+Shift+S)"
-            >
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-                <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M8 8.4V12.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                <path d="M6.1 10.3H9.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={CODE_WINDOW_TOOLBAR_BUTTON_SM}
-              onClick={() => {
-                const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
-                if (!id) return
-                setFocusedEditor(id)
-                closeEditorPanel(id)
-              }}
-              title="Close tab"
-            >
-              <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-                <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </button>
-          </div>
-        )}
-        <div className="flex-1 min-h-0 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
-          {showingSettingsPanel && (
-            <div ref={codeWindowSettingsHostRef} className="h-full min-h-0" />
-          )}
-          {!showingSettingsPanel && !hasTabs && (
-            <div className="h-full flex items-center justify-center text-sm text-neutral-500 dark:text-neutral-400 p-4 text-center">
-              Double-click a file in the workspace to open it.
-            </div>
-          )}
-          {!showingSettingsPanel && hasTabs && activePanel && activePanel.loading && (
-            <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">Loading file...</div>
-          )}
-          {!showingSettingsPanel && hasTabs && activePanel && !activePanel.loading && activePanel.error && (
-            <div className="p-4 text-sm text-red-600 dark:text-red-400">{activePanel.error}</div>
-          )}
-          {!showingSettingsPanel && hasTabs && activePanel && !activePanel.loading && !activePanel.error && activePanel.binary && (
-            <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">
-              Binary files are not editable in this editor.
-            </div>
-          )}
-          {!showingSettingsPanel && hasTabs && activePanel && !activePanel.loading && !activePanel.error && !activePanel.binary && (
-            <div className="h-full min-h-0 flex flex-col overflow-hidden">
-              <CodeMirrorEditor
-                value={activePanel.content}
-                onChange={(v) => updateEditorContent(activePanel.id, v)}
-                readOnly={!activePanel.editMode}
-                filename={activePanel.relativePath}
-                wordWrap={applicationSettings.editorWordWrap}
-                fontScale={activePanel.fontScale}
-                darkMode={activeTheme.mode === 'dark'}
-                onSave={() => void saveEditorPanel(activePanel.id)}
-                onSaveAs={() => void saveEditorPanelAs(activePanel.id)}
-                onFocus={() => setFocusedEditor(activePanel.id)}
-              />
-            </div>
-          )}
-        </div>
-        {!showingSettingsPanel && hasTabs && activePanel && (
-          <div className="px-3 py-1.5 border-t border-neutral-200 dark:border-neutral-800 text-[11px] text-neutral-500 dark:text-neutral-400 flex items-center justify-between shrink-0">
-            <span>{Math.round(activePanel.size / 1024)} KB</span>
-            <span>
-              {activePanel.saving
-                ? 'Saving...'
-                : activePanel.dirty
-                  ? 'Unsaved changes'
-                  : activePanel.savedAt
-                    ? `Saved ${new Date(activePanel.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-                    : 'Saved'}
-            </span>
-          </div>
-        )}
-      </div>
-    )
-  }
-
   function renderEditorPanel(panel: EditorPanelState) {
-    const saveDisabled = panel.loading || panel.saving || panel.binary || !panel.dirty
-    const saveAsDisabled = panel.loading || panel.saving || panel.binary
-    const editorFontSizePx = 12 * panel.fontScale
-    const editorLineHeightPx = 20 * panel.fontScale
     return (
-      <div
-        className={[
-          'h-full min-h-0 min-w-0 flex flex-col rounded-xl border bg-white dark:bg-neutral-950 overflow-hidden outline-none shadow-sm',
-          focusedEditorId === panel.id
-            ? 'border-blue-400 dark:border-blue-600 ring-2 ring-blue-100 dark:ring-blue-900/40'
-            : 'border-neutral-200/90 dark:border-neutral-800',
-        ].join(' ')}
-        tabIndex={0}
-        onFocusCapture={() => setFocusedEditorId(panel.id)}
-        onMouseDownCapture={() => setFocusedEditorId(panel.id)}
+      <EditorPanel
+        panel={panel}
+        isFocused={focusedEditorId === panel.id}
+        applicationSettings={applicationSettings}
+        activeTheme={activeTheme}
+        onFocus={() => setFocusedEditorId(panel.id)}
         onWheel={(e) => {
           if (!isZoomWheelGesture(e)) return
           e.preventDefault()
@@ -5804,107 +3147,68 @@ export default function App() {
           if (level !== undefined) setZoomLevel(level)
           setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
         }}
-      >
-        <div className="px-3 py-2.5 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold truncate" title={panel.relativePath}>
-              {panel.title}{panel.dirty ? ' *' : ''}
-            </div>
-            <div className="text-[11px] text-neutral-500 dark:text-neutral-400 font-mono truncate" title={panel.relativePath}>
-              {panel.relativePath}
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              className={UI_TOOLBAR_ICON_BUTTON_CLASS}
-              disabled={saveDisabled}
-              onClick={() => void saveEditorPanel(panel.id)}
-              aria-label="Save"
-              title="Save (Ctrl+S)"
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-                <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M5.2 9.5H10.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={UI_TOOLBAR_ICON_BUTTON_CLASS}
-              disabled={saveAsDisabled}
-              onClick={() => void saveEditorPanelAs(panel.id)}
-              aria-label="Save As"
-              title="Save As (Ctrl+Shift+S)"
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M3 3.5C3 2.95 3.45 2.5 4 2.5H10.7L13 4.8V12.5C13 13.05 12.55 13.5 12 13.5H4C3.45 13.5 3 13.05 3 12.5V3.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-                <path d="M5 2.5H10V6H5V2.5Z" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M8 8.4V12.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                <path d="M6.1 10.3H9.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={UI_CLOSE_ICON_BUTTON_CLASS}
-              onClick={() => closeEditorPanel(panel.id)}
-              title="Close editor"
-            >
-              <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-                <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </button>
-          </div>
-        </div>
-        <div className="flex-1 min-h-0 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
-          {panel.loading && (
-            <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">Loading file...</div>
-          )}
-          {!panel.loading && panel.error && (
-            <div className="p-4 text-sm text-red-600 dark:text-red-400">{panel.error}</div>
-          )}
-          {!panel.loading && !panel.error && panel.binary && (
-            <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">
-              Binary files are not editable in this editor.
-            </div>
-          )}
-          {!panel.loading && !panel.error && !panel.binary && (
-            <div className="h-full min-h-0 flex flex-col overflow-hidden">
-              <CodeMirrorEditor
-                value={panel.content}
-                onChange={(v) => updateEditorContent(panel.id, v)}
-                readOnly={false}
-                filename={panel.relativePath}
-                wordWrap={applicationSettings.editorWordWrap}
-                fontScale={panel.fontScale}
-                darkMode={activeTheme.mode === 'dark'}
-                onSave={() => void saveEditorPanel(panel.id)}
-                onSaveAs={() => void saveEditorPanelAs(panel.id)}
-                onFocus={() => setFocusedEditorId(panel.id)}
-              />
-            </div>
-          )}
-        </div>
-        <div className="px-3 py-1.5 border-t border-neutral-200 dark:border-neutral-800 text-[11px] text-neutral-500 dark:text-neutral-400 flex items-center justify-between">
-          <span>{Math.round(panel.size / 1024)} KB</span>
-          <span>
-            {panel.saving
-              ? 'Saving...'
-              : panel.dirty
-                ? 'Unsaved changes'
-                : panel.savedAt
-                  ? `Saved ${new Date(panel.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-                  : 'Saved'}
-          </span>
-        </div>
-      </div>
+        onSave={() => void saveEditorPanel(panel.id)}
+        onSaveAs={() => void saveEditorPanelAs(panel.id)}
+        onClose={() => closeEditorPanel(panel.id)}
+        onContentChange={(v) => updateEditorContent(panel.id, v)}
+      />
     )
   }
 
   function renderLayoutPane(panelId: string) {
     if (panelId === 'workspace-window') return renderWorkspaceTile()
-    if (panelId === 'code-window') return renderCodeWindowTile()
+    if (panelId === 'code-window')
+      return (
+        <CodeWindowTile
+          editorPanels={editorPanels}
+          focusedEditorId={focusedEditorId}
+          codeWindowTab={codeWindowTab}
+          showWorkspaceWindow={showWorkspaceWindow}
+          workspaceDockSide={workspaceDockSide}
+          applicationSettings={applicationSettings}
+          activeTheme={activeTheme}
+          settingsHostRef={codeWindowSettingsHostRef}
+          onDragOver={(e) => showWorkspaceWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-code' })}
+          onDrop={(e) => showWorkspaceWindow && handleDockDrop(e)}
+          onDragStart={(e) => showWorkspaceWindow && handleDragStart(e, 'code', 'code-window')}
+          onDragEnd={handleDragEnd}
+          onZoomWheel={(e) => {
+            if (!isZoomWheelGesture(e)) return
+            e.preventDefault()
+            if (zoomWheelThrottleRef.current) return
+            zoomWheelThrottleRef.current = true
+            if (e.deltaY < 0) api.zoomIn?.()
+            else if (e.deltaY > 0) api.zoomOut?.()
+            const level = api.getZoomLevel?.()
+            if (level !== undefined) setZoomLevel(level)
+            setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
+          }}
+          onDockSideToggle={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
+          onCloseCodeWindow={() => setShowCodeWindow(false)}
+          onFocusedEditorChange={(id) => setFocusedEditor(id)}
+          onEditorTabChange={(id) => setFocusedEditor(id)}
+          onEditModeToggle={(id) => {
+            const panel = editorPanelsRef.current.find((p) => p.id === id)
+            const nextMode = !(panel?.editMode ?? false)
+            setEditorTabEditMode(id, nextMode)
+          }}
+          onWordWrapToggle={() => setApplicationSettings((p) => ({ ...p, editorWordWrap: !p.editorWordWrap }))}
+          onSave={(id) => void saveEditorPanel(id)}
+          onSaveAs={(id) => void saveEditorPanelAs(id)}
+          onCloseEditor={closeEditorPanel}
+          onEditorContentChange={updateEditorContent}
+          onMouseDownCapture={(e) => {
+            const target = e.target
+            if (target instanceof HTMLElement) {
+              if (target.closest('select') || target.closest('button') || target.closest('textarea') || target.closest('.cm-editor') || target.closest('a')) return
+            }
+            const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
+            if (id) setFocusedEditor(id)
+          }}
+          draggingPanelId={draggingPanelId}
+          dragOverTarget={dragOverTarget}
+        />
+      )
     const agentPanel = panels.find((w) => w.id === panelId)
     if (agentPanel) return renderPanelContent(agentPanel)
     return null
@@ -5942,117 +3246,21 @@ export default function App() {
     )
   }
 
-  async function connectWindow(
-    winId: string,
-    model: string,
-    cwd: string,
-    permissionMode: PermissionMode,
-    sandbox: SandboxMode,
-    initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>,
-    interactionMode?: AgentInteractionMode,
-  ) {
-    const mi = modelConfig.interfaces.find((m) => m.id === model)
-    const provider = mi?.provider ?? 'codex'
-    const clampedSecurity = clampPanelSecurityForWorkspace(cwd, sandbox, permissionMode)
-    const allowedCommandPrefixes = workspaceSettingsByPath[cwd]?.allowedCommandPrefixes ?? []
-    const allowedAutoReadPrefixes = workspaceSettingsByPath[cwd]?.allowedAutoReadPrefixes ?? []
-    const allowedAutoWritePrefixes = workspaceSettingsByPath[cwd]?.allowedAutoWritePrefixes ?? []
-    const deniedAutoReadPrefixes = workspaceSettingsByPath[cwd]?.deniedAutoReadPrefixes ?? []
-    const deniedAutoWritePrefixes = workspaceSettingsByPath[cwd]?.deniedAutoWritePrefixes ?? []
-
-    await withTimeout(
-      api.connect(winId, {
-        model,
-        cwd,
-        permissionMode: clampedSecurity.permissionMode,
-        approvalPolicy: clampedSecurity.permissionMode === 'proceed-always' ? 'never' : 'on-request',
-        sandbox: clampedSecurity.sandbox,
-        interactionMode: interactionMode ?? 'agent',
-        allowedCommandPrefixes,
-        allowedAutoReadPrefixes,
-        allowedAutoWritePrefixes,
-        deniedAutoReadPrefixes,
-        deniedAutoWritePrefixes,
-        provider,
-        modelConfig: mi?.config,
-        initialHistory,
-      }),
-      CONNECT_TIMEOUT_MS,
-      'connect',
-    )
-  }
-
-  async function reconnectPanel(winId: string, reason: string) {
-    if (reconnectingRef.current.has(winId)) return
-    const w = panelsRef.current.find((x) => x.id === winId)
-    if (!w) return
-    reconnectingRef.current.add(winId)
-    const provider = getModelProvider(w.model)
-    if (provider === 'codex' && !CODEX_API_MODELS.includes(w.model) && w.messages.length > 0) {
-      needsContextOnNextCodexSendRef.current[winId] = true
-    }
-    setPanels((prev) =>
-      prev.map((p) =>
-        p.id !== winId
-          ? p
-          : {
-              ...p,
-              connected: false,
-              streaming: false,
-              status: `Reconnecting: ${reason}`,
-            },
-      ),
-    )
-    try {
-      const initialHistory = w.messages.length > 0 ? panelMessagesToInitialHistory(w.messages) : undefined
-      await connectWindow(winId, w.model, w.cwd, w.permissionMode, w.sandbox, initialHistory, w.interactionMode)
-      setPanels((prev) =>
-        prev.map((p) =>
-          p.id !== winId
-            ? p
-            : {
-                ...p,
-                status: 'Reconnected.',
-              },
-        ),
-      )
-      queueMicrotask(() => kickQueuedMessage(winId))
-    } catch (e) {
-      const errMsg = formatConnectionError(e, getModelProvider(w.model))
-      setPanels((prev) =>
-        prev.map((p) =>
-          p.id !== winId
-            ? p
-            : {
-                ...p,
-                connected: false,
-                streaming: false,
-                status: 'Reconnect failed',
-                messages: [...p.messages, { id: newId(), role: 'system', content: errMsg, format: 'text', createdAt: Date.now() }],
-              },
-        ),
-      )
-    } finally {
-      reconnectingRef.current.delete(winId)
-    }
-  }
-
-  async function connectWindowWithRetry(
-    winId: string,
-    model: string,
-    cwd: string,
-    permissionMode: PermissionMode,
-    sandbox: SandboxMode,
-    initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>,
-    interactionMode?: AgentInteractionMode,
-  ) {
-    try {
-      await connectWindow(winId, model, cwd, permissionMode, sandbox, initialHistory, interactionMode)
-      return
-    } catch {
-      await connectWindow(winId, model, cwd, permissionMode, sandbox, initialHistory, interactionMode)
-    }
-  }
+  // ── Panel lifecycle (connect/reconnect/stall) ──────────────────────
+  const panelLifecycleCtrl = useMemo(() => createPanelLifecycleController({
+    modelConfig,
+    workspaceSettingsByPath,
+    workspaceRoot,
+    api,
+    panelsRef,
+    reconnectingRef,
+    needsContextOnNextCodexSendRef,
+    setPanels,
+    kickQueuedMessage,
+    getModelProvider,
+    clampPanelSecurityForWorkspace,
+  }), [modelConfig, workspaceSettingsByPath, workspaceRoot, api])
+  const { connectWindow, reconnectPanel, connectWindowWithRetry, formatConnectionError } = panelLifecycleCtrl
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -6067,167 +3275,28 @@ export default function App() {
       }
     }, 5000)
     return () => clearInterval(interval)
-  }, [panelActivityById])
+  }, [panelActivityById, reconnectPanel])
 
-  function formatConnectionError(e: unknown, provider?: string): string {
-    const msg = e instanceof Error ? e.message : String(e)
-
-    // Codex
-    if (msg.includes('codex app-server closed') || msg.includes('codex app-server')) {
-      return 'Codex disconnected. Run `codex app-server` in a terminal to debug, or `codex login` if needed. Send another message to reconnect.'
-    }
-    if (provider === 'codex' && msg.includes('no activity for 120 seconds')) {
-      return 'Codex stopped responding (2 min). Try again or use fewer panels.'
-    }
-
-    // Claude — distinguish inactivity timeout (often network) from generic timeout
-    if (msg.includes('timed out') && provider === 'claude') {
-      if (msg.includes('no activity for 120 seconds')) {
-        return 'Claude stopped responding (2 min). Usually network or API delay. Try again.'
-      }
-      return 'Claude timed out. Check credits at claude.ai or run `claude --version`. Send another message to retry.'
-    }
-
-    // OpenAI / OpenRouter
-    if (msg.includes('API key') && (msg.includes('missing') || msg.includes('OpenAI') || msg.includes('OpenRouter'))) {
-      return 'API key missing. Add it in Settings → Connectivity.'
-    }
-    if ((provider === 'openai' || provider === 'openrouter') && msg.includes('timed out')) {
-      return 'Request timed out. Check your connection and retry.'
-    }
-
-    // Gemini
-    if (provider === 'gemini' && msg.includes('timed out')) {
-      return 'Gemini stopped responding. Check `gemini` CLI or try again.'
-    }
-
-    // Generic connection loss
-    if (msg.includes('Not connected') || msg.includes('closed')) {
-      return 'Connection closed. Send another message to reconnect.'
-    }
-
-    return `Error: ${msg}`
-  }
-
-  async function sendToAgent(winId: string, text: string, imagePaths: string[] = []) {
-    const w = panelsRef.current.find((x) => x.id === winId)
-    if (!w) {
-      setPanels((prev) => prev.map((x) => x.id !== winId ? x : { ...x, streaming: false, status: 'Panel not found – message dropped.' }))
-      return
-    }
-    const interactionMode = parseInteractionMode(w.interactionMode)
-    const provider = getModelProvider(w.model)
-
-    if (text.trim() !== AUTO_CONTINUE_PROMPT || !activePromptStartedAtRef.current.has(winId)) {
-      activePromptStartedAtRef.current.set(winId, Date.now())
-    }
-
-    // Resolve @file mentions (mode instructions are now in system prompt, not prepended)
-    let resolvedText = text
-    try {
-      const mentions = Array.from(text.matchAll(/@([^\s]+)/g))
-      if (mentions.length > 0) {
-        let context = ''
-        for (const match of mentions) {
-          const path = match[1]
-          try {
-            const file = await api.readWorkspaceTextFile(workspaceRoot, path)
-            context += `\n\nFile: ${path}\n\`\`\`\n${file.content}\n\`\`\``
-          } catch {
-            // Ignore invalid paths
-          }
-        }
-        resolvedText = text + context
-      }
-    } catch {
-      // Fall back to raw text if mention resolution fails
-    }
-
-    try {
-      appendPanelDebug(winId, 'send', `Received user message (${text.length} chars)`)
-      setPanels((prev) =>
-        prev.map((x) =>
-          x.id !== winId
-            ? x
-            : {
-                ...x,
-                status: `Checking ${provider} auth...`,
-              },
-        ),
-      )
-      const needContext = !w.connected && w.messages.length > 0
-      const initialHistory = needContext ? panelMessagesToInitialHistory(w.messages) : undefined
-      if (needContext && provider === 'codex' && !CODEX_API_MODELS.includes(w.model)) {
-        needsContextOnNextCodexSendRef.current[winId] = true
-      }
-      if (!w.connected) {
-        appendPanelDebug(winId, 'auth', `Checking provider "${provider}"`)
-        await ensureProviderReady(provider, `${w.model}`)
-        setPanels((prev) =>
-          prev.map((x) =>
-            x.id !== winId
-              ? x
-              : {
-                  ...x,
-                  status: `Connecting to ${provider}...`,
-                },
-          ),
-        )
-        appendPanelDebug(winId, 'connect', `Connecting model ${w.model} (${provider})`)
-        await connectWindowWithRetry(winId, w.model, w.cwd, w.permissionMode, w.sandbox, initialHistory, interactionMode)
-        appendPanelDebug(winId, 'connect', 'Connected')
-      }
-      setPanels((prev) =>
-        prev.map((x) =>
-          x.id !== winId
-            ? x
-            : {
-                ...x,
-                status: 'Sending message...',
-              },
-        ),
-      )
-      appendPanelDebug(winId, 'turn/start', 'Starting turn...')
-      if (provider !== 'codex' && provider !== 'gemini' && imagePaths.length > 0) {
-        throw new Error('Image attachments are supported for Codex and Gemini panels only.')
-      }
-      const needsPriorMessages =
-        provider === 'codex' &&
-        !CODEX_API_MODELS.includes(w.model) &&
-        w.messages.length > 0 &&
-        (needContext || needsContextOnNextCodexSendRef.current[winId])
-      const priorMessagesForContext = needsPriorMessages
-        ? w.messages.map((m) => ({ role: m.role, content: m.content ?? '' }))
-        : undefined
-      await withTimeout(
-        api.sendMessage(winId, resolvedText, imagePaths, priorMessagesForContext, interactionMode, applicationSettings.responseStyle),
-        TURN_START_TIMEOUT_MS,
-        'turn/start',
-      )
-      if (needsPriorMessages) {
-        needsContextOnNextCodexSendRef.current[winId] = false
-      }
-      appendPanelDebug(winId, 'turn/start', 'Turn started')
-    } catch (e: any) {
-      activePromptStartedAtRef.current.delete(winId)
-      clearPanelTurnComplete(winId)
-      const errMsg = formatConnectionError(e, provider)
-      appendPanelDebug(winId, 'error', errMsg)
-      setPanels((prev) =>
-        prev.map((x) =>
-          x.id !== winId
-            ? x
-            : {
-                ...x,
-                streaming: false,
-                connected: false,
-                status: 'Disconnected',
-                messages: [...x.messages, { id: newId(), role: 'system', content: errMsg, format: 'text', createdAt: Date.now() }],
-              },
-        ),
-      )
-    }
-  }
+  // ── Agent pipeline (sendToAgent, closePanel, switchModel) ──────────
+  const agentPipelineCtrl = useMemo(() => createAgentPipelineController({
+    workspaceRoot,
+    applicationSettings,
+    panelsRef,
+    activePromptStartedAtRef,
+    needsContextOnNextCodexSendRef,
+    api,
+    setPanels,
+    setLastPromptDurationMsByPanel,
+    getModelProvider,
+    ensureProviderReady,
+    connectWindowWithRetry,
+    connectWindow,
+    formatConnectionError,
+    appendPanelDebug,
+    clearPanelTurnComplete,
+    upsertPanelToHistory,
+  }), [workspaceRoot, applicationSettings, api, connectWindowWithRetry, connectWindow, formatConnectionError])
+  const { sendToAgent, closePanel, switchModel } = agentPipelineCtrl
 
   function kickQueuedMessage(winId: string) {
     let nextText = ''
@@ -6591,66 +3660,6 @@ export default function App() {
     setTimeout(() => resendLastUserMessage(panelId), 0)
   }
 
-  async function closePanel(panelId: string, opts?: { skipUpsertToHistory?: boolean }) {
-    const panel = panelsRef.current.find((w) => w.id === panelId)
-    if (panel && !opts?.skipUpsertToHistory) upsertPanelToHistory(panel)
-    activePromptStartedAtRef.current.delete(panelId)
-    clearPanelTurnComplete(panelId)
-    setLastPromptDurationMsByPanel((prev) => {
-      if (!(panelId in prev)) return prev
-      const next = { ...prev }
-      delete next[panelId]
-      return next
-    })
-    await api.disconnect(panelId).catch(() => {})
-    setPanels((prev) => prev.filter((w) => w.id !== panelId))
-  }
-
-  async function switchModel(winId: string, nextModel: string) {
-    setPanels((prev) =>
-      prev.map((w) =>
-        w.id !== winId
-          ? w
-          : {
-              ...w,
-              model: nextModel,
-              connected: false,
-              status: 'Switching model...',
-            },
-      ),
-    )
-    const panel = panels.find((p) => p.id === winId)
-    const permissionMode = panel?.permissionMode ?? 'verify-first'
-    const sandbox = panel?.sandbox ?? 'workspace-write'
-    const provider = getModelProvider(nextModel)
-    try {
-      await ensureProviderReady(provider, `${nextModel}`)
-      await connectWindow(winId, nextModel, workspaceRoot, permissionMode, sandbox)
-      setPanels((prev) =>
-        prev.map((w) => {
-          if (w.id !== winId) return w
-          return {
-            ...w,
-            cwd: workspaceRoot,
-            messages: withModelBanner(w.messages, nextModel),
-          }
-        }),
-      )
-    } catch (e) {
-      const errMsg = formatConnectionError(e, provider)
-      setPanels((prev) =>
-        prev.map((w) =>
-          w.id !== winId
-            ? w
-            : {
-                ...w,
-                status: 'Disconnected',
-                messages: [...w.messages, { id: newId(), role: 'system' as const, content: errMsg, format: 'text' as const, createdAt: Date.now() }],
-              },
-        ),
-      )
-    }
-  }
 
   function setInteractionMode(panelId: string, nextMode: AgentInteractionMode) {
     setPanels((prev) =>
@@ -6742,500 +3751,6 @@ export default function App() {
       ),
     )
     setSettingsPopoverByPanel((prev) => ({ ...prev, [panelId]: null }))
-  }
-
-  function renderExplorerNode(node: WorkspaceTreeNode, depth = 0): React.ReactNode {
-    const rowPadding = 8 + depth * 10
-    if (node.type === 'file') {
-      const selected = selectedWorkspaceFile === node.relativePath
-      return (
-        <button
-          key={node.relativePath}
-          type="button"
-          role="treeitem"
-          aria-selected={selected}
-          className={`w-full appearance-none text-left py-1 pr-2 rounded-md text-xs font-mono flex items-center gap-2 truncate border border-transparent bg-transparent hover:bg-transparent active:bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-blue-400/60 ${
-            selected
-              ? 'border-blue-300 text-blue-800 dark:border-blue-800 dark:text-blue-100'
-              : 'text-neutral-700 hover:border-neutral-300 dark:text-neutral-300 dark:hover:border-neutral-700'
-          }`}
-          style={{ paddingLeft: `${rowPadding}px` }}
-          onClick={() => setSelectedWorkspaceFile(node.relativePath)}
-          onDoubleClick={() => void openEditorForRelativePath(node.relativePath)}
-          onContextMenu={(e) => {
-            e.preventDefault()
-            setGitContextMenu(null)
-            setExplorerContextMenu({ x: e.clientX, y: e.clientY, relativePath: node.relativePath })
-          }}
-          title={node.relativePath}
-        >
-          <span className="text-neutral-400 dark:text-neutral-500">•</span>
-          <span className="truncate">{node.name}</span>
-        </button>
-      )
-    }
-
-    const expanded = isDirectoryExpanded(node.relativePath, depth)
-    return (
-      <div key={node.relativePath}>
-        <button
-          type="button"
-          role="treeitem"
-          aria-expanded={expanded}
-          className="w-full appearance-none text-left py-1 pr-2 rounded-md text-xs font-mono flex items-center gap-2 truncate border border-transparent bg-transparent hover:bg-transparent active:bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-blue-400/60 text-neutral-700 hover:border-neutral-300 dark:text-neutral-200 dark:hover:border-neutral-700"
-          style={{ paddingLeft: `${rowPadding}px` }}
-          onClick={() => toggleDirectory(node.relativePath)}
-          title={node.relativePath}
-        >
-          <span className="w-3 text-neutral-500 dark:text-neutral-400">{expanded ? '▾' : '▸'}</span>
-          <span className="truncate">{node.name}</span>
-        </button>
-        {expanded && (
-          <div role="group" className="ml-3 border-l border-neutral-200/70 dark:border-neutral-800/80 pl-1">
-            {node.children?.map((child) => renderExplorerNode(child, depth + 1))}
-          </div>
-        )}
-      </div>
-    )
-  }
-
-  function renderExplorerPane() {
-    return (
-      <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
-        <div className="px-3 py-2.5 text-xs">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-medium text-neutral-700 dark:text-neutral-300">Workspace folder</span>
-          </div>
-          <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
-            <div className="flex items-center gap-2">
-              <label className="inline-flex items-center gap-1 text-neutral-600 dark:text-neutral-400">
-                <input
-                  type="checkbox"
-                  checked={showHiddenFiles}
-                  onChange={(e) =>
-                    setExplorerPrefs({
-                      showHiddenFiles: e.target.checked,
-                      showNodeModules,
-                    })
-                  }
-                />
-                Hidden
-              </label>
-              <label className="inline-flex items-center gap-1 text-neutral-600 dark:text-neutral-400">
-                <input
-                  type="checkbox"
-                  checked={showNodeModules}
-                  onChange={(e) =>
-                    setExplorerPrefs({
-                      showHiddenFiles,
-                      showNodeModules: e.target.checked,
-                    })
-                  }
-                />
-                node_modules
-              </label>
-            </div>
-            <div className="inline-flex items-center gap-1.5">
-              <button
-                type="button"
-                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                onClick={() => refreshWorkspaceTree()}
-                title="Refresh workspace folder"
-                aria-label="Refresh workspace folder"
-              >
-                <RefreshIcon size={16} />
-              </button>
-              <button
-                type="button"
-                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                onClick={expandAllDirectories}
-                title="Expand all"
-                aria-label="Expand all"
-              >
-                <ExpandAllIcon size={16} />
-              </button>
-              <button
-                type="button"
-                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                onClick={collapseAllDirectories}
-                title="Collapse all"
-                aria-label="Collapse all"
-              >
-                <CollapseAllIcon size={16} />
-              </button>
-            </div>
-          </div>
-        </div>
-        <div className="flex-1 overflow-auto px-2 pb-2">
-          {workspaceTreeLoading && <p className="text-xs text-neutral-500 dark:text-neutral-400 px-1">Loading workspace folder...</p>}
-          {!workspaceTreeLoading && workspaceTreeError && (
-            <p className="text-xs text-red-600 dark:text-red-400 px-1">{workspaceTreeError}</p>
-          )}
-          {!workspaceTreeLoading && !workspaceTreeError && workspaceTree.length === 0 && (
-            <div className="m-1 px-2 py-3 text-xs text-neutral-500 dark:text-neutral-400">
-              No files found in this workspace.
-            </div>
-          )}
-          {!workspaceTreeLoading && !workspaceTreeError && (
-            <div role="tree" aria-label="Workspace folder">
-              {workspaceTree.map((node) => renderExplorerNode(node))}
-            </div>
-          )}
-        </div>
-        {workspaceTreeTruncated && (
-          <div className="px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50/50 dark:bg-amber-950/20">
-            File list truncated for performance. Use a smaller workspace for full tree view.
-          </div>
-        )}
-      </div>
-    )
-  }
-
-  function renderGitPane() {
-    const canShowEntries = Boolean(gitStatus?.ok)
-    const entries = gitStatus?.entries ?? []
-    const resolvedSelectedPaths = resolveGitSelection()
-    const selectedPathSet = new Set(resolvedSelectedPaths)
-    const hasSelection = resolvedSelectedPaths.length > 0
-    const hasChanges = Boolean(gitStatus?.ok && !gitStatus?.clean)
-    const canCommit = hasSelection ? resolvedSelectedPaths.length > 0 : hasChanges
-    const busy = Boolean(gitOperationPending)
-    const commitTitle = hasSelection ? `Commit selected changes (${resolvedSelectedPaths.length})` : 'Commit all changes'
-    const pushTitle = hasSelection ? `Push (commit selected ${resolvedSelectedPaths.length} first)` : 'Push'
-    const iconBtnClass =
-      'h-8 w-8 inline-flex items-center justify-center rounded-md border font-medium border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed'
-    return (
-      <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
-        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs flex items-center justify-between gap-2">
-          <span className="font-medium text-neutral-700 dark:text-neutral-300 truncate">Git</span>
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              className={iconBtnClass}
-              title={commitTitle}
-              aria-label={commitTitle}
-              disabled={!canCommit || busy}
-              onClick={() => void runGitOperation('commit')}
-            >
-              <CommitIcon size={18} />
-            </button>
-            <button
-              type="button"
-              className={iconBtnClass}
-              title={pushTitle}
-              aria-label={pushTitle}
-              disabled={busy || !gitStatus?.ok}
-              onClick={() => void runGitOperation('push')}
-            >
-              <PushIcon size={18} />
-            </button>
-            <button
-              type="button"
-              className={iconBtnClass}
-              title="Deploy"
-              aria-label="Deploy"
-              disabled={busy || !workspaceRoot}
-              onClick={() => void runGitOperation('deploy')}
-            >
-              <DeployIcon size={18} />
-            </button>
-            <button
-              type="button"
-              className={iconBtnClass}
-              title="Build"
-              aria-label="Build"
-              disabled={busy || !workspaceRoot}
-              onClick={() => void runGitOperation('build')}
-            >
-              <BuildIcon size={18} />
-            </button>
-            <button
-              type="button"
-              className={iconBtnClass}
-              title="Release"
-              aria-label="Release"
-              disabled={busy || !workspaceRoot}
-              onClick={() => void runGitOperation('release')}
-            >
-              <ReleaseIcon size={18} />
-            </button>
-            <button
-              type="button"
-              className={iconBtnClass}
-              title="Refresh"
-              aria-label="Refresh"
-              disabled={busy}
-              onClick={() => void refreshGitStatus()}
-            >
-              <RefreshIcon size={18} />
-            </button>
-          </div>
-        </div>
-        {(gitOperationPending || gitOperationSuccess) && (
-          <div
-            className={`px-3 py-2 text-xs flex items-center gap-2 ${
-              gitOperationPending
-                ? 'bg-blue-50 dark:bg-blue-950/30 text-blue-800 dark:text-blue-200 border-b border-blue-200/60 dark:border-blue-800/50'
-                : 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-200 border-b border-emerald-200/60 dark:border-emerald-800/50'
-            }`}
-          >
-            {gitOperationPending ? (
-              <>
-                <SpinnerIcon size={14} className="animate-spin shrink-0" />
-                <span>
-                  {gitOperationPending === 'commit' && 'Committing…'}
-                  {gitOperationPending === 'push' && 'Pushing…'}
-                  {gitOperationPending === 'deploy' && 'Deploying…'}
-                  {gitOperationPending === 'build' && 'Building…'}
-                  {gitOperationPending === 'release' && 'Releasing…'}
-                </span>
-              </>
-            ) : gitOperationSuccess ? (
-              <>
-                <svg width="18" height="18" viewBox="0 0 14 14" fill="none" className="shrink-0" aria-hidden>
-                  <path d="M3 7l3 3 5-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                <span>
-                  {gitOperationSuccess.op === 'commit' && 'Commit done'}
-                  {gitOperationSuccess.op === 'push' && 'Push done'}
-                  {gitOperationSuccess.op === 'deploy' && 'Deploy done'}
-                  {gitOperationSuccess.op === 'build' && 'Build done'}
-                  {gitOperationSuccess.op === 'release' && 'Release done'}
-                </span>
-              </>
-            ) : null}
-          </div>
-        )}
-        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs space-y-1.5">
-          <div className="font-mono truncate" title={gitStatus?.branch ?? '(unknown)'}>
-            Branch: {gitStatus?.branch ?? '(unknown)'}
-          </div>
-          <div className="flex flex-wrap gap-1 text-[11px]">
-            <span className="px-2 py-0.5 rounded bg-green-100 text-green-900 dark:bg-green-900/30 dark:text-green-200">
-              Staged {gitStatus?.stagedCount ?? 0}
-            </span>
-            <span className="px-2 py-0.5 rounded bg-orange-100 text-orange-900 dark:bg-orange-900/30 dark:text-orange-200">
-              Changed {gitStatus?.unstagedCount ?? 0}
-            </span>
-            <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200">
-              Untracked {gitStatus?.untrackedCount ?? 0}
-            </span>
-          </div>
-          <div className="text-neutral-500 dark:text-neutral-400">
-            Ahead {gitStatus?.ahead ?? 0}, behind {gitStatus?.behind ?? 0} | Updated {formatCheckedAt(gitStatus?.checkedAt)}
-          </div>
-          {hasSelection && (
-            <div className="text-blue-700 dark:text-blue-300">
-              Selected {resolvedSelectedPaths.length} {resolvedSelectedPaths.length === 1 ? 'file' : 'files'}
-            </div>
-          )}
-        </div>
-        <div className="flex-1 overflow-auto p-2 space-y-0.5">
-          {gitStatusLoading && <p className="text-xs text-neutral-500 dark:text-neutral-400 px-1">Loading git status...</p>}
-          {!gitStatusLoading && gitStatusError && <p className="text-xs text-red-600 dark:text-red-400 px-1">{gitStatusError}</p>}
-          {!gitStatusLoading && canShowEntries && gitStatus?.clean && (
-            <div className="m-1 rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 px-3 py-4 text-xs text-neutral-500 dark:text-neutral-400">
-              Working tree clean.
-            </div>
-          )}
-          {!gitStatusLoading && canShowEntries && entries.map((entry) => {
-            const selected = selectedPathSet.has(entry.relativePath)
-            return (
-              <button
-                key={`${entry.relativePath}-${entry.indexStatus}-${entry.workingTreeStatus}`}
-                type="button"
-                aria-selected={selected}
-                className={`w-full text-left px-2.5 py-1 rounded-md text-xs font-mono border text-neutral-800 dark:text-neutral-200 ${
-                  selected
-                    ? 'bg-blue-50/90 border-blue-300 dark:bg-blue-950/30 dark:border-blue-800'
-                    : 'border-transparent bg-transparent hover:bg-blue-50/70 dark:hover:bg-blue-900/20 active:bg-blue-100/70 dark:active:bg-blue-900/40 hover:border-blue-200 dark:hover:border-blue-900/60'
-                }`}
-                onClick={(e) => handleGitEntryClick(entry, e)}
-                onDoubleClick={() => !isDeletedGitEntry(entry) && void openEditorForRelativePath(entry.relativePath)}
-                onContextMenu={(e) => openGitContextMenu(e, entry)}
-                title={entry.relativePath}
-              >
-                <div className="flex items-start gap-2">
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] shrink-0 ${gitEntryClass(entry)}`}>{gitStatusText(entry)}</span>
-                  <span className={`truncate flex-1 ${isDeletedGitEntry(entry) ? 'line-through opacity-70' : ''}`}>{entry.relativePath}</span>
-                </div>
-                {entry.renamedFrom && (
-                  <div className="pl-8 text-[10px] text-neutral-500 dark:text-neutral-400 truncate">
-                    from {entry.renamedFrom}
-                  </div>
-                )}
-              </button>
-            )
-          })}
-        </div>
-      </div>
-    )
-  }
-
-  function renderWorkspaceSettingsPane() {
-    return (
-      <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
-        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
-          <span className="font-medium text-neutral-700 dark:text-neutral-300">Workspace settings</span>
-        </div>
-        <div className="flex-1 overflow-auto px-3 py-3">
-          <div className="space-y-3 text-xs">
-            <div className="space-y-1.5">
-              <label className="text-neutral-600 dark:text-neutral-300">Folder location</label>
-              <div className="grid grid-cols-[1fr_auto] gap-2">
-                <input
-                  className={`w-full ${UI_INPUT_CLASS} font-mono text-xs`}
-                  value={workspaceForm.path}
-                  onChange={(e) => setWorkspaceForm((prev) => ({ ...prev, path: e.target.value }))}
-                  onBlur={(e) => {
-                    const next = normalizeWorkspaceSettingsForm({ ...workspaceForm, path: e.target.value })
-                    if (!next.path) return
-                    void persistWorkspaceSettings(next, { requestSwitch: true })
-                  }}
-                />
-                <button
-                  type="button"
-                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                  onClick={browseForWorkspaceIntoForm}
-                  title="Browse for workspace folder"
-                  aria-label="Browse for workspace folder"
-                >
-                  <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M2.5 4.5H6.2L7.4 5.7H13.5V11.8C13.5 12.4 13.1 12.8 12.5 12.8H3.5C2.9 12.8 2.5 12.4 2.5 11.8V4.5Z" stroke="currentColor" strokeWidth="1.1" />
-                    <path d="M2.5 6.2H13.5" stroke="currentColor" strokeWidth="1.1" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-neutral-600 dark:text-neutral-300">Default model</label>
-              <select
-                className={`w-full ${UI_SELECT_CLASS}`}
-                value={workspaceForm.defaultModel}
-                onChange={(e) =>
-                  updateDockedWorkspaceForm((prev) => ({ ...prev, defaultModel: e.target.value }))
-                }
-              >
-                {getModelOptions(workspaceForm.defaultModel).map((id) => {
-                  const mi = modelConfig.interfaces.find((m) => m.id === id)
-                  return (
-                    <option key={id} value={id}>
-                      {id}
-                    </option>
-                  )
-                })}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-neutral-600 dark:text-neutral-300">Sandbox</label>
-              <select
-                className={`w-full ${UI_SELECT_CLASS}`}
-                value={workspaceForm.sandbox}
-                onChange={(e) =>
-                  updateDockedWorkspaceForm((prev) => {
-                    const nextSandbox = e.target.value as SandboxMode
-                    return {
-                      ...prev,
-                      sandbox: nextSandbox,
-                      permissionMode: nextSandbox === 'read-only' ? 'verify-first' : prev.permissionMode,
-                    }
-                  })
-                }
-              >
-                <option value="read-only">Read only</option>
-                <option value="workspace-write">Workspace write</option>
-              </select>
-              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                {sandboxModeDescription(workspaceForm.sandbox)}
-              </p>
-            </div>
-            {workspaceForm.sandbox !== 'read-only' && (
-              <div className="space-y-1.5">
-                <label className="text-neutral-600 dark:text-neutral-300">Permissions</label>
-                <select
-                  className={`w-full ${UI_SELECT_CLASS}`}
-                  value={workspaceForm.permissionMode}
-                  onChange={(e) =>
-                    updateDockedWorkspaceForm((prev) => ({
-                      ...prev,
-                      permissionMode: e.target.value as PermissionMode,
-                    }))
-                  }
-                >
-                  <option value="verify-first">Verify first (safer)</option>
-                  <option value="proceed-always">Proceed always (autonomous)</option>
-                </select>
-              </div>
-            )}
-            {workspaceForm.sandbox !== 'read-only' && workspaceForm.permissionMode === 'proceed-always' && (
-              <>
-              <div className="space-y-1.5">
-                <label className="text-neutral-600 dark:text-neutral-300">Allowed command prefixes</label>
-                  <textarea
-                    className={`w-full min-h-[96px] ${UI_INPUT_CLASS} font-mono text-xs`}
-                    value={workspaceFormTextDraft.allowedCommandPrefixes}
-                    onChange={(e) =>
-                      updateDockedWorkspaceTextDraft('allowedCommandPrefixes', e.target.value)
-                    }
-                    placeholder={'npm run build:dist:raw\nnpx vite build'}
-                  />
-                  <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                    One prefix per line. Leave blank to allow all commands in Proceed always mode.
-                  </p>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-neutral-600 dark:text-neutral-300">Allowed auto-read paths</label>
-                  <textarea
-                    className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
-                    value={workspaceFormTextDraft.allowedAutoReadPrefixes}
-                    onChange={(e) =>
-                      updateDockedWorkspaceTextDraft('allowedAutoReadPrefixes', e.target.value)
-                    }
-                    placeholder={'src/\npackage.json'}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-neutral-600 dark:text-neutral-300">Allowed auto-write paths</label>
-                  <textarea
-                    className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
-                    value={workspaceFormTextDraft.allowedAutoWritePrefixes}
-                    onChange={(e) =>
-                      updateDockedWorkspaceTextDraft('allowedAutoWritePrefixes', e.target.value)
-                    }
-                    placeholder={'src/\npackage.json'}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-neutral-600 dark:text-neutral-300">Denied auto-read paths</label>
-                  <textarea
-                    className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
-                    value={workspaceFormTextDraft.deniedAutoReadPrefixes}
-                    onChange={(e) =>
-                      updateDockedWorkspaceTextDraft('deniedAutoReadPrefixes', e.target.value)
-                    }
-                    placeholder={'../\n.env'}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-neutral-600 dark:text-neutral-300">Denied auto-write paths</label>
-                  <textarea
-                    className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
-                    value={workspaceFormTextDraft.deniedAutoWritePrefixes}
-                    onChange={(e) =>
-                      updateDockedWorkspaceTextDraft('deniedAutoWritePrefixes', e.target.value)
-                    }
-                  placeholder={'../\n.env'}
-                />
-              </div>
-            </>
-            )}
-            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-              Changes in this panel are saved immediately.
-            </p>
-          </div>
-        </div>
-      </div>
-    )
   }
 
   function renderAgentOrchestratorPane() {
@@ -7354,81 +3869,7 @@ export default function App() {
 
   return (
     <div className="theme-preset h-screen w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden flex flex-col bg-neutral-100 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
-      <style>{`
-        .theme-preset .bg-blue-600 { background-color: var(--theme-accent-600) !important; }
-        .theme-preset .hover\\:bg-blue-500:hover { background-color: var(--theme-accent-500) !important; }
-        .theme-preset .border-blue-500 { border-color: var(--theme-accent-600) !important; }
-        .theme-preset .text-blue-700,
-        .theme-preset .text-blue-800,
-        .theme-preset .text-blue-900 { color: var(--theme-accent-700) !important; }
-        .theme-preset .bg-blue-50,
-        .theme-preset .bg-blue-100,
-        .theme-preset .bg-blue-50\\/90,
-        .theme-preset .bg-blue-50\\/70 { background-color: var(--theme-accent-soft) !important; }
-        .theme-preset .border-blue-200,
-        .theme-preset .border-blue-300 { border-color: color-mix(in srgb, var(--theme-accent-500) 40%, white) !important; }
-        .theme-preset .text-blue-950 { color: var(--theme-accent-700) !important; }
-        .dark .theme-preset .dark\\:bg-blue-950,
-        .dark .theme-preset .dark\\:bg-blue-950\\/20,
-        .dark .theme-preset .dark\\:bg-blue-950\\/25,
-        .dark .theme-preset .dark\\:bg-blue-950\\/30,
-        .dark .theme-preset .dark\\:bg-blue-950\\/40,
-        .dark .theme-preset .dark\\:bg-blue-950\\/50,
-        .dark .theme-preset .dark\\:bg-blue-900\\/40 { background-color: var(--theme-accent-soft-dark) !important; }
-        .dark .theme-preset .dark\\:text-blue-100,
-        .dark .theme-preset .dark\\:text-blue-200,
-        .dark .theme-preset .dark\\:text-blue-300 { color: var(--theme-accent-text) !important; }
-        .dark .theme-preset .dark\\:border-blue-900,
-        .dark .theme-preset .dark\\:border-blue-800,
-        .dark .theme-preset .dark\\:border-blue-900\\/60,
-        .dark .theme-preset .dark\\:border-blue-900\\/70 { border-color: color-mix(in srgb, var(--theme-accent-500) 50%, black) !important; }
-        .dark .theme-preset .dark\\:bg-neutral-950 { background-color: var(--theme-dark-950) !important; }
-        .dark .theme-preset .dark\\:bg-neutral-900 { background-color: var(--theme-dark-900) !important; }
-        .dark .theme-preset .dark\\:bg-neutral-800 { background-color: color-mix(in srgb, var(--theme-dark-900) 84%, white) !important; }
-        .dark .theme-preset .dark\\:border-neutral-800 { border-color: color-mix(in srgb, var(--theme-dark-950) 78%, white) !important; }
-        .dark .theme-preset .dark\\:border-neutral-700 { border-color: color-mix(in srgb, var(--theme-dark-900) 74%, white) !important; }
-        .dark .theme-preset .dark\\:border-neutral-600 { border-color: color-mix(in srgb, var(--theme-dark-900) 65%, white) !important; }
-        .dark .theme-preset .dark\\:text-neutral-300 { color: color-mix(in srgb, #ffffff 82%, var(--theme-dark-900)) !important; }
-        .dark .theme-preset .dark\\:text-neutral-200,
-        .dark .theme-preset .dark\\:text-neutral-100 { color: color-mix(in srgb, #ffffff 90%, var(--theme-dark-900)) !important; }
-        .theme-preset .hover\\:bg-blue-50:hover { background-color: var(--theme-accent-soft) !important; }
-        .dark .theme-preset .dark\\:hover\\:bg-blue-900\\/40:hover,
-        .dark .theme-preset .dark\\:hover\\:bg-blue-900\\/20:hover { background-color: var(--theme-accent-soft-dark) !important; }
-        .theme-preset .hover\\:bg-blue-100:hover { background-color: var(--theme-accent-soft) !important; }
-        .theme-preset .focus-visible\\:ring-blue-400\\/60:focus-visible,
-        .theme-preset .focus\\:ring-blue-100:focus,
-        .theme-preset .ring-blue-100 { box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme-accent-500) 25%, white) !important; }
-        .theme-preset .focus\\:border-blue-400:focus { border-color: var(--theme-accent-600) !important; }
-        .dark .theme-preset .dark\\:focus\\:ring-blue-900\\/40:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme-accent-500) 35%, black) !important; }
-        .dark .theme-preset .dark\\:focus\\:border-blue-700:focus { border-color: var(--theme-accent-600) !important; }
-        .theme-preset .border-blue-400,
-        .theme-preset .dark\\:border-blue-600 { border-color: var(--theme-accent-600) !important; }
-        .dark .theme-preset .dark\\:hover\\:bg-neutral-700:hover { background-color: color-mix(in srgb, var(--theme-dark-900) 74%, white) !important; }
-        .dark .theme-preset .dark\\:hover\\:bg-neutral-800:hover { background-color: color-mix(in srgb, var(--theme-dark-900) 84%, white) !important; }
-        .theme-preset .hover\\:border-blue-200:hover,
-        .theme-preset .dark\\:hover\\:border-blue-900\\/60:hover { border-color: color-mix(in srgb, var(--theme-accent-500) 40%, white) !important; }
-        .dark .theme-preset .dark\\:hover\\:border-blue-900\\/60:hover { border-color: color-mix(in srgb, var(--theme-accent-500) 50%, black) !important; }
-        .theme-preset .hover\\:text-blue-700:hover { color: var(--theme-accent-700) !important; }
-        .dark .theme-preset .dark\\:hover\\:text-blue-300:hover { color: var(--theme-accent-text) !important; }
-
-        .theme-preset * {
-          scrollbar-width: thin;
-          scrollbar-color: rgba(115, 115, 115, 0.55) rgba(229, 229, 229, 0.45);
-        }
-        .theme-preset *::-webkit-scrollbar { width: 10px; height: 10px; }
-        .theme-preset *::-webkit-scrollbar-track { background: rgba(229, 229, 229, 0.45); }
-        .theme-preset *::-webkit-scrollbar-thumb {
-          background: rgba(115, 115, 115, 0.55);
-          border-radius: 999px;
-          border: 2px solid rgba(229, 229, 229, 0.45);
-        }
-        .dark .theme-preset * { scrollbar-color: color-mix(in srgb, var(--theme-dark-900) 65%, white) var(--theme-dark-950); }
-        .dark .theme-preset *::-webkit-scrollbar-track { background: var(--theme-dark-950); }
-        .dark .theme-preset *::-webkit-scrollbar-thumb {
-          background: color-mix(in srgb, var(--theme-dark-900) 65%, white);
-          border-color: var(--theme-dark-950);
-        }
-      `}</style>
+      <style>{THEME_PRESET_CSS}</style>
       {/* appHeaderBar: main top bar with Workspace/History dropdowns and layout toggles */}
       <div data-app-header-bar="true" className="shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 px-4 py-3 bg-white dark:bg-neutral-950">
         <div className="flex flex-wrap items-center justify-between gap-2.5 text-xs min-w-0">
@@ -7469,7 +3910,7 @@ export default function App() {
             <button
               type="button"
               className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
-              onClick={() => openWorkspaceSettings('new')}
+              onClick={() => workspaceSettings.openWorkspaceSettings('new')}
               title="New workspace"
             >
               <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
@@ -7479,7 +3920,7 @@ export default function App() {
             <button
               type="button"
               className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
-              onClick={() => openWorkspaceSettings('edit')}
+              onClick={() => workspaceSettings.openWorkspaceSettings('edit')}
               title="Edit selected workspace"
             >
               <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
@@ -7828,7 +4269,7 @@ export default function App() {
           <div
             className="fixed inset-0 z-40"
             aria-hidden
-            onClick={() => setExplorerContextMenu(null)}
+            onClick={closeExplorerContextMenu}
           />
           <div
             className="fixed z-50 py-1 min-w-[120px] rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 shadow-lg"
@@ -7837,10 +4278,7 @@ export default function App() {
             <button
               type="button"
               className="w-full px-3 py-1.5 text-left text-xs text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
-              onClick={() => {
-                void openEditorForRelativePath(explorerContextMenu.relativePath)
-                setExplorerContextMenu(null)
-              }}
+              onClick={() => openFileFromExplorerContextMenu(explorerContextMenu.relativePath)}
             >
               Open
             </button>
@@ -10218,9 +6656,9 @@ export default function App() {
                   value={workspaceForm.path}
                   onChange={(e) => setWorkspaceForm((prev) => ({ ...prev, path: e.target.value }))}
                   onBlur={(e) => {
-                    const next = normalizeWorkspaceSettingsForm({ ...workspaceForm, path: e.target.value })
+                    const next = workspaceSettings.normalizeWorkspaceSettingsForm({ ...workspaceForm, path: e.target.value })
                     if (!next.path) return
-                    void persistWorkspaceSettings(next, { requestSwitch: true })
+                    void workspaceSettings.persistWorkspaceSettings(next, { requestSwitch: true })
                   }}
                 />
                 <button
@@ -10242,7 +6680,7 @@ export default function App() {
                   className={UI_SELECT_CLASS}
                   value={workspaceForm.defaultModel}
                   onChange={(e) =>
-                    updateWorkspaceModalForm((prev) => ({ ...prev, defaultModel: e.target.value }))
+                    workspaceSettings.updateWorkspaceModalForm((prev) => ({ ...prev, defaultModel: e.target.value }))
                   }
                 >
                   {getModelOptions(workspaceForm.defaultModel).map((id) => {
@@ -10262,7 +6700,7 @@ export default function App() {
                     className={`w-full ${UI_SELECT_CLASS}`}
                     value={workspaceForm.sandbox}
                     onChange={(e) =>
-                      updateWorkspaceModalForm((prev) => {
+                      workspaceSettings.updateWorkspaceModalForm((prev) => {
                         const nextSandbox = e.target.value as SandboxMode
                         return {
                           ...prev,
@@ -10288,7 +6726,7 @@ export default function App() {
                     className={UI_SELECT_CLASS}
                     value={workspaceForm.permissionMode}
                     onChange={(e) =>
-                      updateWorkspaceModalForm((prev) => ({
+                      workspaceSettings.updateWorkspaceModalForm((prev) => ({
                         ...prev,
                         permissionMode: e.target.value as PermissionMode,
                       }))
@@ -10306,7 +6744,7 @@ export default function App() {
                     <textarea
                       className={`w-full min-h-[96px] ${UI_INPUT_CLASS} font-mono text-xs`}
                       value={workspaceFormTextDraft.allowedCommandPrefixes}
-                      onChange={(e) => updateWorkspaceModalTextDraft('allowedCommandPrefixes', e.target.value)}
+                      onChange={(e) => workspaceSettings.updateWorkspaceModalTextDraft('allowedCommandPrefixes', e.target.value)}
                       placeholder={'npm run build:dist:raw\nnpx vite build'}
                     />
                     <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
@@ -10329,7 +6767,7 @@ export default function App() {
                     className="px-3 py-1.5 text-sm rounded border border-red-300 bg-white text-red-600 hover:bg-red-50 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400 dark:hover:bg-red-900/30"
                     onClick={() => {
                       if (confirm(`Delete workspace "${workspaceForm.path}"?`)) {
-                        void deleteWorkspace(workspaceForm.path)
+                        void workspaceSettings.deleteWorkspace(workspaceForm.path)
                       }
                     }}
                   >
@@ -10445,20 +6883,14 @@ export default function App() {
             : '#059669'
 
     return (
-      <div
-        className={[
-          'relative h-full min-h-0 min-w-0 flex flex-col rounded-xl border bg-white dark:bg-neutral-950 overflow-hidden outline-none shadow-sm',
-          settingsPopover ? 'z-40' : 'z-0',
-          activePanelId === w.id
-            ? 'border-blue-400 dark:border-blue-600 ring-2 ring-blue-100 dark:ring-blue-900/40'
-            : 'border-neutral-200/90 dark:border-neutral-800',
-        ].join(' ')}
-        tabIndex={0}
-        onFocusCapture={() => {
+      <AgentPanelShell
+        isActive={activePanelId === w.id}
+        hasSettingsPopover={Boolean(settingsPopover)}
+        onFocus={() => {
           setActivePanelId(w.id)
           setFocusedEditorId(null)
         }}
-        onMouseDownCapture={() => {
+        onMouseDown={() => {
           setActivePanelId(w.id)
           setFocusedEditorId(null)
         }}
@@ -10476,1133 +6908,135 @@ export default function App() {
           setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
         }}
       >
-        <div
-          data-agent-panel-header="true"
-          className="relative flex items-center justify-between gap-2 min-w-0 px-3 py-2.5 border-b border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-950 shrink-0"
-          onDragOver={(e) => panels.length > 1 && handleDragOver(e, { acceptAgent: true, targetId: `agent-${w.id}` })}
-          onDrop={(e) => panels.length > 1 && handleAgentDrop(e, w.id)}
-        >
-          {draggingPanelId && draggingPanelId !== w.id && dragOverTarget === `agent-${w.id}` && (
-            <div className="absolute inset-0 rounded-none pointer-events-none z-10" style={DROP_ZONE_OVERLAY_STYLE} />
-          )}
-          <div
-            className="flex-1 min-w-0 flex items-center gap-2 select-none"
-            title={panels.length > 1 ? `${w.title} — drag to reorder` : w.title}
-            draggable={panels.length > 1}
-            onDragStart={(e) => panels.length > 1 && handleDragStart(e, 'agent', w.id)}
-            onDragEnd={handleDragEnd}
-          >
-            {panels.length > 1 && (
-              <span className="shrink-0 flex text-neutral-400 dark:text-neutral-500 touch-none" aria-hidden="true">
-                <svg width="14" height="14" viewBox="0 0 12 12" fill="currentColor">
-                  <circle cx="4" cy="3" r="1" /><circle cx="8" cy="3" r="1" />
-                  <circle cx="4" cy="6" r="1" /><circle cx="8" cy="6" r="1" />
-                  <circle cx="4" cy="9" r="1" /><circle cx="8" cy="9" r="1" />
-                </svg>
-              </span>
-            )}
-            <span className="text-sm font-semibold tracking-tight truncate">{getConversationPrecis(w)}</span>
-          </div>
-          <div className="flex items-center gap-1 shrink-0 cursor-default">
-            <button
-              className={[
-                'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-                'border-neutral-300 bg-white text-neutral-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700',
-                'dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-blue-950/50 dark:hover:text-blue-300 dark:hover:border-blue-900/60',
-              ].join(' ')}
-              onClick={() => splitAgentPanel(w.id)}
-              disabled={panels.length >= MAX_PANELS}
-              title={panels.length >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'Split panel'}
-              aria-label="Split panel"
-            >
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-label="Split Panel">
-                <path d="M1 2.25C1 1.56 1.56 1 2.25 1h13.5c.69 0 1.25.56 1.25 1.25v13.5c0 .69-.56 1.25-1.25 1.25H2.25A1.25 1.25 0 0 1 1 15.75V2.25z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M9 2V16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </button>
-            <button
-              className={[
-                'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border transition-colors',
-                'border-neutral-300 bg-white text-neutral-700 hover:border-red-200 hover:bg-red-50 hover:text-red-700',
-                'dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-red-950/50 dark:hover:text-red-300 dark:hover:border-red-900/60',
-              ].join(' ')}
-              onClick={() => closePanel(w.id)}
-              title="Close"
-            >
-              <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-                <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </button>
-          </div>
-        </div>
+        <AgentPanelHeader
+          panel={w}
+          panelsCount={panels.length}
+          draggingPanelId={draggingPanelId}
+          dragOverTarget={dragOverTarget}
+          onDragOver={(e) => handleDragOver(e, { acceptAgent: true, targetId: `agent-${w.id}` })}
+          onDrop={(e) => handleAgentDrop(e, w.id)}
+          onDragStart={(e) => handleDragStart(e, 'agent', w.id)}
+          onDragEnd={handleDragEnd}
+          onSplit={() => splitAgentPanel(w.id)}
+          onClose={() => closePanel(w.id)}
+        />
 
-        <div
-          ref={(el) => registerMessageViewport(w.id, el)}
+        <AgentPanelMessageViewport
+          registerRef={(el) => registerMessageViewport(w.id, el)}
           onScroll={() => onMessageViewportScroll(w.id)}
           onContextMenu={onChatHistoryContextMenu}
-          className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 space-y-2.5 bg-neutral-50 dark:bg-neutral-950 min-h-0"
-          style={panelTextStyle}
+          panelTextStyle={panelTextStyle}
         >
-          {timelineUnits.length === 0 && (
-            <div className="mx-auto mt-8 max-w-2xl rounded-2xl border border-dashed border-neutral-300 bg-white/90 px-5 py-5 text-sm shadow-sm dark:border-neutral-700 dark:bg-neutral-900/70">
-              <div className="text-base font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
-                Start a new agent turn
-              </div>
-              <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-                Ask for a plan, implementation, review, or debugging help in this workspace.
-              </p>
-              <div className="mt-4 flex flex-wrap gap-2 text-[11px]">
-                <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2 py-0.5 text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
-                  Enter to send
-                </span>
-                <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2 py-0.5 text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
-                  Shift+Enter for new line
-                </span>
-                <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2 py-0.5 text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
-                  Ctrl+Mousewheel to zoom text
-                </span>
-              </div>
-            </div>
-          )}
-          {(() => {
-            type Row = { type: 'single'; unit: TimelineUnit } | { type: 'operationBatch'; units: TimelineUnit[] } | { type: 'thinkingBatch'; units: TimelineUnit[] }
-            const isToolThinking = (u: TimelineUnit) => u.kind === 'thinking' && u.body.startsWith('\u{1F504} ')
-            const rows: Row[] = []
-            let i = 0
-            while (i < timelineUnits.length) {
-              const unit = timelineUnits[i]
-              const isOp = unit.kind === 'activity' && unit.activityKind === 'operation'
-              if (isOp && showOperationTrace) {
-                const batch: TimelineUnit[] = []
-                while (i < timelineUnits.length && timelineUnits[i].kind === 'activity' && timelineUnits[i].activityKind === 'operation') {
-                  batch.push(timelineUnits[i])
-                  i += 1
-                }
-                rows.push({ type: 'operationBatch', units: batch })
-                continue
-              }
-              if (isToolThinking(unit)) {
-                const batch: TimelineUnit[] = []
-                while (i < timelineUnits.length && isToolThinking(timelineUnits[i])) {
-                  batch.push(timelineUnits[i])
-                  i += 1
-                }
-                rows.push({ type: 'thinkingBatch', units: batch })
-                continue
-              }
-              rows.push({ type: 'single', unit })
-              i += 1
-            }
-            return rows.map((row) => {
-              if (row.type === 'operationBatch' || row.type === 'thinkingBatch') {
-                const INLINE_LIMIT = 10
-                const items = row.units
-                const isOps = row.type === 'operationBatch'
-                const batchKey = `${isOps ? 'op' : 'think'}-batch-${items.map((u) => u.id).join('-')}`
-                const lastInProgress = items[items.length - 1]?.status === 'in_progress'
-                const batchColor = isOps ? operationTraceColor : timelineMessageColor
-                const renderItem = (u: TimelineUnit) => {
-                  const rawText = (isOps ? u.body.replace(/\s*\n+\s*/g, ' | ') : u.body.replace(/^\u{1F504}\s*/u, '')).trim()
-                  const text = formatToolTrace(rawText)
-                  return (
-                    <div key={u.id} className="px-1 py-0">
-                      <div
-                        className={`text-[11px] leading-[1.4] truncate ${u.status === 'in_progress' ? 'animate-pulse motion-reduce:animate-none' : ''}`}
-                        style={{ color: batchColor }}
-                        title={rawText}
-                      >
-                        {text}
-                      </div>
-                    </div>
-                  )
-                }
+          <ChatTimeline
+            timelineUnits={timelineUnits}
+            showOperationTrace={showOperationTrace}
+            showReasoningUpdates={showReasoningUpdates}
+            showActivityUpdates={showActivityUpdates}
+            timelineOpenByUnitId={timelineOpenByUnitId}
+            setTimelineOpenByUnitId={setTimelineOpenByUnitId}
+            codeBlockOpenById={codeBlockOpenById}
+            setCodeBlockOpenById={setCodeBlockOpenById}
+            timelinePinnedCodeByUnitId={timelinePinnedCodeByUnitId}
+            setTimelinePinnedCodeByUnitId={setTimelinePinnedCodeByUnitId}
+            operationTraceColor={operationTraceColor}
+            timelineMessageColor={timelineMessageColor}
+            debugNoteColor={debugNoteColor}
+            activeTheme={activeTheme}
+            panelId={w.id}
+            isStreaming={w.streaming}
+            permissionMode={w.permissionMode}
+            isIdle={isIdle}
+            activityClock={activityClock}
+            lastAgentTimelineUnitId={lastAgentTimelineUnitId}
+            lastUserUnitId={lastUserUnitId}
+            completedPromptDurationLabel={completedPromptDurationLabel}
+            resendingPanelId={resendingPanelId}
+            queueCount={queueCount}
+            pendingInputs={w.pendingInputs}
+            editingQueuedIndex={editingQueuedIndex}
+            formatToolTrace={formatToolTrace}
+            onChatLinkClick={onChatLinkClick}
+            onGrantPermissionAndResend={() => grantPermissionAndResend(w.id)}
+            onRecallLastUserMessage={() => recallLastUserMessage(w.id)}
+            onResendLastUserMessage={() => resendLastUserMessage(w.id)}
+            onBeginQueuedMessageEdit={(i) => beginQueuedMessageEdit(w.id, i)}
+            onInjectQueuedMessage={(i) => injectQueuedMessage(w.id, i)}
+            onRemoveQueuedMessage={(i) => removeQueuedMessage(w.id, i)}
+          />
+        </AgentPanelMessageViewport>
 
-                if (items.length <= INLINE_LIMIT) {
-                  return (
-                    <div key={batchKey} className="w-full space-y-0">
-                      {items.map(renderItem)}
-                    </div>
-                  )
-                }
-
-                const batchOpen = timelineOpenByUnitId[batchKey] ?? false
-                const label = lastInProgress ? 'Working...' : `${items.length} tool steps`
-                return (
-                  <div key={batchKey} className="w-full">
-                    <button
-                      type="button"
-                      className={`w-full text-left cursor-pointer py-1 px-1 text-[11px] flex items-center gap-1.5 select-none hover:opacity-80 bg-transparent border-0 outline-none ${lastInProgress ? 'animate-pulse motion-reduce:animate-none' : ''}`}
-                      style={{ color: batchColor }}
-                      onClick={() => setTimelineOpenByUnitId((prev) => ({ ...prev, [batchKey]: !batchOpen }))}
-                    >
-                      <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className={`shrink-0 transition-transform ${batchOpen ? 'rotate-90' : ''}`} aria-hidden>
-                        <path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                      <span>{label}</span>
-                    </button>
-                    {batchOpen && (
-                      <div className="space-y-0 pl-3">
-                        {items.map(renderItem)}
-                      </div>
-                    )}
-                  </div>
-                )
-              }
-              const unit = row.unit
-              if (unit.kind === 'activity') {
-                const isReasoningActivity = unit.activityKind === 'reasoning'
-                const isOperationTrace = unit.activityKind === 'operation'
-                if (isOperationTrace) return null
-                if (isReasoningActivity && !showReasoningUpdates) return null
-                if (!isReasoningActivity && !showActivityUpdates) return null
-              const isOpen = timelineOpenByUnitId[unit.id] ?? unit.defaultOpen
-              const activitySummary = unit.title || unit.body.trim().split(/\r?\n/)[0]?.slice(0, 80) || 'Activity'
-              return (
-                <div key={unit.id} className="w-full py-1">
-                  <details
-                    open={isOpen}
-                    onToggle={(e) => {
-                      const next = e.currentTarget.open
-                      setTimelineOpenByUnitId((prev) => (prev[unit.id] === next ? prev : { ...prev, [unit.id]: next }))
-                    }}
-                    className="group"
-                  >
-                    <summary
-                      className="list-none cursor-pointer py-0.5 text-[10.5px] flex items-center justify-between gap-2 [&_*]:text-current"
-                      style={{ color: timelineMessageColor }}
-                    >
-                      <span>{activitySummary}</span>
-                      <svg
-                        width="12"
-                        height="12"
-                        viewBox="0 0 12 12"
-                        fill="none"
-                        className="transition-transform group-open:rotate-180"
-                        aria-hidden
-                      >
-                        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </summary>
-                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5 [&_*]:!text-current" style={{ color: timelineMessageColor }}>
-                      {unit.body}
-                    </div>
-                  </details>
-                </div>
-              )
+        <ChatInputSection
+          panel={w}
+          panelFontSizePx={panelFontSizePx}
+          panelLineHeightPx={panelLineHeightPx}
+          hasInput={hasInput}
+          isBusy={isBusy}
+          draftEdit={draftEdit}
+          sendTitle={sendTitle}
+          livePromptDurationLabel={livePromptDurationLabel}
+          timelineMessageColor={timelineMessageColor}
+          contextUsage={contextUsage ?? null}
+          contextUsagePercent={contextUsagePercent}
+          contextUsageStrokeColor={contextUsageStrokeColor}
+          activityDotClass={activityDotClass}
+          activityLabel={activityLabel}
+          activityTitle={activityTitle}
+          isRunning={isRunning}
+          showCompletionNotice={showCompletionNotice}
+          settingsPopover={settingsPopover}
+          interactionMode={interactionMode}
+          effectiveSandbox={effectiveSandbox}
+          effectivePermissionMode={effectivePermissionMode}
+          sandboxLockedToView={sandboxLockedToView}
+          permissionDisabledByReadOnlySandbox={permissionDisabledByReadOnlySandbox}
+          permissionLockedToVerifyFirst={permissionLockedToVerifyFirst}
+          modelConfig={modelConfig}
+          providerAuthByName={providerAuthByName}
+          providerVerifiedByName={providerVerifiedByName}
+          getModelProvider={getModelProvider}
+          getModelOptions={getModelOptions}
+          textareaRef={(el) => registerTextarea(w.id, el)}
+          onInputChange={(next) => {
+            setPanels((prev) => prev.map((x) => (x.id === w.id ? { ...x, input: next } : x)))
+            queueMicrotask(() => autoResizeTextarea(w.id))
+          }}
+          onFocus={() => setActivePanelId(w.id)}
+          onPasteImage={(file) => void handlePasteImage(w.id, file)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              sendMessage(w.id)
             }
-            const m = {
-              id: unit.id,
-              role: (unit.kind === 'user' ? 'user' : unit.kind === 'system' ? 'system' : 'assistant') as ChatRole,
-              content: unit.body,
-              format: (unit.markdown ? 'markdown' : 'text') as MessageFormat,
-              attachments: unit.attachments,
-              createdAt: unit.createdAt,
-            }
-            const isDebugSystemNote = m.role === 'system' && /^Debug \(/.test(m.content)
-            const isLimitSystemWarning = m.role === 'system' && m.content.startsWith(LIMIT_WARNING_PREFIX)
-            const isApprovalRequiredMessage = m.role === 'system' && isPermissionEscalationMessage(m.content)
-            const canShowGrantPermissionButton =
-              isApprovalRequiredMessage &&
-              !w.streaming &&
-              w.permissionMode !== 'proceed-always'
-            const codeUnitPinned = Boolean(timelinePinnedCodeByUnitId[unit.id])
-            const isCodeLifecycleUnit = unit.kind === 'code'
-            const hasFencedCodeBlocks = m.content.includes('```')
-            let codeBlockIndex = 0
-            const shouldCollapseThinking = unit.kind === 'thinking'
-            const thinkingOpen = timelineOpenByUnitId[unit.id] ?? unit.defaultOpen
-            const thinkingInProgress = unit.status === 'in_progress'
-            const thinkingSummary = m.content.trim().split(/\r?\n/)[0]?.trim().slice(0, 80) || 'Progress update'
-            const messageContainerStyle = !shouldCollapseThinking && isDebugSystemNote ? { color: debugNoteColor } : undefined
-            const showCompletedDurationOnMessage = Boolean(
-              completedPromptDurationLabel && lastAgentTimelineUnitId === unit.id,
+          }}
+          onContextMenu={onInputPanelContextMenu}
+          onSend={() => sendMessage(w.id)}
+          onInterrupt={() => void api.interrupt(w.id)}
+          onCancelDraftEdit={() => cancelDraftEdit(w.id)}
+          onRemoveAttachment={(attachmentId) =>
+            setPanels((prev) =>
+              prev.map((p) =>
+                p.id !== w.id ? p : { ...p, attachments: p.attachments.filter((x) => x.id !== attachmentId) },
+              ),
             )
-            const isLastUserMessage = m.role === 'user' && unit.id === lastUserUnitId
-            const lastUserMessageAgeMs = isLastUserMessage
-              ? Math.max(0, activityClock - (m.createdAt ?? activityClock))
-              : Number.POSITIVE_INFINITY
-            const canRecallLastUserMessage = isLastUserMessage && isIdle && lastUserMessageAgeMs <= LAST_USER_RECALL_EXPIRY_MS
-            const canResendLastUserMessage = isLastUserMessage && isIdle
-            return (
-            <div key={m.id} data-unit-id={unit.id} className="w-full">
-              <div
-                className={[
-                  'w-full relative group',
-                  shouldCollapseThinking
-                    ? 'py-1'
-                    : [
-                        'rounded-2xl px-3.5 py-2.5 border shadow-sm',
-                        m.role === 'user'
-                          ? 'bg-blue-50/90 border-blue-200 text-blue-950 dark:bg-blue-950/40 dark:border-blue-900 dark:text-blue-100'
-                          : 'bg-white border-neutral-200/90 text-neutral-900 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-100',
-                        m.role === 'system'
-                          ? 'bg-neutral-50 border-neutral-200 text-neutral-700 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-300'
-                          : '',
-                        isLimitSystemWarning
-                          ? 'bg-amber-50/95 border-amber-300 text-amber-900 dark:bg-amber-950/35 dark:border-amber-800 dark:text-amber-200'
-                          : '',
-                        isDebugSystemNote
-                          ? 'bg-red-50/90 border-red-200 text-red-900 dark:bg-red-950/35 dark:border-red-900 dark:text-red-200'
-                          : '',
-                      ].join(' '),
-                ].filter(Boolean).join(' ')}
-                style={messageContainerStyle}
-              >
-                {m.role === 'user' && unit.id === lastUserUnitId && resendingPanelId === w.id && (
-                  <div className="absolute inset-0 rounded-2xl animate-pulse bg-blue-200/30 dark:bg-blue-400/10 pointer-events-none" />
-                )}
-                {isCodeLifecycleUnit && hasFencedCodeBlocks && (
-                  <div className="mb-2 flex justify-end">
-                    <button
-                      type="button"
-                      className="text-[11px] px-2 py-1 rounded border border-neutral-300 bg-white/80 text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                      onClick={() =>
-                        setTimelinePinnedCodeByUnitId((prev) => ({
-                          ...prev,
-                          [unit.id]: !codeUnitPinned,
-                        }))
-                      }
-                      title={codeUnitPinned ? 'Unpin code blocks' : 'Keep code blocks open after completion'}
-                    >
-                      {codeUnitPinned ? 'Pinned open' : 'Pin open'}
-                    </button>
-                  </div>
-                )}
-                {shouldCollapseThinking ? (
-                  <details
-                    open={thinkingOpen}
-                    onToggle={(e) => {
-                      const next = e.currentTarget.open
-                      setTimelineOpenByUnitId((prev) =>
-                        prev[unit.id] === next ? prev : { ...prev, [unit.id]: next },
-                      )
-                    }}
-                    className="group"
-                  >
-                    <summary
-                      className={`list-none cursor-pointer py-0.5 text-[10.5px] flex items-center justify-between gap-2 ${thinkingInProgress ? 'animate-pulse motion-reduce:animate-none' : ''}`}
-                      style={{ color: timelineMessageColor }}
-                    >
-                      <span>{thinkingSummary}</span>
-                      <svg
-                        width="12"
-                        height="12"
-                        viewBox="0 0 12 12"
-                        fill="none"
-                        className="transition-transform group-open:rotate-180"
-                        aria-hidden
-                      >
-                        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </summary>
-                    <div className="mt-1 pl-0 py-1 text-[12px] leading-5 [&_*]:!text-current" style={{ color: timelineMessageColor }}>
-                      {m.role === 'assistant' && m.format === 'markdown' ? (
-                        <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-headings:my-1 prose-ul:my-0.5 prose-li:my-0 prose-code:text-[currentColor]">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              pre(props) {
-                                const first = React.Children.toArray(props.children)[0] as any
-                                const codeClass = typeof first?.props?.className === 'string' ? first.props.className : ''
-                                const rawChildren = first?.props?.children
-                                const codeText = Array.isArray(rawChildren) ? rawChildren.join('') : String(rawChildren ?? '')
-                                const normalized = codeText.replace(/\n$/, '')
-                                const lineCount = normalized ? normalized.split('\n').length : 0
-                                const lang = codeClass.startsWith('language-') ? codeClass.slice('language-'.length) : 'code'
-                                const isDiff = lang === 'diff' || looksLikeDiff(normalized)
-                                const diffLines = normalized.split('\n')
-                                const openByDefault = isCodeLifecycleUnit
-                                  ? unit.status === 'in_progress' || codeUnitPinned
-                                  : lineCount <= COLLAPSIBLE_CODE_MIN_LINES
-                                const codeBlockId = `${m.id}:${codeBlockIndex++}`
-                                const isOpen = codeBlockOpenById[codeBlockId] ?? openByDefault
-                                return (
-                                  <div className="group my-2 rounded-lg border border-neutral-300/80 dark:border-neutral-700/80 bg-neutral-100/80 dark:bg-neutral-900/65">
-                                    <button
-                                      type="button"
-                                      data-chat-code-rollup="true"
-                                      className="w-full text-left cursor-pointer px-3 py-2.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between gap-2 bg-transparent border-0 outline-none hover:opacity-80"
-                                      onClick={() =>
-                                        setCodeBlockOpenById((prev) => {
-                                          const current = prev[codeBlockId] ?? openByDefault
-                                          return { ...prev, [codeBlockId]: !current }
-                                        })
-                                      }
-                                    >
-                                      <span className="inline-flex items-center gap-1.5">
-                                        <span>{lang} - {lineCount} lines</span>
-                                        {isDiff && (
-                                          <span className="rounded border border-emerald-300 bg-emerald-100 px-1.5 py-0.5 text-[10px] leading-none text-emerald-900 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">
-                                            DIFF
-                                          </span>
-                                        )}
-                                      </span>
-                                      <svg
-                                        width="12"
-                                        height="12"
-                                        viewBox="0 0 12 12"
-                                        fill="none"
-                                        className={`shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
-                                        aria-hidden
-                                      >
-                                        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                                      </svg>
-                                    </button>
-                                    {isOpen && (
-                                    <div className="rounded-b-lg overflow-hidden border-t border-neutral-300/70 dark:border-neutral-700/80">
-                                      {isDiff ? (
-                                        <div className="p-3 overflow-auto max-h-80 whitespace-pre bg-white/80 dark:bg-neutral-950/80">
-                                          <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>
-                                            {diffLines.map((line, idx) => (
-                                              <div
-                                                key={idx}
-                                                className={[
-                                                  line.startsWith('+') ? 'bg-emerald-100/80 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-200' : '',
-                                                  line.startsWith('-') ? 'bg-rose-100/80 text-rose-900 dark:bg-rose-900/30 dark:text-rose-200' : '',
-                                                ].join(' ')}
-                                              >
-                                                {line}
-                                              </div>
-                                            ))}
-                                          </code>
-                                        </div>
-                                      ) : (
-                                        <SyntaxHighlighter
-                                          language={lang}
-                                          style={activeTheme.mode === 'dark' ? oneDark : oneLight}
-                                          customStyle={{ margin: 0, padding: '0.75rem', maxHeight: '20rem', overflow: 'auto', fontSize: '12px', background: activeTheme.mode === 'dark' ? 'rgba(10, 10, 10, 0.5)' : 'rgba(255, 255, 255, 0.5)' }}
-                                          showLineNumbers={true}
-                                          wrapLines={false}
-                                        >
-                                          {normalized}
-                                        </SyntaxHighlighter>
-                                      )}
-                                    </div>
-                                    )}
-                                  </div>
-                                )
-                              },
-                              code(props) {
-                                const { children, className } = props as any
-                                const isBlock = typeof className === 'string' && className.includes('language-')
-                                if (isBlock) return <code className={className}>{children}</code>
-                                return (
-                                  <code className="px-1 py-0.5 rounded bg-blue-100 text-blue-900 dark:bg-blue-950/50 dark:text-blue-200">
-                                    {children}
-                                  </code>
-                                )
-                              },
-                              a(props) {
-                                const { href, children } = props as any
-                                const target = typeof href === 'string' ? href : ''
-                                return (
-                                  <a
-                                    href={target || undefined}
-                                    title={target || undefined}
-                                    className="text-blue-700 underline underline-offset-2 decoration-blue-400 hover:text-blue-800 dark:text-blue-300 dark:hover:text-blue-200"
-                                    onClick={(e) => {
-                                      if (!target) return
-                                      e.preventDefault()
-                                      void onChatLinkClick(target)
-                                    }}
-                                  >
-                                    {children}
-                                  </a>
-                                )
-                              },
-                            }}
-                          >
-                            {m.content}
-                          </ReactMarkdown>
-                        </div>
-                      ) : (
-                        <div
-                          className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] ${
-                            isDebugSystemNote
-                              ? 'italic'
-                              : isLimitSystemWarning
-                                ? 'font-semibold text-amber-900 dark:text-amber-200'
-                              : 'text-neutral-700 dark:text-neutral-300'
-                          }`}
-                          style={isDebugSystemNote ? { color: debugNoteColor } : undefined}
-                        >
-                          {m.content}
-                        </div>
-                      )}
-                    </div>
-                  </details>
-                ) : m.role === 'assistant' && m.format === 'markdown' ? (
-                  <div className="prose prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-ul:my-0.5 prose-li:my-0 prose-code:text-blue-800 dark:prose-code:text-blue-300">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        pre(props) {
-                          const first = React.Children.toArray(props.children)[0] as any
-                          const codeClass = typeof first?.props?.className === 'string' ? first.props.className : ''
-                          const rawChildren = first?.props?.children
-                          const codeText = Array.isArray(rawChildren) ? rawChildren.join('') : String(rawChildren ?? '')
-                          const normalized = codeText.replace(/\n$/, '')
-                          const lineCount = normalized ? normalized.split('\n').length : 0
-                          const lang = codeClass.startsWith('language-') ? codeClass.slice('language-'.length) : 'code'
-                          const isDiff = lang === 'diff' || looksLikeDiff(normalized)
-                          const diffLines = normalized.split('\n')
-                          const openByDefault = isCodeLifecycleUnit
-                            ? unit.status === 'in_progress' || codeUnitPinned
-                            : lineCount <= COLLAPSIBLE_CODE_MIN_LINES
-                          const codeBlockId = `${m.id}:${codeBlockIndex++}`
-                          const isOpen = codeBlockOpenById[codeBlockId] ?? openByDefault
-                          return (
-                            <div className="group my-2 rounded-lg border border-neutral-300/80 dark:border-neutral-700/80 bg-neutral-100/80 dark:bg-neutral-900/65">
-                              <button
-                                type="button"
-                                data-chat-code-rollup="true"
-                                className="w-full text-left cursor-pointer px-3 py-2.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-200 flex items-center justify-between gap-2 bg-transparent border-0 outline-none hover:opacity-80"
-                                onClick={() =>
-                                  setCodeBlockOpenById((prev) => {
-                                    const current = prev[codeBlockId] ?? openByDefault
-                                    return { ...prev, [codeBlockId]: !current }
-                                  })
-                                }
-                              >
-                                <span className="inline-flex items-center gap-1.5">
-                                  <span>{lang} - {lineCount} lines</span>
-                                  {isDiff && (
-                                    <span className="rounded border border-emerald-300 bg-emerald-100 px-1.5 py-0.5 text-[10px] leading-none text-emerald-900 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">
-                                      DIFF
-                                    </span>
-                                  )}
-                                </span>
-                                <svg
-                                  width="12"
-                                  height="12"
-                                  viewBox="0 0 12 12"
-                                  fill="none"
-                                  className={`shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
-                                  aria-hidden
-                                >
-                                  <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              </button>
-                              {isOpen && (
-                                    <div className="rounded-b-lg overflow-hidden border-t border-neutral-300/70 dark:border-neutral-700/80">
-                                      {isDiff ? (
-                                        <div className="p-3 overflow-auto max-h-80 whitespace-pre bg-white/80 dark:bg-neutral-950/80">
-                                          <code className={`${codeClass} block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100`}>
-                                            {diffLines.map((line, idx) => (
-                                              <div
-                                                key={idx}
-                                                className={[
-                                                  line.startsWith('+') ? 'bg-emerald-100/80 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-200' : '',
-                                                  line.startsWith('-') ? 'bg-rose-100/80 text-rose-900 dark:bg-rose-900/30 dark:text-rose-200' : '',
-                                                ].join(' ')}
-                                              >
-                                                {line}
-                                              </div>
-                                            ))}
-                                          </code>
-                                        </div>
-                                      ) : (
-                                        <SyntaxHighlighter
-                                          language={lang}
-                                          style={activeTheme.mode === 'dark' ? oneDark : oneLight}
-                                          customStyle={{ margin: 0, padding: '0.75rem', maxHeight: '20rem', overflow: 'auto', fontSize: '12px', background: activeTheme.mode === 'dark' ? 'rgba(10, 10, 10, 0.5)' : 'rgba(255, 255, 255, 0.5)' }}
-                                          showLineNumbers={true}
-                                          wrapLines={false}
-                                        >
-                                          {normalized}
-                                        </SyntaxHighlighter>
-                                      )}
-                                    </div>
-                              )}
-                            </div>
-                          )
-                        },
-                        code(props) {
-                          const { children, className } = props as any
-                          const isBlock = typeof className === 'string' && className.includes('language-')
-                          if (isBlock) return <code className={className}>{children}</code>
-                          return (
-                            <code className="px-1 py-0.5 rounded bg-blue-100 text-blue-900 dark:bg-blue-950/50 dark:text-blue-200">
-                              {children}
-                            </code>
-                          )
-                        },
-                        a(props) {
-                          const { href, children } = props as any
-                          const target = typeof href === 'string' ? href : ''
-                          return (
-                            <a
-                              href={target || undefined}
-                              title={target || undefined}
-                              className="text-blue-700 underline underline-offset-2 decoration-blue-400 hover:text-blue-800 dark:text-blue-300 dark:hover:text-blue-200"
-                              onClick={(e) => {
-                                if (!target) return
-                                e.preventDefault()
-                                void onChatLinkClick(target)
-                              }}
-                            >
-                              {children}
-                            </a>
-                          )
-                        },
-                      }}
-                    >
-                      {m.content}
-                    </ReactMarkdown>
-                  </div>
-                ) : m.content ? (
-                  <div
-                    className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${
-                      isDebugSystemNote ? 'italic text-red-800 dark:text-red-200' : ''
-                    }`}
-                  >
-                    {canShowGrantPermissionButton ? (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                          {m.content}
-                        </span>
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 rounded border border-blue-300 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-200 dark:hover:bg-blue-900/40"
-                          onClick={() => grantPermissionAndResend(w.id)}
-                        >
-                          Grant Permission
-                        </button>
-                      </div>
-                    ) : (
-                      m.content
-                    )}
-                  </div>
-                ) : null}
-                {m.attachments && m.attachments.length > 0 && (
-                  <div className={`${m.content ? 'mt-2' : ''} flex flex-wrap gap-2`}>
-                    {m.attachments.map((attachment) => (
-                      (() => {
-                        const src = toLocalFileUrl(attachment.path)
-                        const blocksLocalFileUrl = src.startsWith('file://') && /^https?:$/i.test(window.location.protocol)
-                        if (blocksLocalFileUrl) {
-                          return (
-                            <span
-                              key={attachment.id}
-                              className="inline-flex max-w-[220px] items-center rounded-md border border-blue-200/80 bg-blue-50 px-2 py-1 text-[11px] text-blue-900 dark:border-blue-900/70 dark:bg-blue-950/20 dark:text-blue-200"
-                              title={attachment.path}
-                            >
-                              {attachment.label || 'Local image'}
-                            </span>
-                          )
-                        }
-                        return (
-                          <img
-                            key={attachment.id}
-                            src={src}
-                            alt={attachment.label || 'Image attachment'}
-                            title={attachment.path}
-                            className="h-20 w-20 rounded-md border border-blue-200/80 object-cover bg-blue-50 dark:border-blue-900/70 dark:bg-blue-950/20"
-                            loading="lazy"
-                          />
-                        )
-                      })()
-                    ))}
-                  </div>
-                )}
-                {showCompletedDurationOnMessage && (
-                  <div className="mt-2 flex justify-end">
-                    <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400" title="Response duration">
-                      t+{completedPromptDurationLabel}
-                    </span>
-                  </div>
-                )}
-                {isLastUserMessage && (
-                  <div className="flex justify-end mt-1.5 mb-0.5 mr-0.5 gap-1 opacity-0 pointer-events-none transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
-                    {canResendLastUserMessage && (
-                      <button
-                        type="button"
-                        className="h-6 w-6 inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50/70 text-blue-600 hover:bg-blue-100 hover:border-blue-300 dark:border-blue-900/70 dark:bg-blue-950/25 dark:text-blue-300 dark:hover:bg-blue-900/40 dark:hover:border-blue-700"
-                        onClick={() => resendLastUserMessage(w.id)}
-                        title="Resend this message"
-                        aria-label="Resend this message"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
-                          <path d="M13 8A5 5 0 1 1 8 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                          <path d="M8 1L10.5 3L8 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </button>
-                    )}
-                    {canRecallLastUserMessage && (
-                      <button
-                        type="button"
-                        className="h-6 w-6 inline-flex items-center justify-center rounded-md border border-blue-200 bg-white/80 text-blue-700 hover:bg-blue-100 hover:border-blue-300 dark:border-blue-900/70 dark:bg-blue-950/25 dark:text-blue-200 dark:hover:bg-blue-900/40 dark:hover:border-blue-700"
-                        onClick={() => recallLastUserMessage(w.id)}
-                        title="Recall this message for quick correction"
-                        aria-label="Recall this message for editing"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
-                          <path d="M3 11.5L2.8 13.2L4.5 13L12.2 5.3L10.7 3.8L3 11.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-                          <path d="M9.9 4.6L11.4 6.1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                          <path d="M2.5 13.5H13.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                        </svg>
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
+          }
+          setSettingsPopover={(next) =>
+            setSettingsPopoverByPanel((prev) => ({ ...prev, [w.id]: next }))
+          }
+          onSetInteractionMode={(mode) => setInteractionMode(w.id, mode)}
+          onSetPanelSandbox={(value) => setPanelSandbox(w.id, value)}
+          onSetPanelPermission={(value) => setPanelPermission(w.id, value)}
+          onSandboxLockedClick={() =>
+            setPanels((prev) =>
+              prev.map((p) =>
+                p.id !== w.id
+                  ? p
+                  : { ...p, status: 'Sandbox is locked to View. Expand sandbox in Workspace settings.' },
+              ),
             )
-          })})()}
-          {queueCount > 0 && (
-            <div className="mt-4 pt-3 border-t border-amber-200/60 dark:border-amber-800/50 space-y-2">
-              <div className="text-[11px] font-medium text-amber-700 dark:text-amber-300">
-                {queueCount} queued - will run after current turn
-              </div>
-              {w.pendingInputs.map((text, i) => {
-                const preview = text.length > 80 ? text.slice(0, 80) + '...' : text
-                const isEditingThisQueueItem = editingQueuedIndex === i
-                return (
-                  <div
-                    key={`queued-${i}-${text.slice(0, 20)}`}
-                    className={`flex items-start gap-2 rounded-xl border px-3 py-2 ${
-                      isEditingThisQueueItem
-                        ? 'border-blue-300 bg-blue-50/90 dark:border-blue-700 dark:bg-blue-950/30'
-                        : 'border-amber-300 dark:border-amber-700 bg-amber-50/90 dark:bg-amber-950/30'
-                    }`}
-                  >
-                    <span className={`flex-1 min-w-0 text-sm whitespace-pre-wrap break-words ${
-                      isEditingThisQueueItem ? 'text-blue-950 dark:text-blue-100' : 'text-amber-950 dark:text-amber-100'
-                    }`}>
-                      {preview}
-                    </span>
-                    <div className="shrink-0 flex items-center gap-0.5">
-                      <button
-                        type="button"
-                        className="h-6 w-6 inline-flex items-center justify-center rounded border border-blue-300 bg-white/90 text-blue-700 hover:bg-blue-100 hover:border-blue-400 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-900/50 dark:hover:border-blue-600"
-                        title="Edit queued message"
-                        aria-label="Edit queued message"
-                        onClick={() => beginQueuedMessageEdit(w.id, i)}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
-                          <path d="M3 11.5L2.8 13.2L4.5 13L12.2 5.3L10.7 3.8L3 11.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-                          <path d="M9.9 4.6L11.4 6.1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        className="h-6 w-6 inline-flex items-center justify-center rounded border border-amber-400 bg-white/80 text-amber-700 hover:bg-emerald-50 hover:border-emerald-400 hover:text-emerald-700 dark:border-amber-600 dark:bg-amber-900/50 dark:text-amber-200 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300"
-                        title="Inject now - send to agent immediately"
-                        aria-label="Inject now"
-                        onClick={() => injectQueuedMessage(w.id, i)}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 12 12" fill="none">
-                          <path d="M6 10V2M2.5 5.5L6 2l3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        className="h-6 w-6 inline-flex items-center justify-center rounded border border-amber-400 bg-white/80 text-amber-700 hover:bg-red-50 hover:border-red-300 hover:text-red-700 dark:border-amber-600 dark:bg-amber-900/50 dark:text-amber-200 dark:hover:bg-red-950/40 dark:hover:text-red-400"
-                        title="Remove from queue"
-                        aria-label="Remove from queue"
-                        onClick={() => removeQueuedMessage(w.id, i)}
-                      >
-                        &times;
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="relative z-10 border-t border-neutral-200/80 dark:border-neutral-800 p-2.5 bg-white dark:bg-neutral-950">
-          {w.attachments.length > 0 && (
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {w.attachments.map((a) => (
-                <span key={a.id} className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
-                  <span className="truncate max-w-[200px]" title={a.path}>{a.label}</span>
-                  <button
-                    type="button"
-                    className="rounded px-1 hover:bg-blue-100 dark:hover:bg-blue-900/40"
-                    title="Remove attachment"
-                    onClick={() =>
-                      setPanels((prev) =>
-                        prev.map((p) =>
-                          p.id !== w.id ? p : { ...p, attachments: p.attachments.filter((x) => x.id !== a.id) },
-                        ),
-                      )
-                    }
-                  >
-                    &times;
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          {draftEdit && (
-            <div className="mb-1.5 flex items-center justify-between gap-2 rounded-md border border-blue-200/80 bg-blue-50/80 px-2 py-1 text-[11px] text-blue-800 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-200">
-              <span>
-                {draftEdit.kind === 'queued'
-                  ? `Editing queued message #${draftEdit.index + 1}.`
-                  : 'Editing recalled message.'}
-              </span>
-              <button
-                type="button"
-                className="rounded border border-blue-300/80 px-1.5 py-0.5 text-[10px] hover:bg-blue-100 dark:border-blue-700 dark:hover:bg-blue-900/50"
-                onClick={() => cancelDraftEdit(w.id)}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-          <div className="flex items-end gap-2 min-w-0">
-            <textarea
-              ref={(el) => registerTextarea(w.id, el)}
-              className="flex-1 min-w-0 resize-none rounded-xl bg-white border border-neutral-300 px-3 py-2 text-neutral-900 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 placeholder:text-neutral-500 dark:bg-neutral-800 dark:border-neutral-600 dark:text-neutral-100 dark:placeholder:text-neutral-400 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
-              style={{ fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }}
-              placeholder="Message the agent..."
-              rows={1}
-              value={w.input}
-              onFocus={() => setActivePanelId(w.id)}
-              onChange={(e) => {
-                const next = e.target.value
-                setPanels((prev) => prev.map((x) => (x.id === w.id ? { ...x, input: next } : x)))
-                queueMicrotask(() => autoResizeTextarea(w.id))
-              }}
-              onPaste={(e) => {
-                const items = Array.from(e.clipboardData?.items ?? []).filter((it) => it.type.startsWith('image/'))
-                if (items.length === 0) return
-                e.preventDefault()
-                for (const item of items) {
-                  const file = item.getAsFile()
-                  if (file) void handlePasteImage(w.id, file)
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  sendMessage(w.id)
-                }
-              }}
-              onContextMenu={onInputPanelContextMenu}
-            />
-            <div className="shrink-0 flex flex-col items-center gap-0.5">
-              {livePromptDurationLabel && (
-                <span className="text-[10px] font-mono leading-none text-neutral-500 dark:text-neutral-400" title="Response duration">
-                  {livePromptDurationLabel}
-                </span>
-              )}
-              <button
-                className={[
-                  'h-8 w-8 inline-flex items-center justify-center rounded-full border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-                  isBusy
-                    ? hasInput
-                      ? 'border-neutral-400 bg-neutral-200 text-neutral-700 hover:bg-neutral-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-600'
-                      : 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/60'
-                    : hasInput
-                      ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
-                      : 'border-neutral-300 bg-neutral-100 text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-600',
-                ].join(' ')}
-                onClick={() => {
-                  if (isBusy) {
-                    if (draftEdit?.kind === 'recalled') sendMessage(w.id)
-                    else void api.interrupt(w.id)
-                  } else {
-                    sendMessage(w.id)
-                  }
-                }}
-                disabled={!isBusy && !hasInput}
-                title={sendTitle}
-              >
-                {isBusy && !hasInput ? (
-                  <SpinnerIcon size={18} className="animate-spin motion-reduce:animate-none" />
-                ) : isBusy && draftEdit?.kind !== 'recalled' ? (
-                  <StopIcon size={18} />
-                ) : (
-                  <SendIcon size={18} />
-                )}
-              </button>
-            </div>
-          </div>
-          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 min-w-0 text-xs">
-            <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2 text-neutral-600 dark:text-neutral-300">
-              {w.status && (
-                <span className="text-[11px] truncate max-w-[180px]" style={{ color: timelineMessageColor }} title={w.status}>
-                  {w.status}
-                </span>
-              )}
-              {contextUsage && contextUsagePercent !== null && (
-                <div
-                  className="inline-flex items-center gap-1"
-                  title={`${contextUsagePercent.toFixed(1)}% used\nEstimated context usage\nModel window: ${contextUsage.modelContextTokens.toLocaleString()} tokens\nReserved output: ${contextUsage.outputReserveTokens.toLocaleString()} tokens\nSafe input budget: ${contextUsage.safeInputBudgetTokens.toLocaleString()} tokens\nEstimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
-                >
-                  <svg width="14" height="14" viewBox="0 0 16 16" className="shrink-0 -rotate-90">
-                    <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.15" strokeWidth="2" />
-                    <circle
-                      cx="8" cy="8" r="6" fill="none"
-                      stroke={contextUsageStrokeColor}
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeDasharray={`${2 * Math.PI * 6}`}
-                      strokeDashoffset={`${2 * Math.PI * 6 * (1 - Math.max(0, Math.min(100, contextUsagePercent)) / 100)}`}
-                    />
-                  </svg>
-                </div>
-              )}
-              <span
-                className="inline-flex items-center gap-1 text-[11px] text-neutral-500 dark:text-neutral-300"
-                title={activityTitle}
-                aria-label={`Panel activity ${activityLabel}`}
-              >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${activityDotClass} ${isRunning ? 'animate-pulse' : ''}`}
-                  aria-hidden
-                />
-                {activityLabel}
-              </span>
-              {showCompletionNotice && (
-                <span
-                  className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/35 dark:text-emerald-200"
-                  aria-live="polite"
-                >
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-                  complete
-                </span>
-              )}
-              {(() => {
-                const pct = getRateLimitPercent(w.usage)
-                const label = formatRateLimitLabel(w.usage)
-                if (pct === null || !label) {
-                  return null
-                }
-                return (
-                  <div className="inline-flex items-center gap-1.5">
-                    <span className="h-1.5 w-16 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
-                      <span className="block h-full bg-blue-600" style={{ width: `${100 - pct}%` }} />
-                    </span>
-                    <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{label}</span>
-                  </div>
-                )
-              })()}
-            </div>
-            <div className="min-w-0 flex flex-wrap items-center justify-end gap-1.5">
-              <div className="relative" data-settings-popover-root="true">
-                <button
-                  type="button"
-                  className={[
-                    'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors',
-                    settingsPopover === 'mode'
-                      ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
-                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
-                  ].join(' ')}
-                  title={`Mode: ${INTERACTION_MODE_META[interactionMode].label}`}
-                  onClick={() =>
-                    setSettingsPopoverByPanel((prev) => ({
-                      ...prev,
-                      [w.id]: settingsPopover === 'mode' ? null : 'mode',
-                    }))
-                  }
-                >
-                  {renderInteractionModeSymbol(interactionMode)}
-                </button>
-                {settingsPopover === 'mode' && (
-                  <div className="absolute right-0 bottom-[calc(100%+6px)] z-[120] w-48 rounded-lg border border-neutral-300/90 bg-neutral-50/95 p-1.5 text-neutral-800 shadow-2xl ring-1 ring-black/10 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:ring-white/10">
-                    {PANEL_INTERACTION_MODES.map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className={[
-                          'w-full appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded',
-                          interactionMode === mode
-                            ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
-                            : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
-                        ].join(' ')}
-                        title={INTERACTION_MODE_META[mode].hint}
-                        onClick={() => {
-                          setInteractionMode(w.id, mode)
-                          setSettingsPopoverByPanel((prev) => ({ ...prev, [w.id]: null }))
-                        }}
-                      >
-                        {INTERACTION_MODE_META[mode].label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="relative" data-settings-popover-root="true">
-                <button
-                  type="button"
-                  className={[
-                    'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors',
-                    settingsPopover === 'sandbox'
-                      ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
-                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
-                  ].join(' ')}
-                  title={
-                    sandboxLockedToView
-                      ? 'Sandbox: View only (locked by Workspace settings)'
-                      : `Sandbox: ${effectiveSandbox}`
-                  }
-                  onClick={() => {
-                    if (sandboxLockedToView) {
-                      setPanels((prev) =>
-                        prev.map((p) =>
-                          p.id !== w.id
-                            ? p
-                            : {
-                                ...p,
-                                status: 'Sandbox is locked to View. Expand sandbox in Workspace settings.',
-                              },
-                        ),
-                      )
-                    }
-                    setSettingsPopoverByPanel((prev) => ({
-                      ...prev,
-                      [w.id]: settingsPopover === 'sandbox' ? null : 'sandbox',
-                    }))
-                  }}
-                >
-                  {renderSandboxSymbol(effectiveSandbox)}
-                </button>
-                {settingsPopover === 'sandbox' && (
-                  <div className="absolute right-0 bottom-[calc(100%+6px)] z-[120] w-48 rounded-lg border border-neutral-300/90 bg-neutral-50/95 p-1.5 text-neutral-800 shadow-2xl ring-1 ring-black/10 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:ring-white/10">
-                    {sandboxLockedToView ? (
-                      <>
-                        <div className="w-full text-left text-[11px] px-2 py-1.5 rounded bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200">
-                          View
-                        </div>
-                        <div className="px-2 pt-1 pb-1 text-[10px] text-neutral-500 dark:text-neutral-400">
-                          Expand sandbox in Workspace settings.
-                        </div>
-                      </>
-                    ) : (
-                      ([
-                        ['read-only', 'Read only'],
-                        ['workspace-write', 'Workspace write'],
-                      ] as const).map(([value, label]) => (
-                        <button
-                          key={value}
-                          type="button"
-                          className={[
-                            'w-full appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded',
-                            effectiveSandbox === value
-                              ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
-                              : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
-                          ].join(' ')}
-                          onClick={() => setPanelSandbox(w.id, value)}
-                        >
-                          {label}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-              <div className="relative" data-settings-popover-root="true">
-                <button
-                  type="button"
-                  className={[
-                    'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-                    settingsPopover === 'permission'
-                      ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
-                      : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
-                  ].join(' ')}
-                  title={
-                    permissionDisabledByReadOnlySandbox
-                      ? 'Permissions disabled while workspace sandbox is Read only'
-                      : permissionLockedToVerifyFirst
-                        ? 'Permissions: Verify first (locked by Workspace settings)'
-                        : `Permissions: ${effectivePermissionMode}`
-                  }
-                  disabled={permissionDisabledByReadOnlySandbox}
-                  onClick={() =>
-                    setSettingsPopoverByPanel((prev) => ({
-                      ...prev,
-                      [w.id]: settingsPopover === 'permission' ? null : 'permission',
-                    }))
-                  }
-                >
-                  {renderPermissionSymbol(effectivePermissionMode)}
-                </button>
-                {settingsPopover === 'permission' && !permissionDisabledByReadOnlySandbox && (
-                  <div className="absolute right-0 bottom-[calc(100%+6px)] z-[120] w-52 rounded-lg border border-neutral-300/90 bg-neutral-50/95 p-1.5 text-neutral-800 shadow-2xl ring-1 ring-black/10 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:ring-white/10">
-                    {permissionLockedToVerifyFirst ? (
-                      <>
-                        <div className="w-full text-left text-[11px] px-2 py-1.5 rounded bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200">
-                          Verify first
-                        </div>
-                        <div className="px-2 pt-1 pb-1 text-[10px] text-neutral-500 dark:text-neutral-400">
-                          Locked by Workspace settings.
-                        </div>
-                      </>
-                    ) : (
-                      ([
-                        ['verify-first', 'Verify first'],
-                        ['proceed-always', 'Proceed always'],
-                      ] as const).map(([value, label]) => (
-                        <button
-                          key={value}
-                          type="button"
-                          className={[
-                            'w-full appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded',
-                            effectivePermissionMode === value
-                              ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
-                              : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
-                          ].join(' ')}
-                          onClick={() => setPanelPermission(w.id, value)}
-                        >
-                          {label}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-              <div className="rounded-md border border-neutral-200/70 bg-neutral-50/75 px-1.5 py-1 dark:border-neutral-800 dark:bg-neutral-900/60">
-                <div className="flex items-center gap-1.5">
-                  {(() => {
-                    const prov = getModelProvider(w.model)
-                    const pStatus = providerAuthByName[prov]
-                    const pVerified = providerVerifiedByName[prov]
-                    const dotCls = !pStatus
-                      ? 'bg-neutral-400 dark:bg-neutral-500'
-                      : !pStatus.installed
-                        ? 'bg-red-500'
-                        : pStatus.authenticated
-                          ? (pVerified ? 'bg-emerald-500' : 'bg-amber-500')
-                          : 'bg-amber-500'
-                    const dotTitle = !pStatus
-                      ? 'Checking provider status...'
-                      : !pStatus.installed
-                        ? pStatus.detail ?? 'CLI not found'
-                        : pStatus.authenticated
-                          ? (pVerified ? pStatus.detail ?? 'Connected' : 'Authenticated. Waiting for first response to verify.')
-                          : pStatus.detail ?? 'Login required'
-                    return (
-                      <span
-                        className={`inline-block w-2 h-2 rounded-full shrink-0 ${dotCls}`}
-                        title={dotTitle}
-                      />
-                    )
-                  })()}
-                  <select
-                    className="h-7 max-w-full text-[11px] rounded border border-neutral-300 bg-white text-neutral-900 px-1.5 py-0.5 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
-                    value={w.model}
-                    onChange={(e) => switchModel(w.id, e.target.value)}
-                  >
-                    {getModelOptions(w.model).map((id) => {
-                      const mi = modelConfig.interfaces.find((m) => m.id === id)
-                      return (
-                        <option key={id} value={id}>
-                          {id}
-                        </option>
-                      )
-                    })}
-                  </select>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+          }
+          onSwitchModel={(modelId) => switchModel(w.id, modelId)}
+        />
+      </AgentPanelShell>
     )
   }
 }

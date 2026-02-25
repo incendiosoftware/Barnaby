@@ -5,7 +5,10 @@
 import type { StandaloneTheme } from '../types'
 import { DEFAULT_DIAGNOSTICS_MESSAGE_COLORS } from './index'
 
-type BaseStandaloneTheme = Omit<StandaloneTheme, keyof typeof DEFAULT_DIAGNOSTICS_MESSAGE_COLORS>
+type BaseStandaloneTheme = Omit<
+  StandaloneTheme,
+  keyof typeof DEFAULT_DIAGNOSTICS_MESSAGE_COLORS | 'assistantBubbleBgLight' | 'assistantBubbleBgDark'
+>
 
 export const BASE_THEMES: BaseStandaloneTheme[] = [
   { id: 'default-light', name: 'Default Light', mode: 'light', accent500: '#3b82f6', accent600: '#2563eb', accent700: '#1d4ed8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(30,58,138,0.28)', dark950: '#0a0a0a', dark900: '#171717' },
@@ -31,5 +34,7 @@ export const BASE_THEMES: BaseStandaloneTheme[] = [
 
 export const THEMES: StandaloneTheme[] = BASE_THEMES.map((theme) => ({
   ...theme,
+  assistantBubbleBgLight: `color-mix(in srgb, ${theme.accentSoft} 34%, white)`,
+  assistantBubbleBgDark: `color-mix(in srgb, ${theme.accentSoftDark} 45%, ${theme.dark900})`,
   ...DEFAULT_DIAGNOSTICS_MESSAGE_COLORS,
 }))

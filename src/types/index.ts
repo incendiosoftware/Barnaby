@@ -14,6 +14,8 @@ export type StandaloneTheme = {
   accentText: string
   accentSoft: string
   accentSoftDark: string
+  assistantBubbleBgLight: string
+  assistantBubbleBgDark: string
   dark950: string
   dark900: string
   debugNotes: string
@@ -413,6 +415,8 @@ export type ThemeEditableField =
   | 'accentText'
   | 'accentSoft'
   | 'accentSoftDark'
+  | 'assistantBubbleBgLight'
+  | 'assistantBubbleBgDark'
   | 'dark950'
   | 'dark900'
   | 'debugNotes'

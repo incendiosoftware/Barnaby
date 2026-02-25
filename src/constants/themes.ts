@@ -11,7 +11,7 @@ type BaseStandaloneTheme = Omit<
 >
 
 export const BASE_THEMES: BaseStandaloneTheme[] = [
-  { id: 'default-light', name: 'Default Light', mode: 'light', accent500: '#3b82f6', accent600: '#2563eb', accent700: '#1d4ed8', accentText: '#dbeafe', accentSoft: '#eff6ff', accentSoftDark: 'rgba(30,58,138,0.28)', dark950: '#0a0a0a', dark900: '#171717' },
+  { id: 'default-light', name: 'Default Light', mode: 'light', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#2e3440', dark900: '#3b4252' },
   { id: 'default-dark', name: 'Default Dark', mode: 'dark', accent500: '#88c0d0', accent600: '#5e81ac', accent700: '#4c6a91', accentText: '#d8e9f0', accentSoft: '#e5f2f7', accentSoftDark: 'rgba(94,129,172,0.28)', dark950: '#383838', dark900: '#454545' },
   { id: 'obsidian-black', name: 'Obsidian Black', mode: 'dark', accent500: '#7c3aed', accent600: '#6d28d9', accent700: '#5b21b6', accentText: '#ddd6fe', accentSoft: '#ede9fe', accentSoftDark: 'rgba(124,58,237,0.24)', dark950: '#000000', dark900: '#0a0a0a' },
   { id: 'dracula', name: 'Dracula', mode: 'dark', accent500: '#bd93f9', accent600: '#a87ef5', accent700: '#8f62ea', accentText: '#f3e8ff', accentSoft: '#f5f3ff', accentSoftDark: 'rgba(189,147,249,0.25)', dark950: '#191a21', dark900: '#232533' },

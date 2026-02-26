@@ -2918,7 +2918,14 @@ export default function App() {
                       maxSize="55"
                       className="min-h-0 min-w-0"
                     >
-                      {renderLayoutPane(leftPaneId)}
+                      <div className="h-full flex flex-col min-h-0 overflow-hidden">
+                        {leftDockPanels.map((id, idx) => (
+                          <React.Fragment key={id}>
+                            {idx > 0 && <div className="h-px shrink-0 bg-neutral-200 dark:bg-neutral-700" />}
+                            <div className="flex-1 min-h-0 overflow-hidden">{renderLayoutPane(id)}</div>
+                          </React.Fragment>
+                        ))}
+                      </div>
                     </Panel>
                     <Separator className="w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
                   </>
@@ -2936,7 +2943,14 @@ export default function App() {
                       maxSize="55"
                       className="min-h-0 min-w-0"
                     >
-                      {renderLayoutPane(rightPaneId)}
+                      <div className="h-full flex flex-col min-h-0 overflow-hidden">
+                        {rightDockPanels.map((id, idx) => (
+                          <React.Fragment key={id}>
+                            {idx > 0 && <div className="h-px shrink-0 bg-neutral-200 dark:bg-neutral-700" />}
+                            <div className="flex-1 min-h-0 overflow-hidden">{renderLayoutPane(id)}</div>
+                          </React.Fragment>
+                        ))}
+                      </div>
                     </Panel>
                   </>
                 )}

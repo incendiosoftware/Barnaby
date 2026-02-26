@@ -42,8 +42,9 @@ export default defineConfig(({ command }) => {
                 } catch (err) {
                   const msg = String((err as any)?.message ?? err)
                   if (process.platform === 'win32' && msg.toLowerCase().includes('taskkill')) {
-                    console.warn('[startup] Ignoring taskkill failure; retrying Electron startup.')
+                    console.warn('[startup] Ignoring taskkill failure; waiting 2s then retrying Electron startup.')
                     ;(process as any).electronApp = undefined
+                    await new Promise((r) => setTimeout(r, 2000))
                     try {
                       await args.startup()
                     } catch (err2) {

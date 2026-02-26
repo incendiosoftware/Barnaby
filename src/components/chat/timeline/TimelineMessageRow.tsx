@@ -187,7 +187,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
   }
 
   const containerClasses = [
-    'w-full relative group',
+    'w-full relative group font-chat',
     shouldCollapseThinking
       ? 'py-1'
       : [
@@ -242,7 +242,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
             className="group"
           >
             <summary
-              className={`list-none cursor-pointer py-0.5 text-[10.5px] flex items-center justify-between gap-2 ${thinkingInProgress ? 'animate-pulse motion-reduce:animate-none' : ''}`}
+              className={`list-none cursor-pointer py-0.5 text-[10.5px] flex items-center justify-between gap-2 font-thinking ${thinkingInProgress ? 'animate-pulse motion-reduce:animate-none' : ''}`}
               style={{ color: timelineMessageColor }}
             >
               <span>{thinkingSummary}</span>
@@ -257,9 +257,9 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
                 <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </summary>
-            <div className="mt-1 pl-0 py-1 text-[12px] leading-5 [&_*]:!text-current" style={{ color: timelineMessageColor }}>
+            <div className="mt-1 pl-0 py-1 text-[12px] leading-5 [&_*]:!text-current font-thinking" style={{ color: timelineMessageColor }}>
               {role === 'assistant' && format === 'markdown' ? (
-                <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-headings:my-1 prose-ul:my-0.5 prose-li:my-0 prose-code:text-[currentColor]">
+                <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-headings:my-1 prose-ul:my-0.5 prose-li:my-0 prose-code:text-[currentColor] font-chat">
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={createMarkdownComponents(true)}>
                     {content}
                   </ReactMarkdown>
@@ -277,7 +277,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
             </div>
           </details>
         ) : role === 'assistant' && format === 'markdown' ? (
-          <div className="prose prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-ul:my-0.5 prose-li:my-0 prose-code:text-blue-800 dark:prose-code:text-blue-300">
+          <div className="prose prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-ul:my-0.5 prose-li:my-0 prose-code:text-blue-800 dark:prose-code:text-blue-300 font-chat">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={createMarkdownComponents(false)}>
               {content}
             </ReactMarkdown>

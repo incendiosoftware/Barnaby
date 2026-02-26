@@ -10,9 +10,17 @@ export type {
   WorkspaceSettingsControllerContext,
   WorkspaceSettingsApi,
 } from './workspaceSettingsController'
+export { createWorkspaceLifecycleController } from './workspaceLifecycleController'
+export type { WorkspaceLifecycleController, WorkspaceLifecycleContext, WorkspaceLifecycleApi } from './workspaceLifecycleController'
 export { createPanelLifecycleController } from './panelLifecycleController'
 export type { PanelLifecycleController, PanelLifecycleContext } from './panelLifecycleController'
+export { createPanelInputController } from './panelInputController'
+export type { PanelInputController, PanelInputControllerContext } from './panelInputController'
 export { createAgentPipelineController } from './agentPipelineController'
 export type { AgentPipelineController, AgentPipelineContext } from './agentPipelineController'
 export { createProviderConnectivityController, PROVIDERS_WITH_DEDICATED_PING } from './providerConnectivityController'
 export type { ProviderConnectivityController, ProviderConnectivityContext } from './providerConnectivityController'
+export { createDiagnosticsImageController } from './diagnosticsImageController'
+export type { DiagnosticsImageController, DiagnosticsImageControllerContext, DiagnosticsImageApi } from './diagnosticsImageController'
+export { createPanelLayoutController } from './panelLayoutController'
+export type { PanelLayoutController, PanelLayoutControllerContext } from './panelLayoutController'

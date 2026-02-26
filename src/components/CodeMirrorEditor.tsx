@@ -89,7 +89,7 @@ export function CodeMirrorEditor({
           overflow: 'auto',
         },
         '& .cm-content': {
-          fontFamily: 'inherit',
+          fontFamily: 'var(--app-font-editor, Consolas, "Courier New", monospace)',
           padding: '1rem',
         },
         '& .cm-gutters': {

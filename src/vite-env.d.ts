@@ -118,13 +118,16 @@ interface Window {
       chatHistoryPath: string
       appStatePath: string
       runtimeLogPath: string
+      debugLogPath?: string
+      crashDumpsPath?: string
     }>
+    openDebugOutputWindow(): Promise<{ ok: boolean; path: string; error?: string }>
     openRuntimeLog(): Promise<{
       ok: boolean
       path: string
       error?: string
     }>
-    openDiagnosticsPath(target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog'): Promise<{
+    openDiagnosticsPath(target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog' | 'debugLog' | 'crashDumps'): Promise<{
       ok: boolean
       path: string
       error?: string

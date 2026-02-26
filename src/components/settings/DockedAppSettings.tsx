@@ -12,6 +12,9 @@ import {
   UI_INPUT_CLASS,
   UI_SELECT_CLASS,
   UI_BUTTON_PRIMARY_CLASS,
+  FONT_OPTIONS,
+  MONO_FONT_OPTIONS,
+  FONT_SIZE_OPTIONS,
   THEME_EDITABLE_FIELDS,
   CONNECTIVITY_PROVIDERS,
   DEFAULT_BUILTIN_PROVIDER_CONFIGS,
@@ -612,9 +615,122 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
 
               <section className="space-y-3">
                 <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Appearance</div>
-                <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3">
-                  <div className="text-xs text-neutral-600 dark:text-neutral-400 mb-2">Theme</div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto">
+                <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-3">
+                  <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mb-2">
+                    Fonts per type (Cursor-style: chat, code, thinking, editor)
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-xs text-neutral-600 dark:text-neutral-400 mb-1">Chat</div>
+                      <div className="flex gap-1.5">
+                        <select
+                          className={`${UI_SELECT_CLASS} flex-1 min-w-0`}
+                          value={applicationSettings.fontChat}
+                          onChange={(e) =>
+                            setApplicationSettings((prev) => ({ ...prev, fontChat: e.target.value }))
+                          }
+                        >
+                          {FONT_OPTIONS.map((f) => (
+                            <option key={f.id} value={f.id}>{f.label}</option>
+                          ))}
+                        </select>
+                        <select
+                          className={`${UI_SELECT_CLASS} w-[58px] shrink-0`}
+                          value={applicationSettings.fontChatSize}
+                          onChange={(e) =>
+                            setApplicationSettings((prev) => ({ ...prev, fontChatSize: Number(e.target.value) }))
+                          }
+                        >
+                          {FONT_SIZE_OPTIONS.map((s) => (
+                            <option key={s.value} value={s.value}>{s.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-neutral-600 dark:text-neutral-400 mb-1">Code blocks & terminal</div>
+                      <div className="flex gap-1.5">
+                        <select
+                          className={`${UI_SELECT_CLASS} flex-1 min-w-0`}
+                          value={applicationSettings.fontCode}
+                          onChange={(e) =>
+                            setApplicationSettings((prev) => ({ ...prev, fontCode: e.target.value }))
+                          }
+                        >
+                          {MONO_FONT_OPTIONS.map((f) => (
+                            <option key={f.id} value={f.id}>{f.label}</option>
+                          ))}
+                        </select>
+                        <select
+                          className={`${UI_SELECT_CLASS} w-[58px] shrink-0`}
+                          value={applicationSettings.fontCodeSize}
+                          onChange={(e) =>
+                            setApplicationSettings((prev) => ({ ...prev, fontCodeSize: Number(e.target.value) }))
+                          }
+                        >
+                          {FONT_SIZE_OPTIONS.map((s) => (
+                            <option key={s.value} value={s.value}>{s.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-neutral-600 dark:text-neutral-400 mb-1">Thinking / reasoning</div>
+                      <div className="flex gap-1.5">
+                        <select
+                          className={`${UI_SELECT_CLASS} flex-1 min-w-0`}
+                          value={applicationSettings.fontThinking}
+                          onChange={(e) =>
+                            setApplicationSettings((prev) => ({ ...prev, fontThinking: e.target.value }))
+                          }
+                        >
+                          {FONT_OPTIONS.map((f) => (
+                            <option key={f.id} value={f.id}>{f.label}</option>
+                          ))}
+                        </select>
+                        <select
+                          className={`${UI_SELECT_CLASS} w-[58px] shrink-0`}
+                          value={applicationSettings.fontThinkingSize}
+                          onChange={(e) =>
+                            setApplicationSettings((prev) => ({ ...prev, fontThinkingSize: Number(e.target.value) }))
+                          }
+                        >
+                          {FONT_SIZE_OPTIONS.map((s) => (
+                            <option key={s.value} value={s.value}>{s.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-neutral-600 dark:text-neutral-400 mb-1">Editor</div>
+                      <div className="flex gap-1.5">
+                        <select
+                          className={`${UI_SELECT_CLASS} flex-1 min-w-0`}
+                          value={applicationSettings.fontEditor}
+                          onChange={(e) =>
+                            setApplicationSettings((prev) => ({ ...prev, fontEditor: e.target.value }))
+                          }
+                        >
+                          {MONO_FONT_OPTIONS.map((f) => (
+                            <option key={f.id} value={f.id}>{f.label}</option>
+                          ))}
+                        </select>
+                        <select
+                          className={`${UI_SELECT_CLASS} w-[58px] shrink-0`}
+                          value={applicationSettings.fontEditorSize}
+                          onChange={(e) =>
+                            setApplicationSettings((prev) => ({ ...prev, fontEditorSize: Number(e.target.value) }))
+                          }
+                        >
+                          {FONT_SIZE_OPTIONS.map((s) => (
+                            <option key={s.value} value={s.value}>{s.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-xs text-neutral-600 dark:text-neutral-400 mb-2 pt-1">Theme</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {themeCatalog.map((t) => (
                       <button
                         key={t.id}
@@ -638,19 +754,35 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                       </button>
                     ))}
                   </div>
+                  <label className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(applicationSettings.customiseStandardThemes)}
+                      onChange={(e) =>
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          customiseStandardThemes: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span className="text-sm text-neutral-700 dark:text-neutral-300">Customise standard themes</span>
+                  </label>
+                  {(applicationSettings.themeId === 'custom' || applicationSettings.customiseStandardThemes) && (
                   <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
                     <div className="text-xs text-neutral-600 dark:text-neutral-400">
                       Theme fields
                     </div>
                     <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                      Click a theme above to populate editable color fields, then save changes back to that theme.
+                      {applicationSettings.themeId === 'custom'
+                        ? 'Custom theme starts from Default Light. Adjust colours below and save.'
+                        : 'Click a theme above to populate editable color fields, then save changes back to that theme.'}
                     </div>
                     {themeEditorDraft ? (
                       <>
                         <div className="text-xs text-neutral-600 dark:text-neutral-400">
                           Editing <span className="font-medium text-neutral-800 dark:text-neutral-200">{themeEditorDraft.name}</span> ({themeEditorDraft.id})
                         </div>
-                        <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                        <div className="space-y-3 pr-1">
                           {(() => {
                             const groups = new Map<string, typeof THEME_EDITABLE_FIELDS>()
                             for (const field of THEME_EDITABLE_FIELDS) {
@@ -757,6 +889,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                       <div className="text-xs text-neutral-500 dark:text-neutral-400">Select a theme to edit its fields.</div>
                     )}
                   </div>
+                  )}
                 </div>
               </section>
                 </>
@@ -790,12 +923,14 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                     const primary = providerRegistry.overrides[config.id]?.primary ?? 'cli'
                     const fallbackEnabled = providerRegistry.overrides[config.id]?.fallbackEnabled ?? false
                     const fallback = providerRegistry.overrides[config.id]?.fallback ?? (primary === 'cli' ? 'api' : 'cli')
-                    const needsCli = !isDual
+                    const configuredNeedsCli = !isDual
                       ? config.type === 'cli'
                       : primary === 'cli' || (fallbackEnabled && fallback === 'cli')
-                    const needsApi = !isDual
+                    const configuredNeedsApi = !isDual
                       ? config.type === 'api'
                       : primary === 'api' || (fallbackEnabled && fallback === 'api')
+                    const activeNeedsCli = !isDual ? config.type === 'cli' : primary === 'cli'
+                    const activeNeedsApi = !isDual ? config.type === 'api' : primary === 'api'
                     const providerEnabled = Boolean(config.enabled)
                     const statusLabel = !providerEnabled
                       ? 'Disabled'
@@ -812,7 +947,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                       ? 'Provider disabled.'
                       : rawStatusDetail && !detailLooksLikeConnected
                         ? rawStatusDetail
-                        : (needsApi && !needsCli ? 'Click Test API to validate.' : 'No status yet.')
+                        : (activeNeedsApi && !activeNeedsCli ? 'Click Test API to validate.' : 'No status yet.')
                     const statusClass = !providerEnabled
                       ? 'border-neutral-300 text-neutral-600 dark:border-neutral-700 dark:text-neutral-400'
                       : !status
@@ -1143,7 +1278,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                             })()}
                           </div>
                         )}
-                        {(needsCli || needsApi) && (
+                        {(activeNeedsCli || activeNeedsApi) && (
                           <>
                             <div className="text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap break-words">
                               {loading ? `Checking ${config.displayName}...` : statusDetail}
@@ -1153,9 +1288,9 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                             </div>
                           </>
                         )}
-                        {config.enabled && (needsCli || needsApi) && (
+                        {config.enabled && (activeNeedsCli || activeNeedsApi) && (
                           <div className="flex items-center gap-2 flex-wrap">
-                            {needsCli && (
+                            {activeNeedsCli && (
                               <>
                                 <button
                                   type="button"
@@ -1206,7 +1341,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                                 )}
                               </>
                             )}
-                            {needsApi && (
+                            {activeNeedsApi && (
                               <>
                                 <button
                                   type="button"
@@ -1855,6 +1990,18 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                 <div className="text-xs text-neutral-600 dark:text-neutral-400">
                   Runtime logs and persisted state are stored in your Barnaby user data folder.
                 </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="px-2.5 py-1.5 rounded-md border border-neutral-200 bg-neutral-100 hover:bg-neutral-200 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-300"
+                    onClick={() => void api.openDebugOutputWindow?.()}
+                  >
+                    Open Debug Output Window
+                  </button>
+                  <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                    Separate window for live crash-resistant log monitoring
+                  </span>
+                </div>
                 {diagnosticsActionStatus && (
                   <div className="text-xs text-neutral-600 dark:text-neutral-400">{diagnosticsActionStatus}</div>
                 )}
@@ -1887,6 +2034,8 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                     <div><span className="font-semibold">userData</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => openDiagnosticsTarget('userData', 'userData folder')}>{diagnosticsInfo.userDataPath}</button></div>
                     <div><span className="font-semibold">storage</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => openDiagnosticsTarget('storage', 'storage folder')}>{diagnosticsInfo.storageDir}</button></div>
                     <div><span className="font-semibold">runtime log</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => openDiagnosticsTarget('runtimeLog', 'runtime log')}>{diagnosticsInfo.runtimeLogPath}</button></div>
+                    {diagnosticsInfo.debugLogPath && <div><span className="font-semibold">debug log</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => api.openDiagnosticsPath?.('debugLog')}>{diagnosticsInfo.debugLogPath}</button></div>}
+                    {diagnosticsInfo.crashDumpsPath && <div><span className="font-semibold">crash dumps</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => api.openDiagnosticsPath?.('crashDumps')}>{diagnosticsInfo.crashDumpsPath}</button></div>}
                     <div><span className="font-semibold">app state</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => openDiagnosticsTarget('appState', 'app state')}>{diagnosticsInfo.appStatePath}</button></div>
                     <div><span className="font-semibold">chat history</span>: <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 break-all text-left" onClick={() => openDiagnosticsTarget('chatHistory', 'chat history')}>{diagnosticsInfo.chatHistoryPath}</button></div>
                   </div>

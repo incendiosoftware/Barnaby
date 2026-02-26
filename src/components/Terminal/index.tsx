@@ -9,6 +9,7 @@ let pendingDestroyTimeout: ReturnType<typeof setTimeout> | null = null
 
 type EmbeddedTerminalProps = {
   workspaceRoot: string
+  fontFamily?: string
   api: {
     terminalSpawn: (cwd: string) => Promise<{ ok: boolean; error?: string }>
     terminalWrite: (data: string) => void
@@ -19,7 +20,7 @@ type EmbeddedTerminalProps = {
   }
 }
 
-export function EmbeddedTerminal({ workspaceRoot, api }: EmbeddedTerminalProps) {
+export function EmbeddedTerminal({ workspaceRoot, fontFamily = 'Consolas, "Courier New", monospace', api }: EmbeddedTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -36,7 +37,7 @@ export function EmbeddedTerminal({ workspaceRoot, api }: EmbeddedTerminalProps) 
     const term = new XTerm({
       cursorBlink: true,
       fontSize: 13,
-      fontFamily: 'Consolas, "Courier New", monospace',
+      fontFamily,
       theme: {
         background: '#0d1117',
         foreground: '#c9d1d9',
@@ -115,7 +116,7 @@ export function EmbeddedTerminal({ workspaceRoot, api }: EmbeddedTerminalProps) 
         void api.terminalDestroy?.()
       }, 150)
     }
-  }, [workspaceRoot, api])
+  }, [workspaceRoot, fontFamily, api])
 
   return (
     <div

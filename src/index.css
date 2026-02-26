@@ -3,11 +3,25 @@
 @tailwind utilities;
 
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: var(--app-font-family, Inter, system-ui, Avenir, Helvetica, Arial, sans-serif);
+  --app-font-chat: var(--app-font-family);
+  --app-font-code: Consolas, "Courier New", monospace;
+  --app-font-thinking: var(--app-font-family);
+  --app-font-editor: Consolas, "Courier New", monospace;
+  --app-font-chat-size: 14px;
+  --app-font-code-size: 13px;
+  --app-font-thinking-size: 13px;
+  --app-font-editor-size: 13px;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* Per-type font application (Cursor-style) */
+.font-chat { font-family: var(--app-font-chat); font-size: var(--app-font-chat-size); }
+.font-thinking { font-family: var(--app-font-thinking); font-size: var(--app-font-thinking-size); }
+.font-code { font-family: var(--app-font-code); font-size: var(--app-font-code-size); }
+.font-editor { font-family: var(--app-font-editor); font-size: var(--app-font-editor-size); }
 
 html,
 body,

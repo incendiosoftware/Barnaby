@@ -169,11 +169,22 @@ export type DiagnosticsMessageColors = {
 export type ApplicationSettings = {
   restoreSessionOnStartup: boolean
   themeId: string
+  /** @deprecated Use fontChat. Kept for migration. */
+  fontFamily?: string
+  fontChat: string
+  fontChatSize: number
+  fontCode: string
+  fontCodeSize: number
+  fontThinking: string
+  fontThinkingSize: number
+  fontEditor: string
+  fontEditorSize: number
   responseStyle: 'concise' | 'standard' | 'detailed'
   showDebugNotesInTimeline: boolean
   verboseDiagnostics: boolean
   showResponseDurationAfterPrompt: boolean
   editorWordWrap: boolean
+  customiseStandardThemes: boolean
 }
 
 export type OrchestratorSettings = {
@@ -222,10 +233,14 @@ export type PersistedAppState = {
   workspaceSnapshotsByRoot?: unknown
   layoutMode?: unknown
   showWorkspaceWindow?: unknown
+  showGitWindow?: unknown
+  showSettingsWindow?: unknown
   showCodeWindow?: unknown
   codeWindowTab?: unknown
   dockTab?: unknown
   workspaceDockSide?: unknown
+  gitDockSide?: unknown
+  settingsDockSide?: unknown
   activePanelId?: unknown
   focusedEditorId?: unknown
   selectedWorkspaceFile?: unknown
@@ -239,10 +254,14 @@ export type PersistedAppState = {
 export type WorkspaceUiSnapshot = {
   layoutMode: LayoutMode
   showWorkspaceWindow: boolean
+  showGitWindow: boolean
+  showSettingsWindow: boolean
   showCodeWindow: boolean
   codeWindowTab: CodeWindowTab
   dockTab: 'orchestrator' | 'explorer' | 'git' | 'settings'
   workspaceDockSide: WorkspaceDockSide
+  gitDockSide: WorkspaceDockSide
+  settingsDockSide: WorkspaceDockSide
   panels: AgentPanelState[]
   editorPanels: EditorPanelState[]
   activePanelId: string | null
@@ -260,11 +279,15 @@ export type ParsedAppState = {
   dockTab: 'orchestrator' | 'explorer' | 'git' | 'settings' | null
   layoutMode: LayoutMode | null
   workspaceDockSide: WorkspaceDockSide | null
+  gitDockSide: WorkspaceDockSide | null
+  settingsDockSide: WorkspaceDockSide | null
   codeWindowTab: CodeWindowTab | null
   selectedWorkspaceFile: string | null | undefined
   activePanelId: string | null
   focusedEditorId: string | null | undefined
   showWorkspaceWindow: boolean | undefined
+  showGitWindow: boolean | undefined
+  showSettingsWindow: boolean | undefined
   showCodeWindow: boolean | undefined
   expandedDirectories: Record<string, boolean> | undefined
   applicationSettings: ApplicationSettings | undefined

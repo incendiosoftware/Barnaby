@@ -49,8 +49,14 @@ import {
   DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES,
   DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES,
   DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES,
+  DEFAULT_FONT_CODE,
+  DEFAULT_FONT_EDITOR,
+  DEFAULT_FONT_FAMILY,
+  DEFAULT_FONT_THINKING,
   DEFAULT_MODEL_INTERFACES,
+  MONO_FONT_OPTIONS,
   EXPLORER_PREFS_STORAGE_KEY,
+  FONT_OPTIONS,
   FONT_SCALE_STEP,
   MAX_CHAT_HISTORY_ENTRIES,
   MAX_PANELS,
@@ -712,23 +718,56 @@ export function getInitialChatHistory(): ChatHistoryEntry[] {
 }
 
 export function parseApplicationSettings(parsed: Partial<ApplicationSettings> | null | undefined): ApplicationSettings {
+  const validUiFontIds = new Set(FONT_OPTIONS.map((f) => f.id))
+  const validMonoFontIds = new Set(MONO_FONT_OPTIONS.map((f) => f.id))
+  const resolveChat = (): string => {
+    if (typeof parsed?.fontChat === 'string' && validUiFontIds.has(parsed.fontChat)) return parsed.fontChat
+    if (typeof parsed?.fontFamily === 'string' && validUiFontIds.has(parsed.fontFamily)) return parsed.fontFamily
+    return DEFAULT_FONT_FAMILY
+  }
+  const resolveCode = (): string =>
+    typeof parsed?.fontCode === 'string' && validMonoFontIds.has(parsed.fontCode) ? parsed.fontCode : DEFAULT_FONT_CODE
+  const resolveThinking = (): string => {
+    if (typeof parsed?.fontThinking === 'string' && validUiFontIds.has(parsed.fontThinking)) return parsed.fontThinking
+    return resolveChat()
+  }
+  const resolveEditor = (): string =>
+    typeof parsed?.fontEditor === 'string' && validMonoFontIds.has(parsed.fontEditor) ? parsed.fontEditor : DEFAULT_FONT_EDITOR
+
   const defaults: ApplicationSettings = {
-    restoreSessionOnStartup: true,
+    restoreSessionOnStartup: false,
     themeId: DEFAULT_THEME_ID,
+    fontChat: DEFAULT_FONT_FAMILY,
+    fontChatSize: 14,
+    fontCode: DEFAULT_FONT_CODE,
+    fontCodeSize: 13,
+    fontThinking: DEFAULT_FONT_FAMILY,
+    fontThinkingSize: 13,
+    fontEditor: DEFAULT_FONT_EDITOR,
+    fontEditorSize: 13,
     responseStyle: 'standard',
     showDebugNotesInTimeline: false,
     verboseDiagnostics: false,
     showResponseDurationAfterPrompt: false,
     editorWordWrap: true,
+    customiseStandardThemes: false,
   }
   if (!parsed || typeof parsed !== 'object') return defaults
   return {
     restoreSessionOnStartup:
-      typeof parsed.restoreSessionOnStartup === 'boolean' ? parsed.restoreSessionOnStartup : true,
+      typeof parsed.restoreSessionOnStartup === 'boolean' ? parsed.restoreSessionOnStartup : false,
     themeId: (() => {
       if (typeof parsed.themeId === 'string' && THEMES.some((t) => t.id === parsed.themeId)) return parsed.themeId
       return getInitialThemeId()
     })(),
+    fontChat: resolveChat(),
+    fontChatSize: typeof parsed.fontChatSize === 'number' && parsed.fontChatSize >= 8 && parsed.fontChatSize <= 32 ? parsed.fontChatSize : 14,
+    fontCode: resolveCode(),
+    fontCodeSize: typeof parsed.fontCodeSize === 'number' && parsed.fontCodeSize >= 8 && parsed.fontCodeSize <= 32 ? parsed.fontCodeSize : 13,
+    fontThinking: resolveThinking(),
+    fontThinkingSize: typeof parsed.fontThinkingSize === 'number' && parsed.fontThinkingSize >= 8 && parsed.fontThinkingSize <= 32 ? parsed.fontThinkingSize : 13,
+    fontEditor: resolveEditor(),
+    fontEditorSize: typeof parsed.fontEditorSize === 'number' && parsed.fontEditorSize >= 8 && parsed.fontEditorSize <= 32 ? parsed.fontEditorSize : 13,
     responseStyle:
       parsed.responseStyle === 'concise' || parsed.responseStyle === 'standard' || parsed.responseStyle === 'detailed'
         ? parsed.responseStyle
@@ -737,6 +776,7 @@ export function parseApplicationSettings(parsed: Partial<ApplicationSettings> | 
     verboseDiagnostics: Boolean(parsed.verboseDiagnostics),
     showResponseDurationAfterPrompt: Boolean(parsed.showResponseDurationAfterPrompt),
     editorWordWrap: typeof parsed.editorWordWrap === 'boolean' ? parsed.editorWordWrap : true,
+    customiseStandardThemes: Boolean(parsed.customiseStandardThemes),
   }
 }
 
@@ -833,9 +873,9 @@ export function parsePersistedAgentPanel(raw: unknown, fallbackWorkspaceRoot: st
   if (messages.length === 0) return null
   const id = typeof rec.id === 'string' && rec.id ? rec.id : newId()
   const title = typeof rec.title === 'string' && rec.title.trim() ? rec.title.trim() : `Agent ${id.slice(-4)}`
-  const permissionMode: PermissionMode = rec.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
   const sandbox: SandboxMode =
     rec.sandbox === 'read-only' || rec.sandbox === 'workspace-write' ? rec.sandbox : 'workspace-write'
+  const permissionMode: PermissionMode = rec.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
   const cwd =
     typeof rec.cwd === 'string' && rec.cwd.trim() ? rec.cwd : fallbackWorkspaceRoot || ''
   return {
@@ -924,6 +964,8 @@ export function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: stri
             ? snapshot.layoutMode
             : 'vertical',
         showWorkspaceWindow: typeof snapshot.showWorkspaceWindow === 'boolean' ? snapshot.showWorkspaceWindow : true,
+        showGitWindow: typeof snapshot.showGitWindow === 'boolean' ? snapshot.showGitWindow : false,
+        showSettingsWindow: typeof snapshot.showSettingsWindow === 'boolean' ? snapshot.showSettingsWindow : false,
         showCodeWindow: typeof snapshot.showCodeWindow === 'boolean' ? snapshot.showCodeWindow : true,
         codeWindowTab:
           snapshot.codeWindowTab === 'code' || snapshot.codeWindowTab === 'settings' ? snapshot.codeWindowTab : 'code',
@@ -937,6 +979,14 @@ export function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: stri
         workspaceDockSide:
           snapshot.workspaceDockSide === 'left' || snapshot.workspaceDockSide === 'right'
             ? snapshot.workspaceDockSide
+            : 'left',
+        gitDockSide:
+          snapshot.gitDockSide === 'left' || snapshot.gitDockSide === 'right'
+            ? snapshot.gitDockSide
+            : 'left',
+        settingsDockSide:
+          snapshot.settingsDockSide === 'left' || snapshot.settingsDockSide === 'right'
+            ? snapshot.settingsDockSide
             : 'right',
         panels: parsedPanels,
         editorPanels: parsedEditors,
@@ -981,6 +1031,10 @@ export function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: stri
       : null
   const workspaceDockSide: ParsedAppState['workspaceDockSide'] =
     rec.workspaceDockSide === 'left' || rec.workspaceDockSide === 'right' ? rec.workspaceDockSide : null
+  const gitDockSide: ParsedAppState['gitDockSide'] =
+    rec.gitDockSide === 'left' || rec.gitDockSide === 'right' ? rec.gitDockSide : null
+  const settingsDockSide: ParsedAppState['settingsDockSide'] =
+    rec.settingsDockSide === 'left' || rec.settingsDockSide === 'right' ? rec.settingsDockSide : null
   const selectedWorkspaceFile: ParsedAppState['selectedWorkspaceFile'] =
     typeof rec.selectedWorkspaceFile === 'string' && rec.selectedWorkspaceFile
       ? rec.selectedWorkspaceFile
@@ -1013,10 +1067,14 @@ export function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: stri
     codeWindowTab,
     layoutMode,
     workspaceDockSide,
+    gitDockSide,
+    settingsDockSide,
     selectedWorkspaceFile,
     activePanelId,
     focusedEditorId,
     showWorkspaceWindow: typeof rec.showWorkspaceWindow === 'boolean' ? rec.showWorkspaceWindow : undefined,
+    showGitWindow: typeof rec.showGitWindow === 'boolean' ? rec.showGitWindow : undefined,
+    showSettingsWindow: typeof rec.showSettingsWindow === 'boolean' ? rec.showSettingsWindow : undefined,
     showCodeWindow: typeof rec.showCodeWindow === 'boolean' ? rec.showCodeWindow : undefined,
     expandedDirectories,
     applicationSettings:

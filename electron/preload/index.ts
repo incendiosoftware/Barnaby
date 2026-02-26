@@ -148,7 +148,26 @@ const api = {
       error?: string
     }>
   },
-  openDiagnosticsPath(target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog') {
+  openDebugOutputWindow() {
+    return ipcRenderer.invoke('agentorchestrator:openDebugOutputWindow') as Promise<{
+      ok: boolean
+      path: string
+      error?: string
+    }>
+  },
+  getDebugLogContent() {
+    return ipcRenderer.invoke('agentorchestrator:getDebugLogContent') as Promise<{
+      ok: boolean
+      content: string
+      error?: string
+    }>
+  },
+  onDebugLogAppend(cb: (line: string) => void) {
+    const handler = (_: unknown, line: string) => cb(line)
+    ipcRenderer.on('barnaby:debug-log-append', handler)
+    return () => ipcRenderer.removeListener('barnaby:debug-log-append', handler)
+  },
+  openDiagnosticsPath(target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog' | 'debugLog' | 'crashDumps') {
     return ipcRenderer.invoke('agentorchestrator:openDiagnosticsPath', target) as Promise<{
       ok: boolean
       path: string

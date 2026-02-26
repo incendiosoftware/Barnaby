@@ -9,6 +9,8 @@ import {
   CommitIcon,
   DeployIcon,
   ExpandAllIcon,
+  PanelLeftIcon,
+  PanelRightIcon,
   PushIcon,
   RefreshIcon,
   ReleaseIcon,
@@ -92,6 +94,8 @@ import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_INTERFACES,
   DEFAULT_THEME_ID,
+  FONT_OPTIONS,
+  MONO_FONT_OPTIONS,
   DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES,
   DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES,
   DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES,
@@ -145,17 +149,24 @@ import { AgentPanelMessageViewport } from './components/chat/AgentPanelMessageVi
 import { ChatTimeline } from './components/chat/timeline'
 import { createEditorFileController } from './controllers/editorFileController'
 import { createPanelLifecycleController } from './controllers/panelLifecycleController'
+import { createPanelInputController } from './controllers/panelInputController'
 import { createAgentPipelineController } from './controllers/agentPipelineController'
 import { useLocalStoragePersistence } from './hooks/useLocalStoragePersistence'
+import { useAppRuntimeEvents } from './hooks/useAppRuntimeEvents'
 import { createProviderConnectivityController, PROVIDERS_WITH_DEDICATED_PING } from './controllers/providerConnectivityController'
+import { createDiagnosticsImageController } from './controllers/diagnosticsImageController'
+import { createPanelLayoutController } from './controllers/panelLayoutController'
 import { createExplorerWorkflowController } from './controllers/explorerWorkflowController'
 import { createGitWorkflowController } from './controllers/gitWorkflowController'
 import { createWorkspaceSettingsController } from './controllers/workspaceSettingsController'
+import { createWorkspaceLifecycleController } from './controllers/workspaceLifecycleController'
 import { AgentPanelHeader } from './components/panels/AgentPanelHeader'
 import { EditorPanel } from './components/panels/EditorPanel'
 import { WorkspaceTile } from './components/workspace/WorkspaceTile'
 import { AgentPanelShell } from './components/panels/AgentPanelShell'
 import { CodeWindowTile } from './components/panels/CodeWindowTile'
+import { PanelContentRenderer } from './components/panels/PanelContentRenderer'
+import { AppHeaderBar } from './components/layout/AppHeaderBar'
 import { DockedAppSettings } from './components/settings/DockedAppSettings'
 import { AppModals } from './components/modals/AppModals'
 import {
@@ -236,6 +247,13 @@ import {
   formatCheckedAt,
   toLocalFileUrl,
 } from './utils/appCore'
+import {
+  estimatePanelContextUsage as estimatePanelContextUsageUtil,
+  sandboxModeDescription as describeSandboxMode,
+  getWorkspaceSecurityLimitsForPath as getWorkspaceSecurityLimitsForPathUtil,
+  clampPanelSecurityForWorkspace as clampPanelSecurityForWorkspaceUtil,
+  getPanelSecurityState as getPanelSecurityStateUtil,
+} from './utils/panelContext'
 
 export default function App() {
   const api = useMemo(() => window.agentOrchestrator ?? window.fireharness, [])
@@ -341,6 +359,8 @@ export default function App() {
   const [mcpAddMode, setMcpAddMode] = useState(false)
   const [repairShortcutStatus, setRepairShortcutStatus] = useState<string | null>(null)
   const [workspaceDockSide, setWorkspaceDockSide] = useState<WorkspaceDockSide>(() => getInitialWorkspaceDockSide())
+  const [gitDockSide, setGitDockSide] = useState<WorkspaceDockSide>('left')
+  const [settingsDockSide, setSettingsDockSide] = useState<WorkspaceDockSide>('right')
   const [workspaceTree, setWorkspaceTree] = useState<WorkspaceTreeNode[]>([])
   const [workspaceTreeLoading, setWorkspaceTreeLoading] = useState(false)
   const [workspaceTreeError, setWorkspaceTreeError] = useState<string | null>(null)
@@ -475,7 +495,10 @@ export default function App() {
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('vertical')
   const [showWorkspaceWindow, setShowWorkspaceWindow] = useState(true)
-  const [showCodeWindow, setShowCodeWindow] = useState(true)
+  const [showGitWindow, setShowGitWindow] = useState(false)
+  const [showSettingsWindow, setShowSettingsWindow] = useState(false)
+  const showCodeWindow = showSettingsWindow
+  const setShowCodeWindow = setShowSettingsWindow
   const [codeWindowTab, setCodeWindowTab] = useState<CodeWindowTab>('code')
   const [showTerminalBar, setShowTerminalBar] = useState(false)
   const [zoomLevel, setZoomLevel] = useState(0)
@@ -565,6 +588,21 @@ export default function App() {
     root.style.setProperty('--theme-dark-950', activeTheme.dark950)
     root.style.setProperty('--theme-dark-900', activeTheme.dark900)
   }, [activeTheme])
+  useEffect(() => {
+    const chat = FONT_OPTIONS.find((f) => f.id === applicationSettings.fontChat) ?? FONT_OPTIONS[0]
+    const code = MONO_FONT_OPTIONS.find((f) => f.id === applicationSettings.fontCode) ?? MONO_FONT_OPTIONS[0]
+    const thinking = FONT_OPTIONS.find((f) => f.id === applicationSettings.fontThinking) ?? FONT_OPTIONS[0]
+    const editor = MONO_FONT_OPTIONS.find((f) => f.id === applicationSettings.fontEditor) ?? MONO_FONT_OPTIONS[0]
+    document.documentElement.style.setProperty('--app-font-family', chat.fontStack)
+    document.documentElement.style.setProperty('--app-font-chat', chat.fontStack)
+    document.documentElement.style.setProperty('--app-font-code', code.fontStack)
+    document.documentElement.style.setProperty('--app-font-thinking', thinking.fontStack)
+    document.documentElement.style.setProperty('--app-font-editor', editor.fontStack)
+    document.documentElement.style.setProperty('--app-font-chat-size', `${applicationSettings.fontChatSize}px`)
+    document.documentElement.style.setProperty('--app-font-code-size', `${applicationSettings.fontCodeSize}px`)
+    document.documentElement.style.setProperty('--app-font-thinking-size', `${applicationSettings.fontThinkingSize}px`)
+    document.documentElement.style.setProperty('--app-font-editor-size', `${applicationSettings.fontEditorSize}px`)
+  }, [applicationSettings.fontChat, applicationSettings.fontChatSize, applicationSettings.fontCode, applicationSettings.fontCodeSize, applicationSettings.fontThinking, applicationSettings.fontThinkingSize, applicationSettings.fontEditor, applicationSettings.fontEditorSize])
 
   // ── Workspace list + API sync (non-localStorage side-effects) ─────
   useEffect(() => {
@@ -722,13 +760,18 @@ export default function App() {
         if (typeof restored.showWorkspaceWindow === 'boolean') {
           setShowWorkspaceWindow(restored.showWorkspaceWindow)
         }
-        if (typeof restored.showCodeWindow === 'boolean') {
-          setShowCodeWindow(restored.showCodeWindow)
+        if (typeof restored.showGitWindow === 'boolean') {
+          setShowGitWindow(restored.showGitWindow)
+        }
+        if (typeof restored.showSettingsWindow === 'boolean') {
+          setShowSettingsWindow(restored.showSettingsWindow)
         }
         if (restored.codeWindowTab) setCodeWindowTab(restored.codeWindowTab)
         if (restored.layoutMode) setLayoutMode(restored.layoutMode)
         if (restored.dockTab) setDockTab(restored.dockTab)
         if (restored.workspaceDockSide) setWorkspaceDockSide(restored.workspaceDockSide)
+        if (restored.gitDockSide) setGitDockSide(restored.gitDockSide)
+        if (restored.settingsDockSide) setSettingsDockSide(restored.settingsDockSide)
         if (restored.selectedWorkspaceFile !== undefined) setSelectedWorkspaceFile(restored.selectedWorkspaceFile)
         if (restored.expandedDirectories) setExpandedDirectories(restored.expandedDirectories)
         if (restored.focusedEditorId !== undefined) {
@@ -823,7 +866,7 @@ export default function App() {
     () => resolveProviderConfigs(providerRegistry),
     [providerRegistry],
   )
-  const showDockedAppSettings = showCodeWindow && codeWindowTab === 'settings'
+  const showDockedAppSettings = showSettingsWindow && codeWindowTab === 'settings'
 
   // Warm up provider auth status on startup so status dots are available immediately.
   // Times the auth check; for providers with a deeper ping (claude, codex) runs that too.
@@ -944,10 +987,14 @@ export default function App() {
             {
               layoutMode: snapshot.layoutMode,
               showWorkspaceWindow: snapshot.showWorkspaceWindow,
+              showGitWindow: snapshot.showGitWindow,
+              showSettingsWindow: snapshot.showSettingsWindow,
               showCodeWindow: snapshot.showCodeWindow,
               codeWindowTab: snapshot.codeWindowTab,
               dockTab: snapshot.dockTab,
               workspaceDockSide: snapshot.workspaceDockSide,
+              gitDockSide: snapshot.gitDockSide,
+              settingsDockSide: snapshot.settingsDockSide,
               panels: snapshot.panels.map((panel) => ({
                 id: panel.id,
                 historyId: panel.historyId,
@@ -986,10 +1033,14 @@ export default function App() {
         ),
         layoutMode,
         showWorkspaceWindow,
-        showCodeWindow,
+        showGitWindow,
+        showSettingsWindow,
+        showCodeWindow: false,
         codeWindowTab,
         dockTab,
         workspaceDockSide,
+        gitDockSide,
+        settingsDockSide,
         activePanelId,
         focusedEditorId,
         selectedWorkspaceFile,
@@ -1050,11 +1101,14 @@ export default function App() {
     panels,
     selectedWorkspaceFile,
     showWorkspaceWindow,
-    showCodeWindow,
+    showGitWindow,
+    showSettingsWindow,
     themeOverrides,
     workspaceList,
     workspaceRoot,
     workspaceDockSide,
+    gitDockSide,
+    settingsDockSide,
   ])
 
   useEffect(() => {
@@ -1223,335 +1277,123 @@ export default function App() {
     }
   }, [])
 
-  function formatWorkspaceClaimFailure(requestedRoot: string, result: WorkspaceLockAcquireResult) {
-    if (result.ok) return ''
-    if (result.reason === 'in-use') {
-      const owner = result.owner
-      const detail =
-        owner && owner.pid
-          ? `Locked by PID ${owner.pid}${owner.hostname ? ` on ${owner.hostname}` : ''} (heartbeat ${new Date(owner.heartbeatAt).toLocaleString()}).`
-          : 'Another Barnaby instance is already active in this workspace.'
-      return `Cannot open workspace:\n${requestedRoot}\n\n${detail}`
-    }
-    if (result.reason === 'invalid-workspace') {
-      return `Cannot open workspace:\n${requestedRoot}\n\n${result.message}`
-    }
-    return `Cannot open workspace:\n${requestedRoot}\n\n${result.message || 'Unknown error.'}`
-  }
-
-  function handleWorkspacePickerFailure(requestedRoot: string, failure: WorkspaceApplyFailure) {
-    const msg =
-      failure.kind === 'request-error'
-        ? failure.message
-        : formatWorkspaceClaimFailure(requestedRoot, failure.result)
-    setWorkspacePickerError(msg)
-  }
-
-  function makeWorkspaceDefaultPanel(nextWorkspaceRoot: string) {
-    const ws = workspaceSettingsByPath[nextWorkspaceRoot]
-    const panel = makeDefaultPanel('default', nextWorkspaceRoot)
-    if (ws?.defaultModel) {
-      panel.model = ws.defaultModel
-      panel.messages = withModelBanner(panel.messages, ws.defaultModel)
-    }
-    if (ws?.permissionMode) panel.permissionMode = ws.permissionMode
-    if (ws?.sandbox) panel.sandbox = ws.sandbox
-    return panel
-  }
-
-  function buildWorkspaceSnapshot(nextWorkspaceRoot: string): WorkspaceUiSnapshot {
-    const normalizedWorkspaceRoot = normalizeWorkspacePathForCompare(nextWorkspaceRoot)
-    const workspacePanels = panelsRef.current
-      .filter((panel) => normalizeWorkspacePathForCompare(panel.cwd) === normalizedWorkspaceRoot)
-      .map((panel) => ({
-        ...panel,
-        connected: false,
-        streaming: false,
-        status: panel.connected || panel.streaming ? 'Disconnected after workspace switch.' : panel.status,
-        messages: cloneChatMessages(panel.messages),
-        attachments: panel.attachments.map((attachment) => ({ ...attachment })),
-        pendingInputs: [...panel.pendingInputs],
+  async function refreshProviderAuthStatusForWorkspace(config: ProviderConfig): Promise<ProviderAuthStatus | null> {
+    setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: true }))
+    try {
+      const status = (await api.getProviderAuthStatus(
+        config.type === 'cli'
+          ? { id: config.id, type: 'cli', cliCommand: config.cliCommand, cliPath: config.cliPath, authCheckCommand: config.authCheckCommand, loginCommand: config.loginCommand }
+          : { id: config.id, type: 'api', apiBaseUrl: config.apiBaseUrl, loginUrl: config.loginUrl },
+      )) as ProviderAuthStatus
+      setProviderAuthByName((prev) => ({ ...prev, [config.id]: status }))
+      setProviderAuthActionByName((prev) => ({ ...prev, [config.id]: null }))
+      return status
+    } catch (err) {
+      setProviderAuthActionByName((prev) => ({
+        ...prev,
+        [config.id]: `Could not check ${config.displayName}: ${formatError(err)}`,
       }))
-    const workspaceEditors = editorPanelsRef.current
-      .filter((panel) => normalizeWorkspacePathForCompare(panel.workspaceRoot) === normalizedWorkspaceRoot)
-      .map((panel) => ({ ...panel }))
-    return {
+      return null
+    } finally {
+      setProviderAuthLoadingByName((prev) => ({ ...prev, [config.id]: false }))
+    }
+  }
+
+  const workspaceLifecycle = useMemo(
+    () =>
+      createWorkspaceLifecycleController({
+        api,
+        workspaceSettingsByPath,
+        panelsRef,
+        editorPanelsRef,
+        focusedEditorIdRef,
+        workspaceSnapshotsRef,
+        workspaceRootRef,
+        activeWorkspaceLockRef,
+        layoutMode,
+        showWorkspaceWindow,
+        showGitWindow,
+        showSettingsWindow,
+        showCodeWindow,
+        codeWindowTab,
+        dockTab,
+        workspaceDockSide,
+        gitDockSide,
+        settingsDockSide,
+        activePanelId,
+        selectedWorkspaceFile,
+        expandedDirectories,
+        workspacePickerPrompt,
+        setupWizardSelection,
+        resolvedProviderConfigs,
+        pendingWorkspaceSwitch,
+        refreshProviderAuthStatus: refreshProviderAuthStatusForWorkspace,
+        setWorkspacePickerError,
+        setWorkspacePickerPrompt,
+        setWorkspacePickerOpening,
+        setShowWorkspacePicker,
+        setSetupWizardStep,
+        setSetupWizardSelection,
+        setSetupWizardStatus,
+        setShowSetupWizard,
+        setSetupWizardFinishing,
+        setProviderRegistry,
+        setShowWorkspaceModal,
+        setWorkspaceRoot,
+        setLayoutMode,
+        setShowWorkspaceWindow,
+        setShowGitWindow,
+        setShowSettingsWindow,
+        setShowCodeWindow,
+        setCodeWindowTab,
+        setDockTab,
+        setWorkspaceDockSide,
+        setGitDockSide,
+        setSettingsDockSide,
+        setExpandedDirectories,
+        setSelectedWorkspaceFile,
+        setEditorPanels,
+        setFocusedEditorId,
+        setPanels,
+        setActivePanelId,
+        setSelectedHistoryId,
+        setPendingWorkspaceSwitch,
+      }),
+    [
+      api,
+      workspaceSettingsByPath,
       layoutMode,
       showWorkspaceWindow,
+      showGitWindow,
+      showSettingsWindow,
       showCodeWindow,
       codeWindowTab,
       dockTab,
       workspaceDockSide,
-      panels: workspacePanels,
-      editorPanels: workspaceEditors,
-      activePanelId: panelsRef.current.some((panel) => panel.id === activePanelId) ? activePanelId : workspacePanels[0]?.id ?? null,
-      focusedEditorId: focusedEditorIdRef.current,
+      gitDockSide,
+      settingsDockSide,
+      activePanelId,
       selectedWorkspaceFile,
-      expandedDirectories: { ...expandedDirectories },
-    }
-  }
-
-  function applyWorkspaceSnapshot(nextWorkspaceRoot: string) {
-    const snapshot = workspaceSnapshotsRef.current[nextWorkspaceRoot]
-    if (!snapshot) {
-      const panel = makeWorkspaceDefaultPanel(nextWorkspaceRoot)
-      setLayoutMode('vertical')
-      setShowWorkspaceWindow(true)
-      setShowCodeWindow(true)
-      setCodeWindowTab('code')
-      setDockTab('explorer')
-      setWorkspaceDockSide(getInitialWorkspaceDockSide())
-      setExpandedDirectories({})
-      setSelectedWorkspaceFile(null)
-      setEditorPanels([])
-      setFocusedEditorId(null)
-      setPanels([panel])
-      setActivePanelId(panel.id)
-      return
-    }
-    setLayoutMode(snapshot.layoutMode)
-    setShowWorkspaceWindow(snapshot.showWorkspaceWindow)
-    setShowCodeWindow(snapshot.showCodeWindow)
-    setCodeWindowTab(snapshot.codeWindowTab)
-    setDockTab(snapshot.dockTab)
-    setWorkspaceDockSide(snapshot.workspaceDockSide)
-    setExpandedDirectories({ ...snapshot.expandedDirectories })
-    setSelectedWorkspaceFile(snapshot.selectedWorkspaceFile)
-    setEditorPanels(snapshot.editorPanels.map((panel) => ({ ...panel })))
-    const restoredPanels = snapshot.panels.map((panel) => ({
-      ...panel,
-      cwd: nextWorkspaceRoot,
-      connected: false,
-      streaming: false,
-      status: 'Restored for workspace.',
-      messages: cloneChatMessages(panel.messages),
-      attachments: panel.attachments.map((attachment) => ({ ...attachment })),
-      pendingInputs: [...panel.pendingInputs],
-    }))
-    if (restoredPanels.length > 0) {
-      setPanels(restoredPanels)
-      const nextActivePanelId =
-        snapshot.activePanelId && restoredPanels.some((panel) => panel.id === snapshot.activePanelId)
-          ? snapshot.activePanelId
-          : restoredPanels[0].id
-      setActivePanelId(nextActivePanelId)
-    } else {
-      const panel = makeWorkspaceDefaultPanel(nextWorkspaceRoot)
-      setPanels([panel])
-      setActivePanelId(panel.id)
-    }
-    const nextFocusedEditor =
-      snapshot.focusedEditorId && snapshot.editorPanels.some((panel) => panel.id === snapshot.focusedEditorId)
-        ? snapshot.focusedEditorId
-        : null
-    setFocusedEditorId(nextFocusedEditor)
-  }
-
-  function openWorkspacePicker(prompt?: string | null) {
-    const nextPrompt = typeof prompt === 'string' && prompt.trim() ? prompt.trim() : null
-    setWorkspacePickerPrompt(nextPrompt)
-    setWorkspacePickerError(null)
-    setWorkspacePickerOpening(null)
-    setShowWorkspacePicker(true)
-  }
-
-  function closeWorkspacePicker() {
-    if (isLockedWorkspacePrompt(workspacePickerPrompt)) return
-    setShowWorkspacePicker(false)
-    setWorkspacePickerPrompt(null)
-    setWorkspacePickerError(null)
-    setWorkspacePickerOpening(null)
-  }
-
-  function openSetupWizard() {
-    setSetupWizardStep('providers')
-    setSetupWizardSelection(getDefaultSetupWizardSelection())
-    setSetupWizardStatus(null)
-    setShowSetupWizard(true)
-  }
-
-  async function runSetupConnectivityChecks(selected: ConnectivityProvider[]) {
-    const statuses = await Promise.all(
-      selected.map(async (providerId) => {
-        const config = resolvedProviderConfigs.find((p) => p.id === providerId)
-        if (!config) return null
-        return refreshProviderAuthStatus(config)
-      }),
-    )
-    return statuses
-  }
-
-  async function finishSetupWizard() {
-    const selected = CONNECTIVITY_PROVIDERS.filter((id) => setupWizardSelection[id])
-    if (selected.length === 0) {
-      setSetupWizardStatus('Select at least one provider to continue.')
-      return
-    }
-    setSetupWizardFinishing(true)
-    setSetupWizardStatus('Checking selected providers...')
-    try {
-      const statuses = await runSetupConnectivityChecks(selected)
-      const connected = statuses.some((s) => Boolean(s?.authenticated))
-      if (!connected) {
-        setSetupWizardStatus('No selected provider is connected yet. Complete login/API key setup for at least one provider.')
-        return
-      }
-      setProviderRegistry((prev) => ({
-        ...prev,
-        overrides: {
-          ...prev.overrides,
-          ...Object.fromEntries(
-            CONNECTIVITY_PROVIDERS.filter((id) => setupWizardSelection[id]).map((id) => [
-              id,
-              { ...(prev.overrides[id] ?? {}), enabled: true },
-            ]),
-          ),
-        },
-      }))
-      localStorage.setItem(SETUP_WIZARD_DONE_STORAGE_KEY, '1')
-      setShowSetupWizard(false)
-      setSetupWizardStatus(null)
-      if (!workspaceRootRef.current?.trim()) {
-        openWorkspacePicker('Select or create a workspace to continue.')
-      }
-    } finally {
-      setSetupWizardFinishing(false)
-    }
-  }
-
-  async function applyWorkspaceRoot(
-    nextRoot: string,
-    options?: {
-      showFailureAlert?: boolean
-      rebindPanels?: boolean
-      onFailure?: (failure: WorkspaceApplyFailure) => void
-    },
-  ) {
-    const targetRoot = nextRoot.trim()
-    if (!targetRoot) return null
-    const showFailureAlert = options?.showFailureAlert ?? true
-    const rebindPanels = options?.rebindPanels ?? false
-    const onFailure = options?.onFailure
-
-    let lockResult: WorkspaceLockAcquireResult
-    try {
-      lockResult = await api.claimWorkspace(targetRoot)
-    } catch (err) {
-      const message = formatError(err)
-      if (showFailureAlert) {
-        alert(`Cannot open workspace:\n${targetRoot}\n\n${message}`)
-      }
-      onFailure?.({ kind: 'request-error', message })
-      return null
-    }
-
-    if (!lockResult.ok) {
-      if (showFailureAlert) {
-        alert(formatWorkspaceClaimFailure(targetRoot, lockResult))
-      }
-      onFailure?.({ kind: 'lock-denied', result: lockResult })
-      return null
-    }
-
-    const resolvedRoot = lockResult.workspaceRoot
-    const previousLockedRoot = activeWorkspaceLockRef.current
-    activeWorkspaceLockRef.current = resolvedRoot
-    if (previousLockedRoot && previousLockedRoot !== resolvedRoot) {
-      void api.releaseWorkspace(previousLockedRoot).catch(() => {})
-    }
-
-    if (workspaceRootRef.current === resolvedRoot) return resolvedRoot
-
-    setWorkspaceRoot(resolvedRoot)
-    if (rebindPanels) {
-      // Workspace is central: propagate to all panels and force reconnect on next send.
-      setPanels((prev) =>
-        prev.map((p) => ({
-          ...p,
-          cwd: resolvedRoot,
-          connected: false,
-          status: 'Workspace changed. Reconnect on next send.',
-        })),
-      )
-    }
-    return resolvedRoot
-  }
-
-  function requestWorkspaceSwitch(targetRoot: string, source: 'menu' | 'picker' | 'dropdown' | 'workspace-create') {
-    const next = targetRoot.trim()
-    if (!next) return
-    const current = workspaceRootRef.current?.trim() ?? ''
-    if (source !== 'picker' && normalizeWorkspacePathForCompare(next) === normalizeWorkspacePathForCompare(current)) return
-    const fromPicker = source === 'picker'
-    if (fromPicker) {
-      setWorkspacePickerError(null)
-      setWorkspacePickerOpening(next)
-    }
-    if (!current) {
-      void (async () => {
-        try {
-          const openedRoot = await applyWorkspaceRoot(next, {
-            showFailureAlert: !fromPicker,
-            rebindPanels: false,
-            onFailure: fromPicker ? (f) => handleWorkspacePickerFailure(next, f) : undefined,
-          })
-          if (!openedRoot) return
-          applyWorkspaceSnapshot(openedRoot)
-          if (fromPicker) closeWorkspacePicker()
-          if (source === 'workspace-create') setShowWorkspaceModal(false)
-        } finally {
-          if (fromPicker) setWorkspacePickerOpening(null)
-        }
-      })()
-      return
-    }
-    if (fromPicker) {
-      void doWorkspaceSwitch(next, source)
-      return
-    }
-    setPendingWorkspaceSwitch({ targetRoot: next, source })
-  }
-
-  async function doWorkspaceSwitch(targetRoot: string, source: 'menu' | 'picker' | 'dropdown' | 'workspace-create') {
-    const currentWorkspace = workspaceRootRef.current?.trim()
-    const panelIds = [...new Set(panelsRef.current.map((panel) => panel.id))]
-    if (currentWorkspace) {
-      workspaceSnapshotsRef.current[currentWorkspace] = buildWorkspaceSnapshot(currentWorkspace)
-    }
-    const fromPicker = source === 'picker'
-    if (fromPicker) {
-      setWorkspacePickerError(null)
-      setWorkspacePickerOpening(targetRoot)
-    }
-    const openedRoot = await applyWorkspaceRoot(targetRoot, {
-      showFailureAlert: !fromPicker,
-      rebindPanels: false,
-      onFailure: fromPicker ? (f) => handleWorkspacePickerFailure(targetRoot, f) : undefined,
-    }).finally(() => {
-      if (fromPicker) setWorkspacePickerOpening(null)
-    })
-    if (!openedRoot) return
-
-    if (fromPicker) closeWorkspacePicker()
-    await Promise.all(panelIds.map((id) => api.disconnect(id).catch(() => {})))
-
-    setPanels([])
-    setEditorPanels([])
-    setActivePanelId('default')
-    setFocusedEditorId(null)
-    setSelectedHistoryId('')
-    setSelectedWorkspaceFile(null)
-    setExpandedDirectories({})
-    applyWorkspaceSnapshot(openedRoot)
-    if (source === 'workspace-create') setShowWorkspaceModal(false)
-  }
-
-  async function confirmWorkspaceSwitch() {
-    const pending = pendingWorkspaceSwitch
-    if (!pending) return
-    setPendingWorkspaceSwitch(null)
-    await doWorkspaceSwitch(pending.targetRoot, pending.source)
-  }
+      expandedDirectories,
+      workspacePickerPrompt,
+      setupWizardSelection,
+      resolvedProviderConfigs,
+      pendingWorkspaceSwitch,
+      refreshProviderAuthStatusForWorkspace,
+    ],
+  )
+  const {
+    buildWorkspaceSnapshot,
+    openWorkspacePicker,
+    closeWorkspacePicker,
+    openSetupWizard,
+    runSetupConnectivityChecks,
+    finishSetupWizard,
+    applyWorkspaceRoot,
+    requestWorkspaceSwitch,
+    confirmWorkspaceSwitch,
+    applyWorkspaceSnapshot,
+  } = workspaceLifecycle
 
   const workspaceSettings = useMemo(
     () =>
@@ -2076,283 +1918,7 @@ export default function App() {
     activityFlushTimers.current.set(agentWindowId, t)
   }
 
-  useEffect(() => {
-    const unsubEvent = api.onEvent(({ agentWindowId, evt }: any) => {
-      if (!agentWindowId) agentWindowId = 'default'
-      if (evt?.type === 'thinking') {
-        appendPanelDebug(agentWindowId, 'event:thinking', evt.message ?? '')
-        markPanelActivity(agentWindowId, evt)
-        const thinkingText = typeof evt.message === 'string' ? evt.message.trim() : ''
-        if (thinkingText && thinkingText.includes(':')) {
-          const prefixed = `\u{1F504} ${formatToolTrace(thinkingText)}`
-          setPanels((prev) =>
-            prev.map((w) => {
-              if (w.id !== agentWindowId) return w
-              const last = w.messages[w.messages.length - 1]
-              if (last && last.role === 'system' && last.content === prefixed) return w
-              return { ...w, messages: [...w.messages, { id: newId(), role: 'system' as const, content: prefixed, format: 'text' as const, createdAt: Date.now() }] }
-            }),
-          )
-        }
-        return
-      }
-
-      markPanelActivity(agentWindowId, evt)
-
-      if (evt?.type === 'status') {
-        appendPanelDebug(agentWindowId, 'event:status', `${evt.status}${evt.message ? ` - ${evt.message}` : ''}`)
-        const isRetryableError = evt.status === 'error' && typeof evt.message === 'string' &&
-          /status 429|Retrying with backoff|Attempt \d+ failed(?!.*Max attempts)|Rate limited/i.test(evt.message)
-        let closedAfterStreaming = false
-        setPanels((prev) =>
-          prev.map((w) =>
-            w.id !== agentWindowId
-              ? w
-              : {
-                  ...w,
-                  status: isRetryableError ? 'Rate limited — retrying...' : (evt.message ?? evt.status),
-                  connected: evt.status === 'ready',
-                  streaming: isRetryableError ? w.streaming : (evt.status === 'closed' || evt.status === 'error' ? false : w.streaming),
-                  ...(evt.status === 'closed' && !isRetryableError && w.streaming
-                    ? (() => {
-                        closedAfterStreaming = true
-                        return {}
-                      })()
-                    : {}),
-                  messages:
-                    evt.status === 'error' && typeof evt.message === 'string' && !isRetryableError
-                      ? (() => {
-                          const withLimit = withLimitWarningMessage(w.messages, evt.message)
-                          const generic = `Provider error: ${evt.message.trim()}`
-                          const hasGeneric = withLimit.slice(-8).some((m) => m.role === 'system' && m.content === generic)
-                          return hasGeneric
-                            ? withLimit
-                            : [...withLimit, { id: newId(), role: 'system' as const, content: generic, format: 'text' as const, createdAt: Date.now() }]
-                        })()
-                      : w.messages,
-                },
-          ),
-        )
-        if (evt.status === 'error' && !isRetryableError) {
-          clearPanelTurnComplete(agentWindowId)
-        } else if (evt.status === 'closed' && !isRetryableError && closedAfterStreaming) {
-          markPanelTurnComplete(agentWindowId)
-        }
-        if ((evt.status === 'closed' || evt.status === 'error') && !isRetryableError) {
-          activePromptStartedAtRef.current.delete(agentWindowId)
-          queueMicrotask(() => kickQueuedMessage(agentWindowId))
-        }
-        return
-      }
-
-      if (evt?.type === 'assistantDelta') {
-        queueDelta(agentWindowId, String(evt.delta ?? ''))
-        return
-      }
-
-      if (evt?.type === 'assistantCompleted') {
-        appendPanelDebug(agentWindowId, 'event:assistantCompleted', 'Assistant turn completed')
-        flushWindowDelta(agentWindowId)
-        // Mark this provider as verified (first successful response confirms readiness)
-        const completedPanel = panelsRef.current.find((p) => p.id === agentWindowId)
-        if (completedPanel) {
-          const verifiedProvider = getModelProvider(completedPanel.model)
-          setProviderVerifiedByName((prev) => prev[verifiedProvider] ? prev : { ...prev, [verifiedProvider]: true })
-        }
-        let snapshotForHistory: AgentPanelState | null = null
-        let shouldKeepPromptTimer = false
-        setPanels((prev) =>
-          prev.map((w) => {
-            if (w.id !== agentWindowId) return w
-            const msgs = w.messages
-            const lastAssistantIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-            const lastAssistant = lastAssistantIdx >= 0 ? msgs[lastAssistantIdx] : null
-            if (!lastAssistant) {
-              const updated = { ...w, streaming: false }
-              snapshotForHistory = updated
-              return updated
-            }
-            let pendingInputs: string[] = w.pendingInputs
-            let nextMessages: ChatMessage[] = [...msgs.slice(0, lastAssistantIdx), { ...lastAssistant, format: 'markdown' as const }, ...msgs.slice(lastAssistantIdx + 1)]
-            if (looksIncomplete(lastAssistant.content)) {
-              const count = autoContinueCountRef.current.get(agentWindowId) ?? 0
-              if (count < MAX_AUTO_CONTINUE && w.pendingInputs.length === 0) {
-                autoContinueCountRef.current.set(agentWindowId, count + 1)
-                pendingInputs = [...w.pendingInputs, AUTO_CONTINUE_PROMPT]
-                shouldKeepPromptTimer = true
-              }
-            } else {
-              autoContinueCountRef.current.delete(agentWindowId)
-            }
-            const updated = { ...w, streaming: false, pendingInputs, messages: nextMessages }
-            snapshotForHistory = updated
-            return updated
-          }),
-        )
-        if (!shouldKeepPromptTimer) {
-          const startedAt = activePromptStartedAtRef.current.get(agentWindowId)
-          if (typeof startedAt === 'number') {
-            const elapsedMs = Math.max(0, Date.now() - startedAt)
-            setLastPromptDurationMsByPanel((prev) => ({ ...prev, [agentWindowId]: elapsedMs }))
-          }
-          activePromptStartedAtRef.current.delete(agentWindowId)
-        }
-        if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
-        markPanelTurnComplete(agentWindowId)
-        queueMicrotask(() => kickQueuedMessage(agentWindowId))
-      }
-
-      if (evt?.type === 'usageUpdated') {
-        setPanels((prev) =>
-          prev.map((w) =>
-            w.id === agentWindowId
-              ? {
-                  ...w,
-                  usage: evt.usage,
-                  messages:
-                    getModelProvider(w.model) === 'codex'
-                      ? withExhaustedRateLimitWarning(w.messages, evt.usage)
-                      : w.messages,
-                }
-              : w,
-          ),
-        )
-        return
-      }
-
-      if (evt?.type === 'rawNotification') {
-        const method = String(evt.method ?? '')
-        if (isTurnCompletionRawNotification(method, evt.params)) {
-          markPanelTurnComplete(agentWindowId)
-        }
-        appendPanelDebug(agentWindowId, 'event:raw', method)
-        const note = summarizeRawNotification(method, evt.params)
-        if (!note) return
-        if (!shouldSurfaceRawNoteInChat(method)) return
-        setPanels((prev) =>
-          prev.map((w) =>
-            w.id !== agentWindowId
-              ? w
-              : {
-                  ...w,
-                  messages: [...w.messages, { id: newId(), role: 'system', content: note, format: 'text', createdAt: Date.now() }],
-                },
-          ),
-        )
-      }
-    })
-
-    const unsubMenu = api.onMenu?.((msg: { action: string; path?: string }) => {
-      const { action, path: actionPath } = msg
-      if (action === 'newAgentWindow') {
-        createAgentPanel()
-        return
-      }
-      if (action === 'newFile') {
-        void createNewFileFromMenu()
-        return
-      }
-      if (action === 'newWorkspace') {
-        workspaceSettings.openWorkspaceSettings('new')
-        return
-      }
-      if (action === 'openWorkspacePicker') {
-        openWorkspacePicker()
-        return
-      }
-      if (action === 'openFile') {
-        void openFileFromMenu()
-        return
-      }
-      if (action === 'openWorkspace' && typeof actionPath === 'string') {
-        requestWorkspaceSwitch(actionPath, 'menu')
-        closeWorkspacePicker()
-        return
-      }
-      if (action === 'closeFocused') {
-        closeFocusedFromMenu()
-        return
-      }
-      if (action === 'closeWorkspace') {
-        if (workspaceList.length <= 1) return
-        void workspaceSettings.deleteWorkspace(workspaceRoot)
-        return
-      }
-      if (action === 'findInPage') {
-        findInPageFromMenu()
-        return
-      }
-      if (action === 'findInFiles') {
-        void findInFilesFromMenu()
-        return
-      }
-      if (action === 'openThemeModal') {
-        openAppSettingsInRightDock('preferences')
-        return
-      }
-      if (action === 'openAppSettings' || action === 'openConnectivity' || action === 'openSettings') {
-        openAppSettingsInRightDock('connectivity')
-        return
-      }
-      if (action === 'openModelSetup') {
-        openAppSettingsInRightDock('models')
-        return
-      }
-      if (action === 'openPreferences') {
-        openAppSettingsInRightDock('preferences')
-        return
-      }
-      if (action === 'openAgents') {
-        openAppSettingsInRightDock('agents')
-        return
-      }
-      if (action === 'openDiagnostics') {
-        openAppSettingsInRightDock('diagnostics')
-        return
-      }
-      if (action === 'openOrchestrator') {
-        openAppSettingsInRightDock('orchestrator')
-        return
-      }
-      if (action === 'saveEditorFile') {
-        const targetEditorId = focusedEditorIdRef.current
-        if (targetEditorId) void saveEditorPanel(targetEditorId)
-        return
-      }
-      if (action === 'saveEditorFileAs') {
-        const targetEditorId = focusedEditorIdRef.current
-        if (targetEditorId) void saveEditorPanelAs(targetEditorId)
-        return
-      }
-      if (action === 'layoutVertical') setLayoutMode('vertical')
-      if (action === 'layoutHorizontal') setLayoutMode('horizontal')
-      if (action === 'layoutGrid') setLayoutMode('grid')
-      if (action === 'toggleWorkspaceWindow') setShowWorkspaceWindow((prev) => !prev)
-      if (action === 'toggleCodeWindow') setShowCodeWindow((prev) => !prev)
-      if (action === 'zoomIn') {
-        api.zoomIn?.()
-        const level = api.getZoomLevel?.()
-        if (level !== undefined) setZoomLevel(level)
-        return
-      }
-      if (action === 'zoomOut') {
-        api.zoomOut?.()
-        const level = api.getZoomLevel?.()
-        if (level !== undefined) setZoomLevel(level)
-        return
-      }
-      if (action === 'resetZoom') {
-        api.resetZoom?.()
-        setZoomLevel(0)
-        return
-      }
-    })
-
-    return () => {
-      unsubEvent?.()
-      unsubMenu?.()
-    }
-  }, [api, workspaceList, workspaceRoot])
+  // Runtime event hook is wired after editor/explorer workflow setup.
 
   useEffect(() => {
     const cleanup = registerPluginHostCallbacks({
@@ -2412,101 +1978,16 @@ export default function App() {
     return () => { unsub?.() }
   }, [dockTab, api])
 
-  function estimateTokenCountFromText(text: string) {
-    const trimmed = text.trim()
-    if (!trimmed) return 0
-    const charBased = Math.ceil(trimmed.length / TOKEN_ESTIMATE_CHARS_PER_TOKEN)
-    const wordCount = trimmed.split(/\s+/).filter(Boolean).length
-    const wordBased = Math.ceil(wordCount * TOKEN_ESTIMATE_WORDS_MULTIPLIER)
-    return Math.max(charBased, wordBased)
-  }
-
-  function getKnownContextTokensForModel(model: string, provider: ModelProvider): number | null {
-    const normalized = model.trim().toLowerCase()
-
-    if (provider === 'gemini') {
-      if (normalized.includes('pro')) return 2_097_152
-      if (normalized.includes('flash')) return 1_048_576
-      return 1_048_576
-    }
-
-    if (provider === 'claude') {
-      return 200_000
-    }
-
-    if (provider === 'codex') {
-      return DEFAULT_GPT_CONTEXT_TOKENS
-    }
-
-    if (provider === 'openrouter') {
-      // Common minimum for modern models
-      return 128_000
-    }
-
-    return null
-  }
-
-  function estimatePanelContextUsage(panel: AgentPanelState): {
-    estimatedInputTokens: number
-    safeInputBudgetTokens: number
-    modelContextTokens: number
-    outputReserveTokens: number
-    usedPercent: number
-  } | null {
-    const provider = getModelProvider(panel.model)
-    const modelContextTokens = getKnownContextTokensForModel(panel.model, provider)
-    if (!modelContextTokens) return null
-
-    let estimatedInputTokens = TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS
-    for (const message of panel.messages) {
-      estimatedInputTokens += TOKEN_ESTIMATE_MESSAGE_OVERHEAD
-      estimatedInputTokens += estimateTokenCountFromText(message.content)
-      estimatedInputTokens += (message.attachments?.length ?? 0) * TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS
-    }
-
-    for (const queued of panel.pendingInputs) {
-      estimatedInputTokens += TOKEN_ESTIMATE_MESSAGE_OVERHEAD
-      estimatedInputTokens += estimateTokenCountFromText(queued)
-    }
-
-    const draft = panel.input.trim()
-    if (draft) {
-      estimatedInputTokens += TOKEN_ESTIMATE_MESSAGE_OVERHEAD
-      estimatedInputTokens += estimateTokenCountFromText(draft)
-    }
-    estimatedInputTokens += panel.attachments.length * TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS
-
-    const outputReserveTokens = Math.min(
-      CONTEXT_MAX_OUTPUT_RESERVE_TOKENS,
-      Math.max(CONTEXT_MIN_OUTPUT_RESERVE_TOKENS, Math.round(modelContextTokens * CONTEXT_OUTPUT_RESERVE_RATIO)),
-    )
-    const safeInputBudgetTokens = Math.max(1, modelContextTokens - outputReserveTokens)
-    const usedPercent = (estimatedInputTokens / safeInputBudgetTokens) * 100
-
-    return {
-      estimatedInputTokens,
-      safeInputBudgetTokens,
-      modelContextTokens,
-      outputReserveTokens,
-      usedPercent,
-    }
+  function estimatePanelContextUsage(panel: AgentPanelState) {
+    return estimatePanelContextUsageUtil(panel, getModelProvider)
   }
 
   function sandboxModeDescription(mode: SandboxMode) {
-    if (mode === 'read-only') return 'Read project files only; no file edits or shell writes.'
-    return 'Can edit files and run commands inside the workspace folder.'
+    return describeSandboxMode(mode)
   }
 
   function getWorkspaceSecurityLimitsForPath(path: string): { sandbox: SandboxMode; permissionMode: PermissionMode } {
-    const ws = workspaceSettingsByPath[path] ?? workspaceSettingsByPath[workspaceRoot]
-    const sandbox: SandboxMode = ws?.sandbox === 'read-only' ? 'read-only' : 'workspace-write'
-    const permissionMode: PermissionMode =
-      sandbox === 'read-only'
-        ? 'verify-first'
-        : ws?.permissionMode === 'proceed-always'
-          ? 'proceed-always'
-          : 'verify-first'
-    return { sandbox, permissionMode }
+    return getWorkspaceSecurityLimitsForPathUtil(path, workspaceSettingsByPath, workspaceRoot)
   }
 
   function clampPanelSecurityForWorkspace(
@@ -2514,164 +1995,28 @@ export default function App() {
     sandbox: SandboxMode,
     permissionMode: PermissionMode,
   ): { sandbox: SandboxMode; permissionMode: PermissionMode } {
-    const limits = getWorkspaceSecurityLimitsForPath(cwd)
-    const nextSandbox: SandboxMode = limits.sandbox === 'read-only' ? 'read-only' : sandbox
-    const nextPermissionMode: PermissionMode =
-      nextSandbox === 'read-only' || limits.permissionMode === 'verify-first'
-        ? 'verify-first'
-        : permissionMode
-    return { sandbox: nextSandbox, permissionMode: nextPermissionMode }
+    return clampPanelSecurityForWorkspaceUtil(cwd, sandbox, permissionMode, workspaceSettingsByPath, workspaceRoot)
   }
 
   function getPanelSecurityState(panel: Pick<AgentPanelState, 'cwd' | 'sandbox' | 'permissionMode'>) {
-    const limits = getWorkspaceSecurityLimitsForPath(panel.cwd)
-    const effective = clampPanelSecurityForWorkspace(panel.cwd, panel.sandbox, panel.permissionMode)
-    return {
-      workspaceSandbox: limits.sandbox,
-      workspacePermissionMode: limits.permissionMode,
-      effectiveSandbox: effective.sandbox,
-      effectivePermissionMode: effective.permissionMode,
-      sandboxLockedToView: limits.sandbox === 'read-only',
-      permissionLockedByReadOnlySandbox: limits.sandbox === 'read-only',
-      permissionLockedToVerifyFirst: limits.sandbox !== 'read-only' && limits.permissionMode === 'verify-first',
-    }
+    return getPanelSecurityStateUtil(panel, workspaceSettingsByPath, workspaceRoot)
   }
 
-  function openDiagnosticsTarget(
-    target: 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog',
-    label: string,
-  ) {
-    if (target === 'chatHistory' || target === 'appState' || target === 'runtimeLog') {
-      openDiagnosticsFileInEditor(target, label)
-      return
-    }
-    setDiagnosticsActionStatus(null)
-    void (async () => {
-      try {
-        const result = await api.openDiagnosticsPath?.(target)
-        if (!result?.ok) {
-          setDiagnosticsActionStatus(result?.error ? `Could not open ${label}: ${result.error}` : `Could not open ${label}.`)
-          return
-        }
-      } catch (err) {
-        setDiagnosticsActionStatus(`Could not open ${label}: ${formatError(err)}`)
-      }
-    })()
-  }
-
-  function openDiagnosticsFileInEditor(
-    target: 'chatHistory' | 'appState' | 'runtimeLog',
-    label: string,
-  ) {
-    setDiagnosticsActionStatus(null)
-    void (async () => {
-      try {
-        const result = await api.readDiagnosticsFile?.(target)
-        if (!result?.ok || typeof result.content !== 'string') {
-          setDiagnosticsActionStatus(result?.error ? `Could not open ${label}: ${result.error}` : `Could not open ${label}.`)
-          return
-        }
-        const diagnosticsContent = result.content
-        const existing = editorPanelsRef.current.find((p) => p.diagnosticsTarget === target)
-        setShowCodeWindow(true)
-        if (existing) {
-          setEditorPanels((prev) =>
-            prev.map((p) =>
-              p.id !== existing.id
-                ? p
-                : {
-                    ...p,
-                    content: diagnosticsContent,
-                    size: diagnosticsContent.length,
-                    dirty: false,
-                    diagnosticsReadOnly: result.writable === false,
-                    error: undefined,
-                  },
-            ),
-          )
-          setFocusedEditor(existing.id)
-          return
-        }
-        const panelId = `editor-${newId()}`
-        const panelTitle = fileNameFromRelativePath(result.path || `${target}.txt`)
-        const newPanel: EditorPanelState = {
-          id: panelId,
-          workspaceRoot,
-          relativePath: result.path || target,
-          title: panelTitle,
-          fontScale: 1,
-          content: diagnosticsContent,
-          size: diagnosticsContent.length,
-          loading: false,
-          saving: false,
-          dirty: false,
-          binary: false,
-          editMode: true,
-          diagnosticsTarget: target,
-          diagnosticsReadOnly: result.writable === false,
-        }
-        setEditorPanels((prev) => {
-          if (prev.length < MAX_EDITOR_PANELS) return [...prev, newPanel]
-          const oldestUneditedIdx = prev.findIndex((p) => !p.dirty)
-          const next = oldestUneditedIdx >= 0 ? prev.filter((_, i) => i !== oldestUneditedIdx) : prev
-          return [...next, newPanel]
-        })
-        setFocusedEditor(panelId)
-      } catch (err) {
-        setDiagnosticsActionStatus(`Could not open ${label}: ${formatError(err)}`)
-      }
-    })()
-  }
-
-  function fileToDataUrl(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onerror = () => reject(new Error('Failed reading pasted image'))
-      reader.onload = () => {
-        if (typeof reader.result === 'string') resolve(reader.result)
-        else reject(new Error('Failed reading pasted image'))
-      }
-      reader.readAsDataURL(file)
-    })
-  }
-
-  async function handlePasteImage(panelId: string, file: File) {
-    try {
-      const dataUrl = await fileToDataUrl(file)
-      const saved = await api.savePastedImage(dataUrl, file.type || 'image/png')
-      setPanels((prev) =>
-        prev.map((p) =>
-          p.id !== panelId
-            ? p
-            : {
-                ...p,
-                attachments: [
-                  ...p.attachments,
-                  {
-                    id: newId(),
-                    path: saved.path,
-                    label: file.name || `pasted-image.${saved.mimeType.includes('jpeg') ? 'jpg' : 'png'}`,
-                    mimeType: saved.mimeType,
-                  },
-                ],
-                status: 'Image attached',
-              },
-        ),
-      )
-    } catch (err) {
-      const msg = formatError(err)
-      setPanels((prev) =>
-        prev.map((p) =>
-          p.id !== panelId
-            ? p
-            : {
-                ...p,
-                messages: [...p.messages, { id: newId(), role: 'system', content: `Image paste failed: ${msg}`, format: 'text', createdAt: Date.now() }],
-              },
-        ),
-      )
-    }
-  }
+  const diagnosticsImageCtrl = useMemo(() => createDiagnosticsImageController({
+    api,
+    workspaceRoot,
+    editorPanelsRef,
+    setDiagnosticsActionStatus,
+    setShowCodeWindow: setShowSettingsWindow, // alias for openDiagnosticsTarget
+    setEditorPanels,
+    setFocusedEditor,
+    setPanels,
+    formatError,
+    fileNameFromRelativePath,
+    newId,
+    MAX_EDITOR_PANELS,
+  }), [api, workspaceRoot])
+  const { openDiagnosticsTarget, handlePasteImage } = diagnosticsImageCtrl
 
   function getModelProvider(model: string): ModelProvider {
     return modelConfig.interfaces.find((m) => m.id === model)?.provider ?? 'codex'
@@ -2780,7 +2125,7 @@ export default function App() {
     () =>
       createEditorFileController({
         workspaceRoot,
-        setShowCodeWindow,
+        setShowCodeWindow: () => {}, // Editor panels no longer require showing a specific dock window
         setCodeWindowTab,
         setEditorPanels,
         setFocusedEditor,
@@ -2898,110 +2243,107 @@ export default function App() {
     }
   }
 
-  function createAgentPanel(sourcePanelId?: string) {
-    if (panelsRef.current.length >= MAX_PANELS) return
+  const panelLayoutCtrl = useMemo(() => createPanelLayoutController({
+    panelsRef,
+    workspaceRoot,
+    workspaceSettingsByPath,
+    MAX_PANELS,
+    DEFAULT_MODEL,
+    newId,
+    makeDefaultPanel,
+    withModelBanner,
+    parseInteractionMode,
+    clampPanelSecurityForWorkspace,
+    setPanels,
+    setLayoutMode,
+    setActivePanelId,
+    setFocusedEditorId,
+    setWorkspaceDockSide,
+    setDraggingPanelId,
+    setDragOverTarget,
+  }), [workspaceRoot, workspaceSettingsByPath])
+  const {
+    DND_TYPE_DOCK,
+    DND_TYPE_AGENT,
+    createAgentPanel,
+    splitAgentPanel,
+    reorderAgentPanel,
+    handleDragStart,
+    handleDragEnd,
+    handleDockDrop,
+    handleAgentDrop,
+    handleDragOver,
+  } = panelLayoutCtrl
 
-    const sourcePanel = sourcePanelId ? panelsRef.current.find((panel) => panel.id === sourcePanelId) : undefined
-    const panelWorkspace = sourcePanel?.cwd || workspaceRoot
-    const ws = workspaceSettingsByPath[panelWorkspace] ?? workspaceSettingsByPath[workspaceRoot]
-    const id = newId()
-    const startupModel = sourcePanel?.model ?? ws?.defaultModel ?? DEFAULT_MODEL
-    const p = makeDefaultPanel(id, panelWorkspace)
-    p.model = startupModel
-    p.messages = withModelBanner(p.messages, startupModel)
-    p.interactionMode = parseInteractionMode(sourcePanel?.interactionMode)
-    p.permissionMode = sourcePanel?.permissionMode ?? ws?.permissionMode ?? p.permissionMode
-    p.sandbox = sourcePanel?.sandbox ?? ws?.sandbox ?? p.sandbox
-    const clampedSecurity = clampPanelSecurityForWorkspace(panelWorkspace, p.sandbox, p.permissionMode)
-    p.sandbox = clampedSecurity.sandbox
-    p.permissionMode = clampedSecurity.permissionMode
-    p.fontScale = sourcePanel?.fontScale ?? p.fontScale
-    const nextPanelCount = panelsRef.current.length + 1
-    setPanels((prev) => {
-      if (prev.length >= MAX_PANELS) return prev
-      return [...prev, p]
-    })
-    if (nextPanelCount > 3) setLayoutMode('grid')
-    setActivePanelId(id)
-    setFocusedEditorId(null)
+  useAppRuntimeEvents({
+    api,
+    workspaceList,
+    workspaceRoot,
+    appendPanelDebug,
+    markPanelActivity,
+    formatToolTrace,
+    setPanels,
+    newId,
+    withLimitWarningMessage,
+    clearPanelTurnComplete,
+    markPanelTurnComplete,
+    activePromptStartedAtRef,
+    kickQueuedMessage,
+    queueDelta,
+    flushWindowDelta,
+    panelsRef,
+    getModelProvider,
+    setProviderVerifiedByName,
+    looksIncomplete,
+    autoContinueCountRef,
+    MAX_AUTO_CONTINUE,
+    AUTO_CONTINUE_PROMPT,
+    setLastPromptDurationMsByPanel,
+    upsertPanelToHistory,
+    withExhaustedRateLimitWarning,
+    isTurnCompletionRawNotification,
+    summarizeRawNotification,
+    shouldSurfaceRawNoteInChat,
+    createAgentPanel,
+    createNewFileFromMenu,
+    workspaceSettings,
+    openWorkspacePicker,
+    openFileFromMenu,
+    requestWorkspaceSwitch,
+    closeWorkspacePicker,
+    closeFocusedFromMenu,
+    findInPageFromMenu,
+    findInFilesFromMenu,
+    openAppSettingsInRightDock,
+    focusedEditorIdRef,
+    saveEditorPanel,
+    saveEditorPanelAs,
+    setLayoutMode,
+    setShowWorkspaceWindow,
+    setShowSettingsWindow,
+    setShowCodeWindow: setShowSettingsWindow, // alias for runtime events
+    setZoomLevel,
+  })
+
+  function setEditorTabEditMode(editorId: string, editMode: boolean) {
+    setEditorPanels((prev) =>
+      prev.map((p) => (p.id === editorId ? { ...p, editMode } : p)),
+    )
   }
 
-  function splitAgentPanel(sourcePanelId: string) {
-    createAgentPanel(sourcePanelId)
-  }
-
-  function reorderAgentPanel(draggedId: string, targetId: string) {
-    if (draggedId === targetId) return
-    setPanels((prev) => {
-      const draggedIdx = prev.findIndex((p) => p.id === draggedId)
-      const targetIdx = prev.findIndex((p) => p.id === targetId)
-      if (draggedIdx === -1 || targetIdx === -1) return prev
-      const next = [...prev]
-      const [removed] = next.splice(draggedIdx, 1)
-      const insertIdx = targetIdx > draggedIdx ? targetIdx - 1 : targetIdx
-      next.splice(insertIdx, 0, removed)
-      return next
-    })
-  }
-
-  const DND_TYPE_DOCK = 'application/x-barnaby-dock-panel'
-  const DND_TYPE_AGENT = 'application/x-barnaby-agent-panel'
-
-  function handleDragStart(
-    e: React.DragEvent,
-    type: 'workspace' | 'code' | 'agent',
-    id: string,
-  ) {
-    setDraggingPanelId(id)
-    e.dataTransfer.setData(type === 'agent' ? DND_TYPE_AGENT : DND_TYPE_DOCK, JSON.stringify({ type, id }))
-    e.dataTransfer.effectAllowed = 'move'
-  }
-
-  function handleDragEnd() {
-    setDraggingPanelId(null)
-    setDragOverTarget(null)
-  }
-
-  function handleDockDrop(e: React.DragEvent) {
-    e.preventDefault()
-    setDragOverTarget(null)
-    const raw = e.dataTransfer.getData(DND_TYPE_DOCK)
-    if (!raw) return
-    try {
-      const { type } = JSON.parse(raw) as { type: string; id: string }
-      if (type === 'workspace' || type === 'code') {
-        setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))
-      }
-    } catch {
-      // ignore
+  function toggleRightDockWindow(nextTab: CodeWindowTab) {
+    if (showSettingsWindow && codeWindowTab === nextTab) {
+      setShowSettingsWindow(false)
+      return
     }
+    setCodeWindowTab(nextTab)
+    if (!showSettingsWindow) setShowSettingsWindow(true)
   }
 
-  function handleAgentDrop(e: React.DragEvent, targetAgentId: string) {
-    e.preventDefault()
-    setDragOverTarget(null)
-    const raw = e.dataTransfer.getData(DND_TYPE_AGENT)
-    if (!raw) return
-    try {
-      const { id: draggedId } = JSON.parse(raw) as { type: string; id: string }
-      reorderAgentPanel(draggedId, targetAgentId)
-    } catch {
-      // ignore
-    }
-  }
-
-  function handleDragOver(
-    e: React.DragEvent,
-    opts: { acceptDock?: boolean; acceptAgent?: boolean; targetId?: string },
-  ) {
-    e.preventDefault()
-    if (opts.acceptDock && e.dataTransfer.types.includes(DND_TYPE_DOCK) && opts.targetId) {
-      e.dataTransfer.dropEffect = 'move'
-      setDragOverTarget(opts.targetId)
-    } else if (opts.acceptAgent && e.dataTransfer.types.includes(DND_TYPE_AGENT) && opts.targetId) {
-      e.dataTransfer.dropEffect = 'move'
-      setDragOverTarget(opts.targetId)
-    }
+  function openAppSettingsInRightDock(view: AppSettingsView) {
+    setAppSettingsView(view)
+    setCodeWindowTab('settings')
+    if (!showSettingsWindow) setShowSettingsWindow(true)
   }
 
   function renderWorkspaceTile() {
@@ -3080,14 +2422,14 @@ export default function App() {
       <WorkspaceTile
         dockTab={dockTab}
         workspaceDockSide={workspaceDockSide}
-        showCodeWindow={showCodeWindow}
+        showCodeWindow={true}
         draggingPanelId={draggingPanelId}
         dragOverTarget={dragOverTarget}
         dockContent={dockContent}
         onMouseDownCapture={() => setFocusedEditorId(null)}
-        onDragOver={(e) => showCodeWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
-        onDrop={(e) => showCodeWindow && handleDockDrop(e)}
-        onDragStart={(e) => showCodeWindow && handleDragStart(e, 'workspace', 'workspace-window')}
+        onDragOver={(e) => showSettingsWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
+        onDrop={(e) => showSettingsWindow && handleDockDrop(e)}
+        onDragStart={(e) => showSettingsWindow && handleDragStart(e, 'workspace', 'workspace-window')}
         onDragEnd={handleDragEnd}
         onWheel={(e) => {
           if (!isZoomWheelGesture(e)) return
@@ -3106,27 +2448,6 @@ export default function App() {
         onClose={() => setShowWorkspaceWindow(false)}
       />
     )
-  }
-
-  function setEditorTabEditMode(editorId: string, editMode: boolean) {
-    setEditorPanels((prev) =>
-      prev.map((p) => (p.id === editorId ? { ...p, editMode } : p)),
-    )
-  }
-
-  function toggleRightDockWindow(nextTab: CodeWindowTab) {
-    if (showCodeWindow && codeWindowTab === nextTab) {
-      setShowCodeWindow(false)
-      return
-    }
-    setCodeWindowTab(nextTab)
-    if (!showCodeWindow) setShowCodeWindow(true)
-  }
-
-  function openAppSettingsInRightDock(view: AppSettingsView) {
-    setAppSettingsView(view)
-    setCodeWindowTab('settings')
-    if (!showCodeWindow) setShowCodeWindow(true)
   }
 
   function renderEditorPanel(panel: EditorPanelState) {
@@ -3159,61 +2480,81 @@ export default function App() {
 
   function renderLayoutPane(panelId: string) {
     if (panelId === 'workspace-window') return renderWorkspaceTile()
-    if (panelId === 'code-window')
-      return (
-        <CodeWindowTile
-          editorPanels={editorPanels}
-          focusedEditorId={focusedEditorId}
-          codeWindowTab={codeWindowTab}
-          showWorkspaceWindow={showWorkspaceWindow}
-          workspaceDockSide={workspaceDockSide}
-          applicationSettings={applicationSettings}
-          activeTheme={activeTheme}
-          settingsHostRef={codeWindowSettingsHostRef}
-          onDragOver={(e) => showWorkspaceWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-code' })}
-          onDrop={(e) => showWorkspaceWindow && handleDockDrop(e)}
-          onDragStart={(e) => showWorkspaceWindow && handleDragStart(e, 'code', 'code-window')}
-          onDragEnd={handleDragEnd}
-          onZoomWheel={(e) => {
-            if (!isZoomWheelGesture(e)) return
-            e.preventDefault()
-            if (zoomWheelThrottleRef.current) return
-            zoomWheelThrottleRef.current = true
-            if (e.deltaY < 0) api.zoomIn?.()
-            else if (e.deltaY > 0) api.zoomOut?.()
-            const level = api.getZoomLevel?.()
-            if (level !== undefined) setZoomLevel(level)
-            setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
-          }}
-          onDockSideToggle={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
-          onCloseCodeWindow={() => setShowCodeWindow(false)}
-          onFocusedEditorChange={(id) => setFocusedEditor(id)}
-          onEditorTabChange={(id) => setFocusedEditor(id)}
-          onEditModeToggle={(id) => {
-            const panel = editorPanelsRef.current.find((p) => p.id === id)
-            const nextMode = !(panel?.editMode ?? false)
-            setEditorTabEditMode(id, nextMode)
-          }}
-          onWordWrapToggle={() => setApplicationSettings((p) => ({ ...p, editorWordWrap: !p.editorWordWrap }))}
-          onSave={(id) => void saveEditorPanel(id)}
-          onSaveAs={(id) => void saveEditorPanelAs(id)}
-          onCloseEditor={closeEditorPanel}
-          onEditorContentChange={updateEditorContent}
-          onMouseDownCapture={(e) => {
-            const target = e.target
-            if (target instanceof HTMLElement) {
-              if (target.closest('select') || target.closest('button') || target.closest('textarea') || target.closest('.cm-editor') || target.closest('a')) return
-            }
-            const id = focusedEditorIdRef.current ?? editorPanelsRef.current[0]?.id ?? null
-            if (id) setFocusedEditor(id)
-          }}
-          draggingPanelId={draggingPanelId}
-          dragOverTarget={dragOverTarget}
-        />
-      )
+    if (panelId === 'git-window') return renderGitTile()
+    if (panelId === 'settings-window') return renderSettingsTile()
+
+    const editorPanel = editorPanels.find(p => p.id === panelId)
+    if (editorPanel) return renderEditorPanel(editorPanel)
+
     const agentPanel = panels.find((w) => w.id === panelId)
     if (agentPanel) return renderPanelContent(agentPanel)
     return null
+  }
+
+  function renderGitTile() {
+    return (
+      <WorkspaceTile
+        dockTab="git"
+        workspaceDockSide={gitDockSide}
+        showCodeWindow={true}
+        draggingPanelId={draggingPanelId}
+        dragOverTarget={dragOverTarget}
+        dockContent={
+          <GitPane
+            gitStatus={gitStatus}
+            gitStatusLoading={gitStatusLoading}
+            gitStatusError={gitStatusError}
+            gitOperationPending={gitOperationPending}
+            gitOperationSuccess={gitOperationSuccess}
+            workspaceRoot={workspaceRoot ?? ''}
+            resolvedSelectedPaths={resolveGitSelection()}
+            onRunOperation={(op) => void runGitOperation(op)}
+            onRefresh={() => void refreshGitStatus()}
+            onEntryClick={handleGitEntryClick}
+            onEntryDoubleClick={(relativePath) => void openEditorForRelativePath(relativePath)}
+            onEntryContextMenu={openGitContextMenu}
+          />
+        }
+        onMouseDownCapture={() => setFocusedEditorId(null)}
+        onDragOver={(e) => showSettingsWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
+        onDrop={(e) => showSettingsWindow && handleDockDrop(e)}
+        onDragStart={(e) => showSettingsWindow && handleDragStart(e, 'workspace', 'git-window')}
+        onDragEnd={handleDragEnd}
+        onWheel={() => {}}
+        onDockTabChange={(tab) => setDockTab(tab)}
+        onWorkspaceSettingsTab={workspaceSettings.openWorkspaceSettingsTab}
+        onDockSideToggle={() => setGitDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
+        onClose={() => setShowGitWindow(false)}
+      />
+    )
+  }
+
+  function renderSettingsTile() {
+    return (
+      <WorkspaceTile
+        dockTab="settings"
+        workspaceDockSide={settingsDockSide}
+        showCodeWindow={true}
+        draggingPanelId={draggingPanelId}
+        dragOverTarget={dragOverTarget}
+        dockContent={
+          <div className="h-full flex flex-col bg-neutral-50 dark:bg-neutral-900">
+            {codeWindowSettingsHostRef.current ? null : <div ref={codeWindowSettingsHostRef} className="flex-1 min-h-0" />}
+            <div ref={codeWindowSettingsHostRef} className="flex-1 min-h-0" />
+          </div>
+        }
+        onMouseDownCapture={() => setFocusedEditorId(null)}
+        onDragOver={(e) => showSettingsWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
+        onDrop={(e) => showSettingsWindow && handleDockDrop(e)}
+        onDragStart={(e) => showSettingsWindow && handleDragStart(e, 'workspace', 'settings-window')}
+        onDragEnd={handleDragEnd}
+        onWheel={() => {}}
+        onDockTabChange={(tab) => setDockTab(tab)}
+        onWorkspaceSettingsTab={workspaceSettings.openWorkspaceSettingsTab}
+        onDockSideToggle={() => setSettingsDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
+        onClose={() => setShowSettingsWindow(false)}
+      />
+    )
   }
 
   function renderGridLayout(layoutPaneIds: string[]) {
@@ -3247,6 +2588,7 @@ export default function App() {
       </Group>
     )
   }
+
 
   // ── Panel lifecycle (connect/reconnect/stall) ──────────────────────
   const panelLifecycleCtrl = useMemo(() => createPanelLifecycleController({
@@ -3338,422 +2680,48 @@ export default function App() {
     }
   }
 
-  function injectQueuedMessage(winId: string, index: number) {
-    let textToInject = ''
-    let snapshotForHistory: AgentPanelState | null = null
-    setPanels((prev) =>
-      prev.map((x) => {
-        if (x.id !== winId) return x
-        if (index < 0 || index >= x.pendingInputs.length) return x
-        textToInject = x.pendingInputs[index]
-        const nextPending = x.pendingInputs.filter((_, j) => j !== index)
-        const queuedUserMessage: ChatMessage = {
-          id: newId(),
-          role: 'user',
-          content: textToInject,
-          format: 'text',
-          createdAt: Date.now(),
-        }
-        lastScrollToUserMessageRef.current = { panelId: winId, messageId: queuedUserMessage.id }
-        const updated: AgentPanelState = {
-          ...x,
-          streaming: true,
-          status: x.streaming ? x.status : 'Preparing message...',
-          pendingInputs: nextPending,
-          messages: [...x.messages, queuedUserMessage],
-        }
-        snapshotForHistory = updated
-        return updated
-      }),
-    )
-    if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
-    seedPanelActivity(winId)
-    markPanelActivity(winId, { type: 'turnStart' })
-    if (!textToInject) return
-    clearPanelTurnComplete(winId)
-    void sendToAgent(winId, textToInject)
-  }
-
-  function beginQueuedMessageEdit(winId: string, index: number) {
-    let queuedText = ''
-    setPanels((prev) =>
-      prev.map((x) => {
-        if (x.id !== winId) return x
-        if (index < 0 || index >= x.pendingInputs.length) return x
-        queuedText = x.pendingInputs[index]
-        return {
-          ...x,
-          input: queuedText,
-          status: `Editing queued message ${index + 1}. Send to update this slot.`,
-        }
-      }),
-    )
-    if (!queuedText) return
-    setInputDraftEditByPanel((prev) => ({ ...prev, [winId]: { kind: 'queued', index } }))
-    queueMicrotask(() => autoResizeTextarea(winId))
-  }
-
-  function removeQueuedMessage(winId: string, index: number) {
-    setPanels((prev) =>
-      prev.map((x) => {
-        if (x.id !== winId) return x
-        if (index < 0 || index >= x.pendingInputs.length) return x
-        const nextPending = x.pendingInputs.filter((_, j) => j !== index)
-        return { ...x, pendingInputs: nextPending }
-      }),
-    )
-    setInputDraftEditByPanel((prev) => {
-      const draft = prev[winId]
-      if (!draft || draft.kind !== 'queued') return prev
-      if (draft.index === index) return { ...prev, [winId]: null }
-      if (draft.index > index) return { ...prev, [winId]: { kind: 'queued', index: draft.index - 1 } }
-      return prev
-    })
-  }
-
-  function cancelDraftEdit(winId: string) {
-    setInputDraftEditByPanel((prev) => ({ ...prev, [winId]: null }))
-    setPanels((prev) =>
-      prev.map((x) =>
-        x.id !== winId
-          ? x
-          : {
-              ...x,
-              status: 'Draft edit cancelled.',
-            },
-      ),
-    )
-  }
-
-  function recallLastUserMessage(winId: string) {
-    const w = panels.find((x) => x.id === winId)
-    if (!w) return
-    const lastUserMsg = [...w.messages].reverse().find((m) => m.role === 'user' && (m.content ?? '').trim())
-    if (!lastUserMsg?.content) return
-    const isBusy = w.streaming || w.pendingInputs.length > 0
-    setInputDraftEditByPanel((prev) => ({
-      ...prev,
-      [winId]: isBusy ? { kind: 'recalled' } : null,
-    }))
-    setPanels((prev) =>
-      prev.map((x) =>
-        x.id !== winId
-          ? x
-          : {
-              ...x,
-              input: lastUserMsg.content ?? '',
-              status: isBusy
-                ? 'Recalled last message. Edit, then send to queue corrected text next.'
-                : 'Recalled last message. Edit and send when ready.',
-            },
-      ),
-    )
-    queueMicrotask(() => autoResizeTextarea(winId))
-  }
-
-  function sendMessage(winId: string) {
-    const w = panels.find((x) => x.id === winId)
-    if (!w) return
-    const draftEdit = inputDraftEditByPanel[winId] ?? null
-    const text = w.input.trim()
-    const messageAttachments = w.attachments.map((a) => ({ ...a }))
-    const imagePaths = messageAttachments.map((a) => a.path)
-    if (!text && imagePaths.length === 0) return
-    const hasDirtyEditor = editorPanels.some((p) => p.dirty)
-    const updatingQueuedDraft = draftEdit?.kind === 'queued'
-    if (hasDirtyEditor) {
-      if (updatingQueuedDraft) {
-        // Updating queued text does not execute tools yet, so skip unsaved-editor warning.
-      } else {
-      const proceed = confirm(
-        'You have unsaved changes in the Code Window. Agents may overwrite your edits. Save your changes first, or choose OK to continue anyway.',
-      )
-      if (!proceed) return
-      }
-    }
-    const provider = getModelProvider(w.model)
-    const usedPercent = provider === 'codex' ? getRateLimitPercent(w.usage) : null
-    if (usedPercent !== null && usedPercent >= 99.5) {
-      setPanels((prev) =>
-        prev.map((x) =>
-          x.id !== winId
-            ? x
-            : {
-                ...x,
-                status: 'Codex limit reached',
-                messages: withExhaustedRateLimitWarning(x.messages, x.usage),
-              },
-        ),
-      )
-      return
-    }
-    const isBusy = w.streaming || w.pendingInputs.length > 0
-    if (isBusy && imagePaths.length > 0) {
-      setPanels((prev) =>
-        prev.map((x) =>
-          x.id !== winId
-            ? x
-            : {
-                ...x,
-                messages: [
-                  ...x.messages,
-                  {
-                    id: newId(),
-                    role: 'system',
-                    content: 'Please wait for the current turn to finish before sending image attachments.',
-                    format: 'text',
-                    createdAt: Date.now(),
-                  },
-                ],
-              },
-        ),
-      )
-      return
-    }
-    clearPanelTurnComplete(winId)
-    let snapshotForHistory: AgentPanelState | null = null
-    setPanels((prev) =>
-      prev.map((x) => {
-        if (x.id !== winId) return x
-        if (isBusy) {
-          if (draftEdit?.kind === 'queued') {
-            const nextPending = [...x.pendingInputs]
-            if (draftEdit.index >= 0 && draftEdit.index < nextPending.length) {
-              nextPending[draftEdit.index] = text
-              appendPanelDebug(winId, 'queue', `Updated queued message #${draftEdit.index + 1} (${text.length} chars)`)
-            } else {
-              nextPending.push(text)
-              appendPanelDebug(winId, 'queue', `Queued edited message at end (${text.length} chars)`)
-            }
-            const updated: AgentPanelState = {
-              ...x,
-              input: '',
-              pendingInputs: nextPending,
-              status: 'Updated queued message.',
-            }
-            snapshotForHistory = updated
-            return updated
-          }
-          if (draftEdit?.kind === 'recalled') {
-            appendPanelDebug(winId, 'queue', `Queued recalled correction at front (${text.length} chars)`)
-            const updated: AgentPanelState = {
-              ...x,
-              input: '',
-              pendingInputs: [text, ...x.pendingInputs],
-              status: 'Correction queued to run next.',
-            }
-            snapshotForHistory = updated
-            return updated
-          }
-          appendPanelDebug(winId, 'queue', `Panel busy - queued message (${text.length} chars)`)
-          const updated: AgentPanelState = {
-            ...x,
-            input: '',
-            pendingInputs: [...x.pendingInputs, text],
-          }
-          snapshotForHistory = updated
-          return updated
-        }
-        appendPanelDebug(winId, 'queue', 'Panel idle - sending immediately')
-        stickToBottomByPanelRef.current.set(winId, true)
-        const userMessage: ChatMessage = {
-          id: newId(),
-          role: 'user',
-          content: text,
-          format: 'text',
-          attachments: messageAttachments.length > 0 ? messageAttachments : undefined,
-          createdAt: Date.now(),
-        }
-        lastScrollToUserMessageRef.current = { panelId: winId, messageId: userMessage.id }
-        const updated: AgentPanelState = {
-          ...x,
-          input: '',
-          attachments: [],
-          streaming: true,
-          status: 'Preparing message...',
-          messages: [...x.messages, userMessage],
-        }
-        snapshotForHistory = updated
-        return updated
-      }),
-    )
-    if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
-    seedPanelActivity(winId)
-    markPanelActivity(winId, { type: 'turnStart' })
-    if (draftEdit) {
-      setInputDraftEditByPanel((prev) => ({ ...prev, [winId]: null }))
-    }
-
-    if (!isBusy) void sendToAgent(winId, text, imagePaths)
-  }
-
   const [resendingPanelId, setResendingPanelId] = useState<string | null>(null)
 
-  function resendLastUserMessage(winId: string) {
-    const w = panels.find((x) => x.id === winId)
-    if (!w || w.streaming) return
-    const lastUserMsg = [...w.messages].reverse().find((m) => m.role === 'user')
-    if (!lastUserMsg) return
-    setResendingPanelId(winId)
-    setTimeout(() => setResendingPanelId(null), 1200)
-    clearPanelTurnComplete(winId)
-    stickToBottomByPanelRef.current.set(winId, true)
-    lastScrollToUserMessageRef.current = { panelId: winId, messageId: lastUserMsg.id }
-    setPanels((prev) =>
-      prev.map((x) =>
-        x.id !== winId
-          ? x
-          : { ...x, streaming: true, status: 'Resending...' },
-      ),
-    )
-    seedPanelActivity(winId)
-    markPanelActivity(winId, { type: 'turnStart' })
-    void sendToAgent(winId, lastUserMsg.content)
-  }
-
-  function grantPermissionAndResend(panelId: string) {
-    const panel = panelsRef.current.find((p) => p.id === panelId)
-    if (!panel || panel.streaming) return
-    const limits = getWorkspaceSecurityLimitsForPath(panel.cwd)
-    if (limits.sandbox === 'read-only') {
-      setPanels((prev) =>
-        prev.map((p) =>
-          p.id !== panelId
-            ? p
-            : {
-                ...p,
-                status: 'Permissions are disabled because workspace sandbox is Read only.',
-              },
-        ),
-      )
-      return
-    }
-
-    if (limits.permissionMode === 'verify-first') {
-      setPanels((prev) =>
-        prev.map((p) =>
-          p.id !== panelId
-            ? p
-            : {
-                ...p,
-                permissionMode: 'verify-first',
-                status: 'Permissions are locked to Verify first by Workspace settings.',
-              },
-        ),
-      )
-      return
-    }
-
-    setPanels((prev) =>
-      prev.map((p) =>
-        p.id !== panelId
-          ? p
-          : (() => {
-              const clamped = clampPanelSecurityForWorkspace(p.cwd, p.sandbox, 'proceed-always')
-              return {
-                ...p,
-                permissionMode: clamped.permissionMode,
-                connected: false,
-                status: 'Permissions set: Proceed always (reconnect on next send).',
-              }
-            })(),
-      ),
-    )
-    setTimeout(() => resendLastUserMessage(panelId), 0)
-  }
-
-
-  function setInteractionMode(panelId: string, nextMode: AgentInteractionMode) {
-    setPanels((prev) =>
-      prev.map((p) =>
-        p.id === panelId
-          ? {
-              ...p,
-              interactionMode: nextMode,
-              status: `Mode set to ${INTERACTION_MODE_META[nextMode].label}.`,
-            }
-          : p,
-      ),
-    )
-  }
-
-  function setPanelSandbox(panelId: string, next: SandboxMode) {
-    setPanels((prev) =>
-      prev.map((p) =>
-        p.id !== panelId
-          ? p
-          : (() => {
-              const limits = getWorkspaceSecurityLimitsForPath(p.cwd)
-              if (limits.sandbox === 'read-only') {
-                return {
-                  ...p,
-                  status: 'Sandbox is locked to View. Expand sandbox in Workspace settings.',
-                }
-              }
-
-              const clamped = clampPanelSecurityForWorkspace(
-                p.cwd,
-                next,
-                next === 'read-only' ? 'verify-first' : p.permissionMode,
-              )
-
-              const status =
-                next === 'read-only'
-                  ? 'Sandbox set to read-only. Permissions locked to Verify first.'
-                  : limits.permissionMode === 'verify-first'
-                    ? 'Sandbox set to workspace-write. Permissions remain locked to Verify first by Workspace settings.'
-                    : `Sandbox set to ${next} (reconnect on next send).`
-
-              return {
-                ...p,
-                sandbox: clamped.sandbox,
-                permissionMode: clamped.permissionMode,
-                connected: false,
-                status,
-              }
-            })(),
-      ),
-    )
-    setSettingsPopoverByPanel((prev) => ({ ...prev, [panelId]: null }))
-  }
-
-  function setPanelPermission(panelId: string, next: PermissionMode) {
-    setPanels((prev) =>
-      prev.map((p) =>
-        p.id !== panelId
-          ? p
-          : (() => {
-              const limits = getWorkspaceSecurityLimitsForPath(p.cwd)
-              if (limits.sandbox === 'read-only') {
-                return {
-                  ...p,
-                  status: 'Permissions are disabled because workspace sandbox is Read only.',
-                }
-              }
-
-              if (limits.permissionMode === 'verify-first' && next === 'proceed-always') {
-                return {
-                  ...p,
-                  permissionMode: 'verify-first',
-                  status: 'Permissions are locked to Verify first by Workspace settings.',
-                }
-              }
-
-              const clamped = clampPanelSecurityForWorkspace(p.cwd, p.sandbox, next)
-              return {
-                ...p,
-                permissionMode: clamped.permissionMode,
-                connected: false,
-                status:
-                  clamped.permissionMode === 'proceed-always'
-                    ? 'Permissions set: Proceed always (reconnect on next send).'
-                    : 'Permissions set: Verify first (reconnect on next send).',
-              }
-            })(),
-      ),
-    )
-    setSettingsPopoverByPanel((prev) => ({ ...prev, [panelId]: null }))
-  }
+  const panelInputCtrl = useMemo(() => createPanelInputController({
+    panels,
+    panelsRef,
+    editorPanels,
+    inputDraftEditByPanel,
+    stickToBottomByPanelRef,
+    lastScrollToUserMessageRef,
+    setPanels,
+    setInputDraftEditByPanel,
+    setSettingsPopoverByPanel,
+    setResendingPanelId,
+    autoResizeTextarea,
+    upsertPanelToHistory,
+    seedPanelActivity,
+    markPanelActivity,
+    clearPanelTurnComplete,
+    sendToAgent,
+    appendPanelDebug,
+    getModelProvider,
+    getWorkspaceSecurityLimitsForPath,
+    clampPanelSecurityForWorkspace,
+  }), [
+    panels,
+    editorPanels,
+    inputDraftEditByPanel,
+    sendToAgent,
+  ])
+  const {
+    injectQueuedMessage,
+    beginQueuedMessageEdit,
+    removeQueuedMessage,
+    cancelDraftEdit,
+    recallLastUserMessage,
+    sendMessage,
+    resendLastUserMessage,
+    grantPermissionAndResend,
+    setInteractionMode,
+    setPanelSandbox,
+    setPanelPermission,
+  } = panelInputCtrl
 
   function renderAgentOrchestratorPane() {
     const orchestratorPlugin = loadedPlugins?.find((p) => p.pluginId === 'orchestrator')
@@ -3818,250 +2786,85 @@ export default function App() {
   const workspaceDockButtonOnLeft = workspaceDockSide === 'left'
   const toolsDockButtonsOnLeft = workspaceDockSide === 'right'
 
-  const workspaceDockToggleButton = (
+  const leftDockToggleButton = (
     <button
       type="button"
       className={headerDockToggleButtonClass(showWorkspaceWindow)}
       onClick={() => setShowWorkspaceWindow((prev) => !prev)}
-      title={showWorkspaceWindow ? 'Hide workspace window' : 'Show workspace window'}
-      aria-label={showWorkspaceWindow ? 'Hide workspace window' : 'Show workspace window'}
+      title={showWorkspaceWindow ? 'Hide left dock' : 'Show left dock'}
+      aria-label={showWorkspaceWindow ? 'Hide left dock' : 'Show left dock'}
     >
-      <svg width="20" height="20" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <path
-          d="M2.5 5.1c0-.6.5-1.1 1.1-1.1h3.2l1.2 1.2h4.9c.6 0 1.1.5 1.1 1.1v6.2c0 .6-.5 1.1-1.1 1.1H3.6c-.6 0-1.1-.5-1.1-1.1V5.1Z"
-          stroke="currentColor"
-          strokeWidth="1.2"
-          strokeLinejoin="round"
-        />
-        <path d="M2.5 6.2h11.0" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      </svg>
+      <PanelLeftIcon size={20} active={showWorkspaceWindow} />
     </button>
   )
 
-  const codeDockToggleButton = (
+  const rightDockToggleButton = (
     <button
       type="button"
-      className={headerDockToggleButtonClass(showCodeWindow && codeWindowTab === 'code')}
-      onClick={() => toggleRightDockWindow('code')}
-      title={showCodeWindow && codeWindowTab === 'code' ? 'Hide code window' : 'Show code window'}
-      aria-label={showCodeWindow && codeWindowTab === 'code' ? 'Hide code window' : 'Show code window'}
+      className={headerDockToggleButtonClass(showSettingsWindow)}
+      onClick={() => setShowSettingsWindow((prev) => !prev)}
+      title={showSettingsWindow ? 'Hide right dock' : 'Show right dock'}
+      aria-label={showSettingsWindow ? 'Hide right dock' : 'Show right dock'}
     >
-      <svg width="20" height="20" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <path d="M6 5L3.5 8 6 11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M10 5L12.5 8 10 11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M9 5.7L7 10.3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-      </svg>
-    </button>
-  )
-
-  const settingsDockToggleButton = (
-    <button
-      type="button"
-      className={headerDockToggleButtonClass(showCodeWindow && codeWindowTab === 'settings')}
-      onClick={() => toggleRightDockWindow('settings')}
-      title={showCodeWindow && codeWindowTab === 'settings' ? 'Hide settings window' : 'Show settings window'}
-      aria-label={showCodeWindow && codeWindowTab === 'settings' ? 'Hide settings window' : 'Show settings window'}
-    >
-      <svg width="20" height="20" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <path d="M8 5.8A2.2 2.2 0 1 1 8 10.2A2.2 2.2 0 0 1 8 5.8Z" stroke="currentColor" strokeWidth="1.2" />
-        <path d="M13.1 8.7V7.3L11.8 6.9C11.7 6.6 11.6 6.4 11.4 6.1L12 4.9L11.1 4L9.9 4.6C9.6 4.4 9.4 4.3 9.1 4.2L8.7 2.9H7.3L6.9 4.2C6.6 4.3 6.4 4.4 6.1 4.6L4.9 4L4 4.9L4.6 6.1C4.4 6.4 4.3 6.6 4.2 6.9L2.9 7.3V8.7L4.2 9.1C4.3 9.4 4.4 9.6 4.6 9.9L4 11.1L4.9 12L6.1 11.4C6.4 11.6 6.6 11.7 6.9 11.8L7.3 13.1H8.7L9.1 11.8C9.4 11.7 9.6 11.6 9.9 11.4L11.1 12L12 11.1L11.4 9.9C11.6 9.6 11.7 9.4 11.8 9.1L13.1 8.7Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-      </svg>
+      <PanelRightIcon size={20} active={showSettingsWindow} />
     </button>
   )
 
   return (
     <div className="theme-preset h-screen w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden flex flex-col bg-neutral-100 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
       <style>{THEME_PRESET_CSS}</style>
-      {/* appHeaderBar: main top bar with Workspace/History dropdowns and layout toggles */}
-      <div data-app-header-bar="true" className="shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 px-4 py-3 bg-white dark:bg-neutral-950">
-        <div className="flex flex-wrap items-center justify-between gap-2.5 text-xs min-w-0">
-          <div className="flex items-center gap-1.5 min-w-0">
-            {/* Left sidebar | Bottom terminal | Right sidebar */}
-            <div className="flex items-center gap-0.5 shrink-0">
-              {workspaceDockButtonOnLeft && workspaceDockToggleButton}
-              <button
-                type="button"
-                className={headerDockToggleButtonClass(showTerminalBar)}
-                onClick={() => setShowTerminalBar((prev) => !prev)}
-                title={showTerminalBar ? 'Hide terminal' : 'Show terminal'}
-                aria-label={showTerminalBar ? 'Hide terminal' : 'Show terminal'}
-              >
-                <svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2">
-                  <rect x="2" y="2" width="12" height="12" rx="1" />
-                  <rect x="2" y="9" width="12" height="5" rx="0.5" fill="currentColor" fillOpacity="0.6" />
-                </svg>
-              </button>
-              {toolsDockButtonsOnLeft && codeDockToggleButton}
-              {toolsDockButtonsOnLeft && settingsDockToggleButton}
-            </div>
-            <div className="mx-1.5 h-6 w-px bg-neutral-300/80 dark:bg-neutral-700/80" />
-            <span className="text-neutral-600 dark:text-neutral-300">Workspace</span>
-            <select
-              className={`h-9 px-3 rounded-lg font-mono shadow-sm w-[34vw] max-w-[440px] min-w-[220px] ${UI_INPUT_CLASS}`}
-              value={workspaceList.includes(workspaceRoot) ? workspaceRoot : workspaceList[0] ?? ''}
-              onChange={(e) => {
-                requestWorkspaceSwitch(e.target.value, 'dropdown')
-              }}
-            >
-              {workspaceList.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
-              onClick={() => workspaceSettings.openWorkspaceSettings('new')}
-              title="New workspace"
-            >
-              <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-                <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
-              onClick={() => workspaceSettings.openWorkspaceSettings('edit')}
-              title="Edit selected workspace"
-            >
-              <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-                <path d="M3 11.5L3.6 9.2L10.6 2.2L12.8 4.4L5.8 11.4L3 12Z" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M8.5 3.9L11.1 6.5" stroke="currentColor" strokeWidth="1.2" />
-              </svg>
-            </button>
-            <div className="mx-2 h-6 w-px bg-neutral-300/80 dark:bg-neutral-700/80" />
-            <span className="text-neutral-600 dark:text-neutral-300">History</span>
-            <div ref={historyDropdownRef} className="relative shrink-0">
-              <button
-                type="button"
-                className={`h-9 px-3 rounded-lg shadow-sm w-[45vw] max-w-[540px] min-w-[270px] text-left flex items-center justify-between gap-2 ${UI_INPUT_CLASS}`}
-                onClick={() => setHistoryDropdownOpen((o) => !o)}
-              >
-                <span className="truncate">Open chat...</span>
-                <svg width="12" height="12" viewBox="0 0 10 10" className={`shrink-0 transition-transform ${historyDropdownOpen ? 'rotate-180' : ''}`}>
-                  <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                </svg>
-              </button>
-              {historyDropdownOpen && (
-                <div className="absolute top-full left-0 right-0 mt-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg z-50 max-h-64 overflow-auto min-w-[270px]">
-                  {workspaceScopedHistory.length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-neutral-500 dark:text-neutral-400">No conversations yet</div>
-                  ) : (
-                    workspaceScopedHistory.map((entry) => (
-                      <div
-                        key={entry.id}
-                        className="flex items-center gap-1.5 group px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer text-sm"
-                        onClick={() => openChatFromHistory(entry.id)}
-                      >
-                        <span className="flex-1 min-w-0 truncate text-neutral-800 dark:text-neutral-200">
-                          {formatHistoryOptionLabel(entry)}
-                        </span>
-                        <button
-                          type="button"
-                          className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50/70 text-blue-700 hover:bg-red-100 hover:border-red-300 hover:text-red-700 dark:border-blue-900/70 dark:bg-blue-950/25 dark:text-blue-300 dark:hover:bg-red-950/40 dark:hover:border-red-900 dark:hover:text-red-300"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setDeleteHistoryIdPending(entry.id)
-                            setHistoryDropdownOpen(false)
-                          }}
-                          title="Delete conversation"
-                          aria-label="Delete conversation"
-                        >
-                          <svg width="11" height="11" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                            <path d="M2 2L8 8M8 2L2 8" />
-                          </svg>
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-            <button
-              type="button"
-              className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
-              onClick={() => createAgentPanel()}
-              title="New chat"
-              aria-label="New chat"
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-              </svg>
-            </button>
-            {/* layoutToolbar: Tile V/H/Grid */}
-            <div data-layout-toolbar="true" className="flex items-center gap-1">
-              <button
-                className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
-                  layoutMode === 'vertical' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-                }`}
-                onClick={() => setLayoutMode('vertical')}
-                title="Tile Vertical"
-                aria-label="Tile Vertical"
-              >
-                <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-                  <rect x="2.5" y="3" width="5.5" height="10" rx="1" stroke="currentColor" />
-                  <rect x="8" y="3" width="5.5" height="10" rx="1" stroke="currentColor" />
-                </svg>
-              </button>
-              <button
-                className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
-                  layoutMode === 'horizontal' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-                }`}
-                onClick={() => setLayoutMode('horizontal')}
-                title="Tile Horizontal"
-                aria-label="Tile Horizontal"
-              >
-                <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-                  <rect x="2.5" y="3" width="11" height="5" rx="1" stroke="currentColor" />
-                  <rect x="2.5" y="8" width="11" height="5" rx="1" stroke="currentColor" />
-                </svg>
-              </button>
-              <button
-                className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
-                  layoutMode === 'grid' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-                }`}
-                onClick={() => setLayoutMode('grid')}
-                title="Tile Grid"
-                aria-label="Tile Grid"
-              >
-                <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-                  <rect x="2.5" y="2.5" width="5" height="5" rx="1" stroke="currentColor" />
-                  <rect x="8.5" y="2.5" width="5" height="5" rx="1" stroke="currentColor" />
-                  <rect x="2.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor" />
-                  <rect x="8.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor" />
-                </svg>
-              </button>
-            </div>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="flex items-center gap-0.5 shrink-0">
-              {!workspaceDockButtonOnLeft && workspaceDockToggleButton}
-              {!toolsDockButtonsOnLeft && codeDockToggleButton}
-              {!toolsDockButtonsOnLeft && settingsDockToggleButton}
-            </div>
-          </div>
-        </div>
-      </div>
+      <AppHeaderBar
+        workspaceDockButtonOnLeft={workspaceDockButtonOnLeft}
+        toolsDockButtonsOnLeft={toolsDockButtonsOnLeft}
+        leftDockToggleButton={leftDockToggleButton}
+        rightDockToggleButton={rightDockToggleButton}
+        headerDockToggleButtonClass={headerDockToggleButtonClass}
+        showTerminalBar={showTerminalBar}
+        setShowTerminalBar={setShowTerminalBar}
+        workspaceList={workspaceList}
+        workspaceRoot={workspaceRoot}
+        requestWorkspaceSwitch={requestWorkspaceSwitch}
+        UI_INPUT_CLASS={UI_INPUT_CLASS}
+        UI_ICON_BUTTON_CLASS={UI_ICON_BUTTON_CLASS}
+        openWorkspaceSettings={workspaceSettings.openWorkspaceSettings}
+        historyDropdownRef={historyDropdownRef}
+        historyDropdownOpen={historyDropdownOpen}
+        setHistoryDropdownOpen={setHistoryDropdownOpen}
+        workspaceScopedHistory={workspaceScopedHistory}
+        openChatFromHistory={openChatFromHistory}
+        formatHistoryOptionLabel={formatHistoryOptionLabel}
+        setDeleteHistoryIdPending={setDeleteHistoryIdPending}
+        createAgentPanel={() => createAgentPanel()}
+        layoutMode={layoutMode}
+        setLayoutMode={setLayoutMode}
+      />
 
       <div className="flex-1 flex flex-col min-h-0 min-w-0">
         <div className="relative flex-1 min-h-0 min-w-0 bg-gradient-to-b from-neutral-100/90 to-neutral-100/60 dark:from-neutral-900 dark:to-neutral-950">
           <div ref={layoutRef} className="h-full flex flex-col min-h-0 min-w-0">
           {(() => {
-            const contentPaneIds = panels.map((p) => p.id)
-            const layoutPaneIds = [
-              ...(showWorkspaceWindow && workspaceDockSide === 'left' ? ['workspace-window'] : []),
-              ...(showCodeWindow && workspaceDockSide === 'right' ? ['code-window'] : []),
-              ...contentPaneIds,
-              ...(showCodeWindow && workspaceDockSide === 'left' ? ['code-window'] : []),
-              ...(showWorkspaceWindow && workspaceDockSide === 'right' ? ['workspace-window'] : []),
+            const contentPaneIds = [
+              ...panels.map((p) => p.id),
+              ...editorPanels.map((p) => p.id),
             ]
+            const leftDockPanels = [
+              ...(showWorkspaceWindow && workspaceDockSide === 'left' ? ['workspace-window'] : []),
+              ...(showGitWindow && gitDockSide === 'left' ? ['git-window'] : []),
+              ...(showSettingsWindow && settingsDockSide === 'left' ? ['settings-window'] : [])
+            ]
+            const rightDockPanels = [
+              ...(showWorkspaceWindow && workspaceDockSide === 'right' ? ['workspace-window'] : []),
+              ...(showGitWindow && gitDockSide === 'right' ? ['git-window'] : []),
+              ...(showSettingsWindow && settingsDockSide === 'right' ? ['settings-window'] : [])
+            ]
+            
+            const layoutPaneIds = [...leftDockPanels, ...contentPaneIds, ...rightDockPanels]
             if (layoutPaneIds.length === 1) {
               const id = layoutPaneIds[0]
-              if (id === 'workspace-window' || id === 'code-window') {
+              if (id === 'workspace-window' || id === 'git-window' || id === 'settings-window') {
                 return (
                   <div className="flex-1 min-h-0 min-w-0 overflow-hidden px-3 py-3">
-                    <div className="h-full min-h-0 max-w-full" style={{ width: '20%' }}>
+                    <div className="h-full min-h-0 max-w-full" style={{ width: '32%' }}>
                       {renderLayoutPane(id)}
                     </div>
                   </div>
@@ -4070,14 +2873,10 @@ export default function App() {
               return <div className="flex-1 min-h-0 min-w-0 overflow-hidden">{renderLayoutPane(id)}</div>
             }
             // Tile vertical, horizontal, and grid: sidebars honour workspaceDockSide; only agent panels are tiled.
-            const leftPaneId =
-              (showWorkspaceWindow && workspaceDockSide === 'left' ? 'workspace-window' : null) ||
-              (showCodeWindow && workspaceDockSide === 'right' ? 'code-window' : null)
-            const rightPaneId =
-              (showCodeWindow && workspaceDockSide === 'left' ? 'code-window' : null) ||
-              (showWorkspaceWindow && workspaceDockSide === 'right' ? 'workspace-window' : null)
+            const leftPaneId = leftDockPanels.length > 0 ? 'left-dock' : null
+            const rightPaneId = rightDockPanels.length > 0 ? 'right-dock' : null
             const paneFlowOrientation = layoutMode === 'horizontal' ? 'vertical' : 'horizontal'
-            const layoutGroupKey = `${layoutMode}:${leftPaneId ?? 'x'}:${rightPaneId ?? 'x'}:${contentPaneIds.join('|')}`
+            const layoutGroupKey = `${layoutMode}:${leftDockPanels.join(',')}:${rightDockPanels.join(',')}:${contentPaneIds.join('|')}`
             const contentPane =
               contentPaneIds.length === 0 ? null : contentPaneIds.length === 1 ? (
                 <div className="h-full min-h-0 overflow-hidden">{renderLayoutPane(contentPaneIds[0])}</div>
@@ -4114,9 +2913,9 @@ export default function App() {
                   <>
                     <Panel
                       id={`panel-${leftPaneId}`}
-                      defaultSize="20"
+                      defaultSize="15"
                       minSize="15"
-                      maxSize="50"
+                      maxSize="55"
                       className="min-h-0 min-w-0"
                     >
                       {renderLayoutPane(leftPaneId)}
@@ -4124,7 +2923,7 @@ export default function App() {
                     <Separator className="w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
                   </>
                 )}
-                <Panel id="panel-content-tiled" defaultSize={leftPaneId && rightPaneId ? '60' : leftPaneId || rightPaneId ? '80' : '100'} minSize="20" className="min-h-0 min-w-0">
+                <Panel id="panel-content-tiled" defaultSize={leftPaneId && rightPaneId ? '70' : leftPaneId || rightPaneId ? '85' : '100'} minSize="20" className="min-h-0 min-w-0">
                   {contentPane}
                 </Panel>
                 {rightPaneId && (
@@ -4132,9 +2931,9 @@ export default function App() {
                     <Separator className="w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
                     <Panel
                       id={`panel-${rightPaneId}`}
-                      defaultSize="20"
+                      defaultSize="15"
                       minSize="15"
-                      maxSize="50"
+                      maxSize="55"
                       className="min-h-0 min-w-0"
                     >
                       {renderLayoutPane(rightPaneId)}
@@ -4167,7 +2966,11 @@ export default function App() {
             </div>
             <div className="flex-1 min-h-0 overflow-hidden p-1">
               {api && typeof api.terminalSpawn === 'function' ? (
-                <EmbeddedTerminal workspaceRoot={workspaceRoot?.trim() || ''} api={api} />
+                <EmbeddedTerminal
+                  workspaceRoot={workspaceRoot?.trim() || ''}
+                  fontFamily={MONO_FONT_OPTIONS.find((f) => f.id === applicationSettings.fontCode)?.fontStack ?? MONO_FONT_OPTIONS[0].fontStack}
+                  api={api}
+                />
               ) : (
                 <div className="h-full flex items-center justify-center text-neutral-500 text-sm">
                   Terminal requires Electron
@@ -4508,251 +3311,86 @@ export default function App() {
   )
 
   function renderPanelContent(w: AgentPanelState) {
-    const hasInput = Boolean(w.input.trim()) || w.attachments.length > 0
-    const isBusy = w.streaming
-    const queueCount = w.pendingInputs.length
-    const isIdle = !w.streaming && queueCount === 0
-    const panelFontSizePx = 14 * w.fontScale
-    const panelLineHeightPx = 24 * w.fontScale
-    const panelTextStyle = { fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }
-    const activity = panelActivityById[w.id]
-    const timelineUnits = panelTimelineById[w.id] ?? []
-    const msSinceLastActivity = activity ? activityClock - activity.lastEventAt : Number.POSITIVE_INFINITY
-    const isRunning = isBusy
-    const isQueued = !isRunning && queueCount > 0
-    const completionNoticeAt = panelTurnCompleteAtById[w.id]
-    const completionNoticeAgeMs =
-      typeof completionNoticeAt === 'number' ? Math.max(0, activityClock - completionNoticeAt) : Number.POSITIVE_INFINITY
-    const showCompletionNotice = Number.isFinite(completionNoticeAgeMs) && completionNoticeAgeMs < PANEL_COMPLETION_NOTICE_MS
-    const isFinalComplete =
-      !isRunning && !isQueued && (activity?.lastEventLabel === 'Turn complete' || showCompletionNotice)
-    const hasRecentActivity = msSinceLastActivity < 4000
-    const activityDotClass = isRunning
-      ? 'bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.15)]'
-      : isQueued
-        ? 'bg-amber-500'
-        : isFinalComplete
-          ? 'bg-emerald-500'
-      : hasRecentActivity
-        ? 'bg-sky-500/90'
-        : 'bg-neutral-300 dark:bg-neutral-700'
-    const activityLabel = isRunning ? 'running' : isQueued ? 'queued' : isFinalComplete ? 'done' : hasRecentActivity ? 'recent' : 'idle'
-    const draftEdit = inputDraftEditByPanel[w.id] ?? null
-    const editingQueuedIndex = draftEdit?.kind === 'queued' ? draftEdit.index : null
-    const sendTitle = draftEdit?.kind === 'queued'
-      ? 'Update queued message'
-      : draftEdit?.kind === 'recalled' && isBusy
-        ? 'Queue corrected message next'
-        : isBusy
-      ? hasInput
-        ? `Stop${queueCount > 0 ? ` (${queueCount} queued)` : ''}`
-        : 'Stop'
-      : 'Send'
-    const secondsAgo = Number.isFinite(msSinceLastActivity) ? Math.max(0, Math.floor(msSinceLastActivity / 1000)) : null
-    const activityTitle = activity
-      ? `Activity: ${activityLabel}\nLast event: ${activity.lastEventLabel}\n${secondsAgo}s ago\nEvents seen: ${activity.totalEvents}\nTimeline units: ${timelineUnits.length}`
-      : `Activity: idle\nNo events seen yet for this panel.\nTimeline units: ${timelineUnits.length}`
-    const lastPromptDurationMs = lastPromptDurationMsByPanel[w.id]
-    const formatDurationLabel = (durationMs: number) => `${(durationMs / 1000).toFixed(1).replace(/\.0$/, '')}s`
-    const activePromptStartedAt = activePromptStartedAtRef.current.get(w.id)
-    const livePromptDurationLabel =
-      isRunning && typeof activePromptStartedAt === 'number'
-        ? formatDurationLabel(Math.max(0, activityClock - activePromptStartedAt))
-        : null
-    const completedPromptDurationLabel =
-      applicationSettings.showResponseDurationAfterPrompt && !isRunning && !isQueued && typeof lastPromptDurationMs === 'number'
-        ? formatDurationLabel(lastPromptDurationMs)
-        : null
-    const lastAgentTimelineUnitId = completedPromptDurationLabel
-      ? [...timelineUnits]
-          .reverse()
-          .find((unit) => unit.kind === 'assistant' || unit.kind === 'code' || unit.kind === 'thinking')
-          ?.id ?? null
-        : null
-    const lastUserUnitId = [...timelineUnits].reverse().find((u) => u.kind === 'user')?.id ?? null
-    const verbose = Boolean(applicationSettings.verboseDiagnostics)
-    const showActivityUpdates = verbose || DEFAULT_DIAGNOSTICS_VISIBILITY.showActivityUpdates
-    const showReasoningUpdates = verbose || DEFAULT_DIAGNOSTICS_VISIBILITY.showReasoningUpdates
-    const showOperationTrace = verbose || DEFAULT_DIAGNOSTICS_VISIBILITY.showOperationTrace
-    const debugNoteColor = activeTheme.debugNotes
-    const activityUpdateColor = activeTheme.activityUpdates
-    const reasoningUpdateColor = activeTheme.reasoningUpdates
-    const operationTraceColor = activeTheme.operationTrace
-    const timelineMessageColor = activeTheme.thinkingProgress
-    const settingsPopover = settingsPopoverByPanel[w.id] ?? null
-    const interactionMode = parseInteractionMode(w.interactionMode)
-    const panelSecurity = getPanelSecurityState(w)
-    const effectiveSandbox = panelSecurity.effectiveSandbox
-    const effectivePermissionMode = panelSecurity.effectivePermissionMode
-    const sandboxLockedToView = panelSecurity.sandboxLockedToView
-    const permissionDisabledByReadOnlySandbox = panelSecurity.permissionLockedByReadOnlySandbox
-    const permissionLockedToVerifyFirst = panelSecurity.permissionLockedToVerifyFirst
-    const contextUsage = estimatePanelContextUsage(w)
-    const contextUsagePercent = contextUsage ? Math.max(0, Number(contextUsage.usedPercent.toFixed(1))) : null
-    const contextUsageStrokeColor =
-      contextUsagePercent === null
-        ? 'currentColor'
-        : contextUsagePercent >= 95
-          ? '#dc2626'
-          : contextUsagePercent >= 85
-            ? '#f59e0b'
-            : '#059669'
-
     return (
-      <AgentPanelShell
-        isActive={activePanelId === w.id}
-        hasSettingsPopover={Boolean(settingsPopover)}
-        onFocus={() => {
-          setActivePanelId(w.id)
-          setFocusedEditorId(null)
+      <PanelContentRenderer
+        panel={w}
+        ctx={{
+          api,
+          panels,
+          activePanelId,
+          draggingPanelId,
+          dragOverTarget,
+          panelActivityById,
+          panelTimelineById,
+          panelTurnCompleteAtById,
+          activityClock,
+          lastPromptDurationMsByPanel,
+          activePromptStartedAtRef,
+          applicationSettings,
+          inputDraftEditByPanel,
+          settingsPopoverByPanel,
+          activeTheme,
+          modelConfig,
+          providerAuthByName,
+          providerVerifiedByName,
+          timelineOpenByUnitId,
+          setTimelineOpenByUnitId,
+          codeBlockOpenById,
+          setCodeBlockOpenById,
+          timelinePinnedCodeByUnitId,
+          setTimelinePinnedCodeByUnitId,
+          resendingPanelId,
+          handleDragOver,
+          handleAgentDrop,
+          handleDragStart,
+          handleDragEnd,
+          splitAgentPanel,
+          closePanel,
+          registerMessageViewport,
+          onMessageViewportScroll,
+          onChatHistoryContextMenu,
+          formatToolTrace,
+          onChatLinkClick,
+          grantPermissionAndResend,
+          recallLastUserMessage,
+          resendLastUserMessage,
+          beginQueuedMessageEdit,
+          injectQueuedMessage,
+          removeQueuedMessage,
+          getModelProvider,
+          getModelOptions,
+          registerTextarea,
+          setPanels,
+          autoResizeTextarea,
+          handlePasteImage,
+          sendMessage,
+          onInputPanelContextMenu,
+          cancelDraftEdit,
+          setSettingsPopoverByPanel,
+          setInteractionMode,
+          setPanelSandbox,
+          setPanelPermission,
+          switchModel,
+          parseInteractionMode,
+          getPanelSecurityState,
+          estimatePanelContextUsage,
+          setActivePanelId,
+          setFocusedEditorId,
+          onPanelWheel: (e: React.WheelEvent, panelId: string) => {
+            if (!isZoomWheelGesture(e)) return
+            e.preventDefault()
+            setActivePanelId(panelId)
+            setFocusedEditorId(null)
+            if (zoomWheelThrottleRef.current) return
+            zoomWheelThrottleRef.current = true
+            if (e.deltaY < 0) api.zoomIn?.()
+            else if (e.deltaY > 0) api.zoomOut?.()
+            const level = api.getZoomLevel?.()
+            if (level !== undefined) setZoomLevel(level)
+            setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
+          },
         }}
-        onMouseDown={() => {
-          setActivePanelId(w.id)
-          setFocusedEditorId(null)
-        }}
-        onWheel={(e) => {
-          if (!isZoomWheelGesture(e)) return
-          e.preventDefault()
-          setActivePanelId(w.id)
-          setFocusedEditorId(null)
-          if (zoomWheelThrottleRef.current) return
-          zoomWheelThrottleRef.current = true
-          if (e.deltaY < 0) api.zoomIn?.()
-          else if (e.deltaY > 0) api.zoomOut?.()
-          const level = api.getZoomLevel?.()
-          if (level !== undefined) setZoomLevel(level)
-          setTimeout(() => { zoomWheelThrottleRef.current = false }, 120)
-        }}
-      >
-        <AgentPanelHeader
-          panel={w}
-          panelsCount={panels.length}
-          draggingPanelId={draggingPanelId}
-          dragOverTarget={dragOverTarget}
-          onDragOver={(e) => handleDragOver(e, { acceptAgent: true, targetId: `agent-${w.id}` })}
-          onDrop={(e) => handleAgentDrop(e, w.id)}
-          onDragStart={(e) => handleDragStart(e, 'agent', w.id)}
-          onDragEnd={handleDragEnd}
-          onSplit={() => splitAgentPanel(w.id)}
-          onClose={() => closePanel(w.id)}
-        />
-
-        <AgentPanelMessageViewport
-          registerRef={(el) => registerMessageViewport(w.id, el)}
-          onScroll={() => onMessageViewportScroll(w.id)}
-          onContextMenu={onChatHistoryContextMenu}
-          panelTextStyle={panelTextStyle}
-        >
-          <ChatTimeline
-            timelineUnits={timelineUnits}
-            showOperationTrace={showOperationTrace}
-            showReasoningUpdates={showReasoningUpdates}
-            showActivityUpdates={showActivityUpdates}
-            timelineOpenByUnitId={timelineOpenByUnitId}
-            setTimelineOpenByUnitId={setTimelineOpenByUnitId}
-            codeBlockOpenById={codeBlockOpenById}
-            setCodeBlockOpenById={setCodeBlockOpenById}
-            timelinePinnedCodeByUnitId={timelinePinnedCodeByUnitId}
-            setTimelinePinnedCodeByUnitId={setTimelinePinnedCodeByUnitId}
-            operationTraceColor={operationTraceColor}
-            timelineMessageColor={timelineMessageColor}
-            debugNoteColor={debugNoteColor}
-            activeTheme={activeTheme}
-            panelId={w.id}
-            isStreaming={w.streaming}
-            permissionMode={w.permissionMode}
-            isIdle={isIdle}
-            activityClock={activityClock}
-            lastAgentTimelineUnitId={lastAgentTimelineUnitId}
-            lastUserUnitId={lastUserUnitId}
-            completedPromptDurationLabel={completedPromptDurationLabel}
-            resendingPanelId={resendingPanelId}
-            queueCount={queueCount}
-            pendingInputs={w.pendingInputs}
-            editingQueuedIndex={editingQueuedIndex}
-            formatToolTrace={formatToolTrace}
-            onChatLinkClick={onChatLinkClick}
-            onGrantPermissionAndResend={() => grantPermissionAndResend(w.id)}
-            onRecallLastUserMessage={() => recallLastUserMessage(w.id)}
-            onResendLastUserMessage={() => resendLastUserMessage(w.id)}
-            onBeginQueuedMessageEdit={(i) => beginQueuedMessageEdit(w.id, i)}
-            onInjectQueuedMessage={(i) => injectQueuedMessage(w.id, i)}
-            onRemoveQueuedMessage={(i) => removeQueuedMessage(w.id, i)}
-          />
-        </AgentPanelMessageViewport>
-
-        <ChatInputSection
-          panel={w}
-          panelFontSizePx={panelFontSizePx}
-          panelLineHeightPx={panelLineHeightPx}
-          hasInput={hasInput}
-          isBusy={isBusy}
-          draftEdit={draftEdit}
-          sendTitle={sendTitle}
-          livePromptDurationLabel={livePromptDurationLabel}
-          timelineMessageColor={timelineMessageColor}
-          contextUsage={contextUsage ?? null}
-          contextUsagePercent={contextUsagePercent}
-          contextUsageStrokeColor={contextUsageStrokeColor}
-          activityDotClass={activityDotClass}
-          activityLabel={activityLabel}
-          activityTitle={activityTitle}
-          isRunning={isRunning}
-          showCompletionNotice={showCompletionNotice}
-          settingsPopover={settingsPopover}
-          interactionMode={interactionMode}
-          effectiveSandbox={effectiveSandbox}
-          effectivePermissionMode={effectivePermissionMode}
-          sandboxLockedToView={sandboxLockedToView}
-          permissionDisabledByReadOnlySandbox={permissionDisabledByReadOnlySandbox}
-          permissionLockedToVerifyFirst={permissionLockedToVerifyFirst}
-          modelConfig={modelConfig}
-          providerAuthByName={providerAuthByName}
-          providerVerifiedByName={providerVerifiedByName}
-          getModelProvider={getModelProvider}
-          getModelOptions={getModelOptions}
-          textareaRef={(el) => registerTextarea(w.id, el)}
-          onInputChange={(next) => {
-            setPanels((prev) => prev.map((x) => (x.id === w.id ? { ...x, input: next } : x)))
-            queueMicrotask(() => autoResizeTextarea(w.id))
-          }}
-          onFocus={() => setActivePanelId(w.id)}
-          onPasteImage={(file) => void handlePasteImage(w.id, file)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              sendMessage(w.id)
-            }
-          }}
-          onContextMenu={onInputPanelContextMenu}
-          onSend={() => sendMessage(w.id)}
-          onInterrupt={() => void api.interrupt(w.id)}
-          onCancelDraftEdit={() => cancelDraftEdit(w.id)}
-          onRemoveAttachment={(attachmentId) =>
-            setPanels((prev) =>
-              prev.map((p) =>
-                p.id !== w.id ? p : { ...p, attachments: p.attachments.filter((x) => x.id !== attachmentId) },
-              ),
-            )
-          }
-          setSettingsPopover={(next) =>
-            setSettingsPopoverByPanel((prev) => ({ ...prev, [w.id]: next }))
-          }
-          onSetInteractionMode={(mode) => setInteractionMode(w.id, mode)}
-          onSetPanelSandbox={(value) => setPanelSandbox(w.id, value)}
-          onSetPanelPermission={(value) => setPanelPermission(w.id, value)}
-          onSandboxLockedClick={() =>
-            setPanels((prev) =>
-              prev.map((p) =>
-                p.id !== w.id
-                  ? p
-                  : { ...p, status: 'Sandbox is locked to View. Expand sandbox in Workspace settings.' },
-              ),
-            )
-          }
-          onSwitchModel={(modelId) => switchModel(w.id, modelId)}
-        />
-      </AgentPanelShell>
+      />
     )
   }
 }

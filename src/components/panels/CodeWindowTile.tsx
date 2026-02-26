@@ -27,6 +27,7 @@ export interface CodeWindowTileProps {
   onZoomWheel: (e: React.WheelEvent) => void
   onDockSideToggle: () => void
   onCloseCodeWindow: () => void
+  onCodeWindowTabChange: (tab: 'code' | 'settings') => void
   onFocusedEditorChange: (id: string) => void
   onEditorTabChange: (id: string) => void
   onEditModeToggle: (id: string) => void
@@ -56,6 +57,7 @@ export function CodeWindowTile({
   onZoomWheel,
   onDockSideToggle,
   onCloseCodeWindow,
+  onCodeWindowTabChange,
   onFocusedEditorChange,
   onEditorTabChange,
   onEditModeToggle,
@@ -77,51 +79,82 @@ export function CodeWindowTile({
 
   return (
     <div
-      className="relative h-full min-h-0 min-w-0 flex flex-col border border-neutral-200/80 dark:border-neutral-800 rounded-lg overflow-hidden bg-neutral-50 dark:bg-neutral-900 font-mono"
+      className="relative h-full min-h-0 min-w-0 flex flex-col border border-neutral-200/80 dark:border-neutral-800 rounded-lg overflow-hidden bg-neutral-50 dark:bg-neutral-900 font-editor"
       onMouseDownCapture={onMouseDownCapture}
       onDragOver={onDragOver}
       onDrop={onDrop}
       onWheel={onZoomWheel}
     >
       <div
-        className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 shrink-0 select-none"
+        data-code-window-dock-tab-bar="true"
+        className="px-2.5 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-1.5 bg-neutral-100 dark:bg-neutral-900/80 shrink-0 select-none"
         draggable={showWorkspaceWindow}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         onDragOver={onDragOver}
         onDrop={onDrop}
       >
-        <div className="flex items-center gap-2">
-          <div className="text-xs font-semibold text-neutral-700 dark:text-neutral-200">
-            {showingSettingsPanel ? 'Settings Window' : 'Code Window'}
-          </div>
+        <div className="inline-flex items-center gap-1.5">
           <button
             type="button"
-            title={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
-            aria-label={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
-            className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
-            onClick={onDockSideToggle}
+            title="Code"
+            aria-label="Code"
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+              codeWindowTab === 'code'
+                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+            }`}
+            onClick={() => onCodeWindowTabChange('code')}
           >
             <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M3 5.5H11.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-              <path d="M5.5 3.5L3 5.5L5.5 7.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M13 10.5H4.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-              <path d="M10.5 8.5L13 10.5L10.5 12.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M6 5L3.5 8 6 11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M10 5L12.5 8 10 11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M9 5.7L7 10.3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
             </svg>
           </button>
           <button
             type="button"
-            title={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
-            aria-label={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
-            className="h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
-            onClick={onCloseCodeWindow}
+            title="Settings"
+            aria-label="Settings"
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+              codeWindowTab === 'settings'
+                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+            }`}
+            onClick={() => onCodeWindowTabChange('settings')}
           >
-            <svg width="12" height="12" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-              <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 5.8A2.2 2.2 0 1 1 8 10.2A2.2 2.2 0 0 1 8 5.8Z" stroke="currentColor" strokeWidth="1.2" />
+              <path d="M13.1 8.7V7.3L11.8 6.9C11.7 6.6 11.6 6.4 11.4 6.1L12 4.9L11.1 4L9.9 4.6C9.6 4.4 9.4 4.3 9.1 4.2L8.7 2.9H7.3L6.9 4.2C6.6 4.3 6.4 4.4 6.1 4.6L4.9 4L4 4.9L4.6 6.1C4.4 6.4 4.3 6.6 4.2 6.9L2.9 7.3V8.7L4.2 9.1C4.3 9.4 4.4 9.6 4.6 9.9L4 11.1L4.9 12L6.1 11.4C6.4 11.6 6.6 11.7 6.9 11.8L7.3 13.1H8.7L9.1 11.8C9.4 11.7 9.6 11.6 9.9 11.4L11.1 12L12 11.1L11.4 9.9C11.6 9.6 11.7 9.4 11.8 9.1L13.1 8.7Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
             </svg>
           </button>
         </div>
+        <button
+          type="button"
+          title={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
+            aria-label={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
+          className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
+          onClick={onDockSideToggle}
+        >
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M3 5.5H11.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+            <path d="M5.5 3.5L3 5.5L5.5 7.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M13 10.5H4.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+            <path d="M10.5 8.5L13 10.5L10.5 12.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          title={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
+          aria-label={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
+          className="h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
+          onClick={onCloseCodeWindow}
+        >
+          <svg width="12" height="12" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+        </button>
       </div>
       {draggingPanelId && dragOverTarget === 'dock-code' && (
         <div className="absolute inset-0 rounded-lg pointer-events-none z-10" style={DROP_ZONE_OVERLAY_STYLE} />

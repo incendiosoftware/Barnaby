@@ -144,29 +144,29 @@ export function OpenExternalIcon({ className, size = 24 }: IconProps) {
   )
 }
 
-export function PanelBottomIcon({ className, size = 24 }: IconProps) {
+export function PanelBottomIcon({ className, size = 24, active = false }: IconProps & { active?: boolean }) {
   return (
     <svg {...iconProps} width={size} height={size} className={className}>
       <rect x="3" y="4" width="18" height="16" />
-      <rect x="3" y="14" width="18" height="6" />
+      <rect x="3" y="15" width="18" height="5" fill="currentColor" fillOpacity={active ? 0.6 : 0.15} />
     </svg>
   )
 }
 
-export function PanelLeftIcon({ className, size = 24 }: IconProps) {
+export function PanelLeftIcon({ className, size = 24, active = false }: IconProps & { active?: boolean }) {
   return (
     <svg {...iconProps} width={size} height={size} className={className}>
       <rect x="3" y="4" width="18" height="16" />
-      <rect x="3" y="4" width="6" height="16" />
+      <rect x="3" y="4" width="6" height="16" fill="currentColor" fillOpacity={active ? 0.6 : 0.15} />
     </svg>
   )
 }
 
-export function PanelRightIcon({ className, size = 24 }: IconProps) {
+export function PanelRightIcon({ className, size = 24, active = false }: IconProps & { active?: boolean }) {
   return (
     <svg {...iconProps} width={size} height={size} className={className}>
       <rect x="3" y="4" width="18" height="16" />
-      <rect x="15" y="4" width="6" height="16" />
+      <rect x="15" y="4" width="6" height="16" fill="currentColor" fillOpacity={active ? 0.6 : 0.15} />
     </svg>
   )
 }

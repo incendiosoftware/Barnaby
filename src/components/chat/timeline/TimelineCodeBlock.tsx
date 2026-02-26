@@ -62,7 +62,7 @@ export const TimelineCodeBlock = React.memo(function TimelineCodeBlock({
         <div className="rounded-b-lg overflow-hidden border-t border-neutral-300/70 dark:border-neutral-700/80">
           {isDiff ? (
             <div className="p-3 overflow-auto max-h-80 whitespace-pre bg-white/80 dark:bg-neutral-950/80">
-              <code className="block text-[12px] leading-5 font-mono text-blue-950 dark:text-blue-100">
+              <code className="block text-[12px] leading-5 font-code text-blue-950 dark:text-blue-100">
                 {diffLines.map((line, idx) => (
                   <div
                     key={idx}
@@ -86,6 +86,7 @@ export const TimelineCodeBlock = React.memo(function TimelineCodeBlock({
                 maxHeight: '20rem',
                 overflow: 'auto',
                 fontSize: '12px',
+                fontFamily: 'var(--app-font-code)',
                 background: activeTheme.mode === 'dark' ? 'rgba(10, 10, 10, 0.5)' : 'rgba(255, 255, 255, 0.5)',
               }}
               showLineNumbers={true}

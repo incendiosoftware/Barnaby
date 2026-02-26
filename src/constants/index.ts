@@ -180,6 +180,41 @@ export const TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS = 850
 export const TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS = 700
 export const APP_STATE_AUTOSAVE_MS = 800
 export const DEFAULT_THEME_ID = 'default-dark'
+export const DEFAULT_FONT_FAMILY = 'inter'
+export const DEFAULT_FONT_CODE = 'consolas'
+export const DEFAULT_FONT_THINKING = 'inter'
+export const DEFAULT_FONT_EDITOR = 'consolas'
+
+/** Font options for chat, thinking, and general UI prose. Cursor uses Segoe UI on Windows, system UI elsewhere. */
+export const FONT_OPTIONS: Array<{ id: string; label: string; fontStack: string }> = [
+  { id: 'inter', label: 'Inter', fontStack: 'Inter, system-ui, Avenir, Helvetica, Arial, sans-serif' },
+  { id: 'system', label: 'System default', fontStack: 'system-ui, -apple-system, Avenir, Helvetica, Arial, sans-serif' },
+  { id: 'segoe', label: 'Segoe UI (Cursor-style on Windows)', fontStack: '"Segoe UI", system-ui, Avenir, Helvetica, Arial, sans-serif' },
+  { id: 'georgia', label: 'Georgia', fontStack: 'Georgia, "Times New Roman", serif' },
+  { id: 'source-sans', label: 'Source Sans 3', fontStack: '"Source Sans 3", system-ui, sans-serif' },
+]
+
+/** Monospace font options for code blocks, editor, terminal. Cursor uses Consolas (Win), Menlo (Mac), JetBrains Mono. */
+export const MONO_FONT_OPTIONS: Array<{ id: string; label: string; fontStack: string }> = [
+  { id: 'consolas', label: 'Consolas (Cursor default on Windows)', fontStack: 'Consolas, "Courier New", monospace' },
+  { id: 'jetbrains', label: 'JetBrains Mono', fontStack: '"JetBrains Mono", Consolas, "Courier New", monospace' },
+  { id: 'fira', label: 'Fira Code', fontStack: '"Fira Code", Consolas, "Courier New", monospace' },
+  { id: 'cascadia', label: 'Cascadia Code', fontStack: '"Cascadia Code", "Cascadia Mono", Consolas, monospace' },
+  { id: 'source-code', label: 'Source Code Pro', fontStack: '"Source Code Pro", Consolas, monospace' },
+  { id: 'menlo', label: 'Menlo (Cursor default on macOS)', fontStack: 'Menlo, Monaco, "Courier New", monospace' },
+]
+export const FONT_SIZE_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 11, label: '11' },
+  { value: 12, label: '12' },
+  { value: 13, label: '13' },
+  { value: 14, label: '14' },
+  { value: 15, label: '15' },
+  { value: 16, label: '16' },
+  { value: 17, label: '17' },
+  { value: 18, label: '18' },
+  { value: 20, label: '20' },
+]
+
 export const THINKING_MAX_CHARS = 180
 
 export const DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES = [

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, Menu, dialog, screen, nativeTheme } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, Menu, dialog, screen, nativeTheme, crashReporter } from 'electron'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -40,6 +40,7 @@ const CHAT_HISTORY_FILENAME = 'chat-history.json'
 const APP_STATE_FILENAME = 'app-state.json'
 const PROVIDER_SECRETS_FILENAME = 'provider-secrets.json'
 const RUNTIME_LOG_FILENAME = 'runtime.log'
+const DEBUG_LOG_FILENAME = 'debug.log'
 const MAX_PERSISTED_CHAT_HISTORY_ENTRIES = 200
 const MAX_EXPLORER_NODES = 2500
 const MAX_FILE_PREVIEW_BYTES = 1024 * 1024
@@ -54,6 +55,28 @@ const EXPLORER_ALWAYS_IGNORED_DIRECTORIES = new Set([
   '.turbo',
 ])
 const execFileAsync = promisify(execFile)
+
+// Enable crash reporting and Chromium verbose logging before app.ready
+;(function initDebugAndCrashReporting() {
+  try {
+    crashReporter.start({
+      submitURL: '',
+      uploadToServer: false,
+      compress: true,
+    })
+  } catch (err) {
+    console.error('[Barnaby] crashReporter.start failed:', err)
+  }
+  const storageDir = path.join(app.getPath('userData'), APP_STORAGE_DIRNAME)
+  const chromiumLogPath = path.join(storageDir, 'chromium.log')
+  try {
+    app.commandLine.appendSwitch('enable-logging')
+    app.commandLine.appendSwitch('log-file', chromiumLogPath)
+    app.commandLine.appendSwitch('v', '1')
+  } catch (err) {
+    console.error('[Barnaby] Chromium logging setup failed:', err)
+  }
+})()
 
 type WorkspaceTreeOptions = {
   includeHidden?: boolean
@@ -204,6 +227,12 @@ const WINDOWS_DISPLAY_NAME = 'Barnaby'
 // Disable GPU Acceleration for Windows 7
 if (os.release().startsWith('6.1')) app.disableHardwareAcceleration()
 
+// Dev-mode stability: avoid GPU/cache crashes ("Access is denied", "Gpu Cache Creation failed: -2")
+if (process.env.VITE_DEV_SERVER_URL) {
+  app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
+  app.commandLine.appendSwitch('disable-gpu-sandbox')
+}
+
 // Set application name for Windows 10+ notifications
 if (process.platform === 'win32') {
   app.setName(WINDOWS_DISPLAY_NAME)
@@ -212,6 +241,7 @@ if (process.platform === 'win32') {
 
 let win: BrowserWindow | null = null
 let splashWin: BrowserWindow | null = null
+let debugLogWindow: BrowserWindow | null = null
 let recentWorkspaces: string[] = []
 let editorMenuEnabled = false
 const preload = path.join(__dirname, '../preload/index.mjs')
@@ -523,6 +553,22 @@ function getRuntimeLogFilePath() {
   return path.join(getAppStorageDirPath(), RUNTIME_LOG_FILENAME)
 }
 
+function getDebugLogFilePath() {
+  return path.join(getAppStorageDirPath(), DEBUG_LOG_FILENAME)
+}
+
+function appendDebugLog(line: string) {
+  try {
+    const logPath = getDebugLogFilePath()
+    fs.mkdirSync(path.dirname(logPath), { recursive: true })
+    const ts = new Date().toISOString()
+    fs.appendFileSync(logPath, `[${ts}] ${line}\n`, 'utf8')
+    debugLogWindow?.webContents?.send?.('barnaby:debug-log-append', `[${ts}] ${line}`)
+  } catch {
+    // best-effort only
+  }
+}
+
 function appendRuntimeLog(event: string, detail?: unknown, level: 'info' | 'warn' | 'error' = 'info') {
   try {
     const logPath = getRuntimeLogFilePath()
@@ -535,6 +581,8 @@ function appendRuntimeLog(event: string, detail?: unknown, level: 'info' | 'warn
       detail: detail ?? null,
     }
     fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, 'utf8')
+    const detailStr = detail != null ? (typeof detail === 'object' ? JSON.stringify(detail) : String(detail)) : ''
+    appendDebugLog(`[${level.toUpperCase()}] ${event}${detailStr ? ` ${detailStr}` : ''}`)
   } catch {
     // best-effort only
   }
@@ -640,10 +688,12 @@ function getDiagnosticsInfo() {
     chatHistoryPath: getChatHistoryFilePath(),
     appStatePath: getAppStateFilePath(),
     runtimeLogPath: getRuntimeLogFilePath(),
+    debugLogPath: getDebugLogFilePath(),
+    crashDumpsPath: app.getPath('crashDumps'),
   }
 }
 
-type DiagnosticsPathTarget = 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog'
+type DiagnosticsPathTarget = 'userData' | 'storage' | 'chatHistory' | 'appState' | 'runtimeLog' | 'debugLog' | 'crashDumps'
 type DiagnosticsFileTarget = 'chatHistory' | 'appState' | 'runtimeLog'
 
 function resolveDiagnosticsPathTarget(target: DiagnosticsPathTarget) {
@@ -659,6 +709,10 @@ function resolveDiagnosticsPathTarget(target: DiagnosticsPathTarget) {
       return { path: info.appStatePath, kind: 'file' as const }
     case 'runtimeLog':
       return { path: info.runtimeLogPath, kind: 'file' as const }
+    case 'debugLog':
+      return { path: info.debugLogPath, kind: 'file' as const }
+    case 'crashDumps':
+      return { path: info.crashDumpsPath, kind: 'directory' as const }
   }
 }
 
@@ -669,7 +723,9 @@ async function openDiagnosticsPath(rawTarget: unknown) {
     target !== 'storage' &&
     target !== 'chatHistory' &&
     target !== 'appState' &&
-    target !== 'runtimeLog'
+    target !== 'runtimeLog' &&
+    target !== 'debugLog' &&
+    target !== 'crashDumps'
   ) {
     return {
       ok: false as const,
@@ -690,7 +746,7 @@ async function openDiagnosticsPath(rawTarget: unknown) {
   try {
     if (resolved.kind === 'directory') {
       fs.mkdirSync(resolved.path, { recursive: true })
-    } else if (target === 'runtimeLog') {
+    } else if (target === 'runtimeLog' || target === 'debugLog') {
       fs.mkdirSync(path.dirname(resolved.path), { recursive: true })
       if (!fs.existsSync(resolved.path)) {
         fs.writeFileSync(resolved.path, '', 'utf8')
@@ -791,6 +847,106 @@ function openRuntimeLogFile() {
     path: runtimeLogPath,
     error: result || undefined,
   }))
+}
+
+const debugWindowHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Barnaby Debug Output</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; background: #1e1e1e; color: #d4d4d4; overflow: hidden; }
+    #toolbar { padding: 6px 8px; background: #252526; border-bottom: 1px solid #3c3c3c; display: flex; align-items: center; gap: 8px; }
+    #toolbar button { padding: 4px 10px; font-size: 11px; cursor: pointer; background: #0e639c; color: white; border: none; border-radius: 2px; }
+    #toolbar button:hover { background: #1177bb; }
+    #toolbar button.secondary { background: #3c3c3c; }
+    #toolbar button.secondary:hover { background: #505050; }
+    #log { padding: 8px; height: calc(100% - 36px); overflow: auto; white-space: pre-wrap; word-wrap: break-word; }
+    .error { color: #f48771; }
+    .warn { color: #dcdcaa; }
+    .info { color: #9cdcfe; }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <button id="refresh">Refresh</button>
+    <button id="clear" class="secondary">Clear view</button>
+    <span id="status" style="font-size: 11px; color: #858585;"></span>
+  </div>
+  <pre id="log"></pre>
+  <script>
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('status');
+    function render(content) {
+      const lines = (content || '').split('\n');
+      logEl.innerHTML = lines.map(l => {
+        if (l.includes('[ERROR]')) return '<span class="error">' + escapeHtml(l) + '</span>';
+        if (l.includes('[WARN]')) return '<span class="warn">' + escapeHtml(l) + '</span>';
+        return '<span class="info">' + escapeHtml(l) + '</span>';
+      }).join('\n');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    async function load() {
+      try {
+        const r = await (window.api && window.api.getDebugLogContent ? window.api.getDebugLogContent() : Promise.resolve({ ok: false, content: '' }));
+        render(r.ok ? r.content : '');
+        statusEl.textContent = r.ok ? 'Live' : 'No API';
+      } catch (e) {
+        statusEl.textContent = 'Error: ' + e.message;
+      }
+    }
+    document.getElementById('refresh').onclick = load;
+    document.getElementById('clear').onclick = () => { logEl.innerHTML = ''; statusEl.textContent = 'Cleared'; };
+    if (window.api && window.api.onDebugLogAppend) {
+      window.api.onDebugLogAppend((line) => {
+        const span = document.createElement('span');
+        span.className = line.includes('[ERROR]') ? 'error' : line.includes('[WARN]') ? 'warn' : 'info';
+        span.textContent = line + '\n';
+        logEl.appendChild(span);
+        logEl.scrollTop = logEl.scrollHeight;
+      });
+    }
+    load();
+    setInterval(load, 2000);
+  </script>
+</body>
+</html>`
+
+function openDebugOutputWindow() {
+  if (debugLogWindow && !debugLogWindow.isDestroyed()) {
+    debugLogWindow.focus()
+    return { ok: true, path: getDebugLogFilePath() }
+  }
+  const debugHtmlPath = path.join(RENDERER_DIST, 'debug-window.html')
+  const debugWindowPreload = preload
+  debugLogWindow = new BrowserWindow({
+    title: 'Barnaby Debug Output',
+    width: 720,
+    height: 480,
+    minWidth: 400,
+    minHeight: 200,
+    show: true,
+    webPreferences: {
+      preload: debugWindowPreload,
+      sandbox: false,
+    },
+  })
+  debugLogWindow.setMenuBarVisibility(false)
+  if (fs.existsSync(debugHtmlPath)) {
+    void debugLogWindow.loadFile(debugHtmlPath)
+  } else {
+    void debugLogWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(debugWindowHtml)}`)
+  }
+  debugLogWindow.on('closed', () => {
+    debugLogWindow = null
+  })
+  debugLogWindow.webContents.on('did-finish-load', () => {
+    appendDebugLog('[DEBUG] Debug output window opened')
+  })
+  return { ok: true, path: getDebugLogFilePath() }
 }
 
 function registerRuntimeDiagnosticsLogging() {
@@ -1530,10 +1686,10 @@ function findNodeExeOnPath(): string | null {
 }
 
 const CLI_AUTH_CHECK_TIMEOUT_MS = 8_000
+const CLI_MODELS_QUERY_TIMEOUT_MS = 60_000
 
-function runCliCommand(executable: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+function runCliCommand(executable: string, args: string[], timeoutMs = CLI_AUTH_CHECK_TIMEOUT_MS): Promise<{ stdout: string; stderr: string }> {
   const env = getCliSpawnEnv()
-  const timeoutMs = CLI_AUTH_CHECK_TIMEOUT_MS
   const timeoutPromise = new Promise<never>((_, reject) =>
     setTimeout(
       () => reject(new Error(`CLI check timed out after ${timeoutMs / 1000}s. The CLI may be slow to start or hung.`)),
@@ -1757,6 +1913,9 @@ async function launchProviderUpgrade(config: ProviderConfigForAuth): Promise<{ s
 
 const GEMINI_MODELS_PROMPT =
   'Output a JSON array of model IDs you support. Use names like gemini-2.5-flash, gemini-2.5-pro, gemini-3-pro-preview, gemini-3.1-pro. Output only the JSON array, no markdown or other text.'
+
+const CLAUDE_MODELS_PROMPT =
+  'Output only a JSON array of model IDs you support. Use names like sonnet, opus, haiku, claude-sonnet-4, claude-opus-4. Output only the JSON array, no markdown or other text.'
 
 type ModelsByProvider = {
   codex: { id: string; displayName: string }[]
@@ -2000,6 +2159,7 @@ const CODEX_MODELS_PROMPT =
 
 async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: string }[]> {
   const timeoutMs = 120_000
+  const env = getCliSpawnEnv()
   return new Promise((resolve, reject) => {
     const args = ['exec', '--sandbox', 'read-only', '--json', CODEX_MODELS_PROMPT]
     const proc =
@@ -2007,8 +2167,9 @@ async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: str
         ? spawn('codex', args, {
             stdio: ['pipe', 'pipe', 'pipe'],
             windowsHide: true,
+            env,
           })
-        : spawn('codex', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+        : spawn('codex', args, { stdio: ['pipe', 'pipe', 'pipe'], env })
 
     let stdout = ''
     proc.stdout?.setEncoding('utf8')
@@ -2028,27 +2189,41 @@ async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: str
     })
     proc.on('exit', (code, signal) => {
       clearTimeout(timer)
+      function tryExtractIds(text: string): string[] | null {
+        try {
+          const codeBlock = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+          const jsonStr = codeBlock ? codeBlock[1].trim() : text.trim()
+          const ids = JSON.parse(jsonStr) as unknown
+          if (!Array.isArray(ids)) return null
+          return ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        } catch {
+          return null
+        }
+      }
       try {
         for (const line of stdout.split('\n')) {
           const trimmed = line.trim()
-          if (!trimmed.startsWith('{"type":"item.completed"')) continue
-          const parsed = JSON.parse(trimmed) as {
-            item?: { type?: string; text?: string }
+          if (!trimmed.includes('item.completed') && !trimmed.includes('agent_message')) continue
+          try {
+            const parsed = JSON.parse(trimmed) as { type?: string; item?: { type?: string; text?: string } }
+            if (parsed.type !== 'item.completed' || parsed.item?.type !== 'agent_message' || !parsed.item?.text) continue
+            const ids = tryExtractIds(parsed.item.text)
+            if (ids && ids.length > 0) {
+              resolve(ids.map((id) => ({ id, displayName: id })))
+              return
+            }
+          } catch {
+            continue
           }
-          if (parsed.item?.type !== 'agent_message' || !parsed.item?.text) continue
-          let jsonStr = parsed.item.text.trim()
-          const codeBlock = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/)
-          if (codeBlock) jsonStr = codeBlock[1].trim()
-          const ids = JSON.parse(jsonStr) as string[]
-          if (!Array.isArray(ids)) continue
-          const result = ids
-            .filter((id): id is string => typeof id === 'string' && id.length > 0)
-            .map((id) => ({
-              id,
-              displayName: id,
-            }))
-          resolve(result)
-          return
+        }
+        const start = stdout.indexOf('[')
+        const end = stdout.lastIndexOf(']')
+        if (start >= 0 && end > start) {
+          const ids = tryExtractIds(stdout.slice(start, end + 1))
+          if (ids && ids.length > 0) {
+            resolve(ids.map((id) => ({ id, displayName: id })))
+            return
+          }
         }
         resolve([])
       } catch {
@@ -2060,14 +2235,23 @@ async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: str
 
 async function queryClaudeModelsViaExec(): Promise<{ id: string; displayName: string }[]> {
   try {
-    const result = await runCliCommand('claude', ['models', '--output', 'json'])
+    const result = await runCliCommand(
+      'claude',
+      ['-p', CLAUDE_MODELS_PROMPT, '--output-format', 'json', '--tools', ''],
+      CLI_MODELS_QUERY_TIMEOUT_MS,
+    )
     const out = (result.stdout ?? '').trim()
     if (!out) return []
-    const parsed = JSON.parse(out)
-    const arr = Array.isArray(parsed) ? parsed : (parsed?.models ?? parsed?.data ?? [])
-    return arr
-      .filter((m: unknown) => m && typeof (m as Record<string, unknown>).id === 'string')
-      .map((m: Record<string, unknown>) => ({ id: String(m.id), displayName: String(m.id) }))
+    const parsed = JSON.parse(out) as { result?: string }
+    let jsonStr = (parsed.result ?? '').trim()
+    if (!jsonStr) return []
+    const codeBlock = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/)
+    if (codeBlock) jsonStr = codeBlock[1].trim()
+    const ids = JSON.parse(jsonStr) as string[]
+    if (!Array.isArray(ids)) return []
+    return ids
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      .map((id) => ({ id, displayName: id }))
   } catch {
     return []
   }
@@ -2108,6 +2292,7 @@ async function fetchOpenRouterModels(): Promise<{ id: string; displayName: strin
 
 async function getGeminiAvailableModels(): Promise<{ id: string; displayName: string }[]> {
   const timeoutMs = 45_000
+  const env = getCliSpawnEnv()
   return new Promise((resolve, reject) => {
     const args = ['-o', 'json', '-p', GEMINI_MODELS_PROMPT]
     const proc =
@@ -2115,8 +2300,9 @@ async function getGeminiAvailableModels(): Promise<{ id: string; displayName: st
         ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
             stdio: ['pipe', 'pipe', 'pipe'],
             windowsHide: true,
+            env,
           })
-        : spawn('gemini', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+        : spawn('gemini', args, { stdio: ['pipe', 'pipe', 'pipe'], env })
 
     let stdout = ''
     proc.stdout?.setEncoding('utf8')
@@ -2136,12 +2322,8 @@ async function getGeminiAvailableModels(): Promise<{ id: string; displayName: st
     })
     proc.on('exit', (code, signal) => {
       clearTimeout(timer)
-      if (code !== 0 && !signal) {
-        reject(new Error(`Gemini CLI exited with code ${code}`))
-        return
-      }
       try {
-        const parsed = JSON.parse(stdout) as { response?: string }
+        const parsed = JSON.parse(stdout || '{}') as { response?: string }
         const response = parsed?.response?.trim()
         if (!response) {
           resolve([])
@@ -2644,6 +2826,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   win = null
+  debugLogWindow = null
   closeSplashWindow()
   clearStartupRevealTimer()
   releaseAllWorkspaceLocks()
@@ -2833,6 +3016,22 @@ ipcMain.handle('agentorchestrator:getLoadedPlugins', async () => {
 
 ipcMain.handle('agentorchestrator:openRuntimeLog', async () => {
   return openRuntimeLogFile()
+})
+
+ipcMain.handle('agentorchestrator:openDebugOutputWindow', async () => {
+  return openDebugOutputWindow()
+})
+
+ipcMain.handle('agentorchestrator:getDebugLogContent', async () => {
+  try {
+    const logPath = getDebugLogFilePath()
+    fs.mkdirSync(path.dirname(logPath), { recursive: true })
+    if (!fs.existsSync(logPath)) return { ok: true, content: '' }
+    const content = fs.readFileSync(logPath, 'utf8')
+    return { ok: true, content }
+  } catch (err) {
+    return { ok: false, content: '', error: errorMessage(err) }
+  }
 })
 
 ipcMain.handle('agentorchestrator:openDiagnosticsPath', async (_evt, target: unknown) => {

@@ -175,11 +175,18 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
     initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>,
     interactionMode?: AgentInteractionMode,
   ) {
-    try {
-      await connectWindow(winId, model, cwd, permissionMode, sandbox, initialHistory, interactionMode)
-      return
-    } catch {
-      await connectWindow(winId, model, cwd, permissionMode, sandbox, initialHistory, interactionMode)
+    const RETRY_DELAY_MS = 2000
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await connectWindow(winId, model, cwd, permissionMode, sandbox, initialHistory, interactionMode)
+        return
+      } catch (e) {
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
+        } else {
+          throw e
+        }
+      }
     }
   }
 

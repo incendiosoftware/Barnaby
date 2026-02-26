@@ -4,7 +4,7 @@
 
 import React from 'react'
 import type { ExplorerPrefs, WorkspaceTreeNode } from '../types'
-import { CollapseAllIcon, ExpandAllIcon, RefreshIcon } from './icons'
+import { CloseIcon, CollapseAllIcon, ExpandAllIcon, RefreshIcon } from './icons'
 
 export interface ExplorerPaneProps {
   workspaceTree: WorkspaceTreeNode[]
@@ -25,6 +25,7 @@ export interface ExplorerPaneProps {
   onOpenFile: (relativePath: string) => void
   onOpenContextMenu: (x: number, y: number, relativePath: string) => void
   onCloseGitContextMenu: () => void
+  onClose?: () => void
 }
 
 export function ExplorerPane({
@@ -46,6 +47,7 @@ export function ExplorerPane({
   onOpenFile,
   onOpenContextMenu,
   onCloseGitContextMenu,
+  onClose,
 }: ExplorerPaneProps) {
   function renderExplorerNode(node: WorkspaceTreeNode, depth = 0): React.ReactNode {
     const rowPadding = 8 + depth * 10
@@ -107,6 +109,17 @@ export function ExplorerPane({
       <div className="px-3 py-2.5 text-xs">
         <div className="flex items-center justify-between gap-2">
           <span className="font-medium text-neutral-700 dark:text-neutral-300">Workspace folder</span>
+          {onClose && (
+            <button
+              type="button"
+              className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
+              onClick={onClose}
+              title="Close"
+              aria-label="Close"
+            >
+              <CloseIcon size={12} />
+            </button>
+          )}
         </div>
         <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
           <div className="flex items-center gap-2">
@@ -140,7 +153,7 @@ export function ExplorerPane({
           <div className="inline-flex items-center gap-1.5">
             <button
               type="button"
-              className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+              className="h-7 w-7 inline-flex items-center justify-center rounded bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
               onClick={onRefresh}
               title="Refresh workspace folder"
               aria-label="Refresh workspace folder"
@@ -149,7 +162,7 @@ export function ExplorerPane({
             </button>
             <button
               type="button"
-              className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+              className="h-7 w-7 inline-flex items-center justify-center rounded bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
               onClick={onExpandAll}
               title="Expand all"
               aria-label="Expand all"
@@ -158,7 +171,7 @@ export function ExplorerPane({
             </button>
             <button
               type="button"
-              className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+              className="h-7 w-7 inline-flex items-center justify-center rounded bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
               onClick={onCollapseAll}
               title="Collapse all"
               aria-label="Collapse all"

@@ -269,7 +269,13 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                       setModelPingPending(new Set())
                       try {
                         const available = await api.getAvailableModels()
-                        const nextModelConfig = syncModelConfigWithCatalog(modelConfig, available, providerRegistry)
+                        let nextModelConfig: ModelConfig
+                        try {
+                          nextModelConfig = syncModelConfigWithCatalog(modelConfig, available, providerRegistry)
+                        } catch (syncErr) {
+                          setModelCatalogRefreshStatus({ kind: 'error', message: `Config sync failed: ${formatError(syncErr)}` })
+                          return
+                        }
                         setModelConfig(nextModelConfig)
 
                         const seenModelPingKeys = new Set<string>()

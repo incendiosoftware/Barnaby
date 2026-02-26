@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Barnaby Debug Output</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; background: #1e1e1e; color: #d4d4d4; overflow: hidden; }
+    #toolbar { padding: 6px 8px; background: #252526; border-bottom: 1px solid #3c3c3c; display: flex; align-items: center; gap: 8px; }
+    #toolbar button { padding: 4px 10px; font-size: 11px; cursor: pointer; background: #0e639c; color: white; border: none; border-radius: 2px; }
+    #toolbar button:hover { background: #1177bb; }
+    #toolbar button.secondary { background: #3c3c3c; }
+    #toolbar button.secondary:hover { background: #505050; }
+    #log { padding: 8px; height: calc(100% - 36px); overflow: auto; white-space: pre-wrap; word-wrap: break-word; }
+    .error { color: #f48771; }
+    .warn { color: #dcdcaa; }
+    .info { color: #9cdcfe; }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <button id="refresh">Refresh</button>
+    <button id="clear" class="secondary">Clear view</button>
+    <span id="status" style="font-size: 11px; color: #858585;"></span>
+  </div>
+  <pre id="log"></pre>
+  <script>
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('status');
+    function render(content) {
+      const lines = (content || '').split('\n');
+      logEl.innerHTML = lines.map(l => {
+        if (l.includes('[ERROR]')) return '<span class="error">' + escapeHtml(l) + '</span>';
+        if (l.includes('[WARN]')) return '<span class="warn">' + escapeHtml(l) + '</span>';
+        return '<span class="info">' + escapeHtml(l) + '</span>';
+      }).join('\n');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    async function load() {
+      try {
+        const r = await (window.api && window.api.getDebugLogContent ? window.api.getDebugLogContent() : Promise.resolve({ ok: false, content: '' }));
+        render(r.ok ? r.content : '');
+        statusEl.textContent = r.ok ? 'Live' : 'No API';
+      } catch (e) {
+        statusEl.textContent = 'Error: ' + e.message;
+      }
+    }
+    document.getElementById('refresh').onclick = load;
+    document.getElementById('clear').onclick = () => { logEl.innerHTML = ''; statusEl.textContent = 'Cleared'; };
+    if (window.api && window.api.onDebugLogAppend) {
+      window.api.onDebugLogAppend((line) => {
+        const span = document.createElement('span');
+        span.className = line.includes('[ERROR]') ? 'error' : line.includes('[WARN]') ? 'warn' : 'info';
+        span.textContent = line + '\n';
+        logEl.appendChild(span);
+        logEl.scrollTop = logEl.scrollHeight;
+      });
+    }
+    load();
+    setInterval(load, 2000);
+  </script>
+</body>
+</html>

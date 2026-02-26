@@ -1690,45 +1690,38 @@ const CLI_MODELS_QUERY_TIMEOUT_MS = 60_000
 
 function runCliCommand(executable: string, args: string[], timeoutMs = CLI_AUTH_CHECK_TIMEOUT_MS): Promise<{ stdout: string; stderr: string }> {
   const env = getCliSpawnEnv()
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(
-      () => reject(new Error(`CLI check timed out after ${timeoutMs / 1000}s. The CLI may be slow to start or hung.`)),
-      timeoutMs,
-    ),
-  )
-  // On Windows, try spawning node directly via the npm .cmd shim entry point.
-  // This bypasses cmd.exe and avoids the shell-startup hangs seen with claude CLI.
-  if (process.platform === 'win32') {
-    const jsEntry = resolveNpmCliJsEntry(executable)
-    const nodeExe = jsEntry ? findNodeExeOnPath() : null
-    if (jsEntry && nodeExe) {
-      return Promise.race([
-        execFileAsync(nodeExe, [jsEntry, ...args], {
-          windowsHide: true,
-          maxBuffer: 1024 * 1024,
-          env,
-        }),
-        timeoutPromise,
-      ])
+  return new Promise((resolve, reject) => {
+    const abortController = new AbortController()
+    const timer = setTimeout(() => {
+      abortController.abort()
+      reject(new Error(`CLI check timed out after ${timeoutMs / 1000}s. The CLI may be slow to start or hung.`))
+    }, timeoutMs)
+
+    const finish = (err: Error | null, result?: { stdout: string; stderr: string }) => {
+      clearTimeout(timer)
+      if (err) reject(err)
+      else resolve(result!)
     }
-    const fullCmd = [executable, ...args].map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')
-    return Promise.race([
-      execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', fullCmd], {
-        windowsHide: true,
-        maxBuffer: 1024 * 1024,
-        env,
-      }),
-      timeoutPromise,
-    ])
-  }
-  return Promise.race([
-    execFileAsync(executable, args, {
-      windowsHide: true,
-      maxBuffer: 1024 * 1024,
-      env,
-    }),
-    timeoutPromise,
-  ])
+
+    if (process.platform === 'win32') {
+      const jsEntry = resolveNpmCliJsEntry(executable)
+      const nodeExe = jsEntry ? findNodeExeOnPath() : null
+      if (jsEntry && nodeExe) {
+        execFileAsync(nodeExe, [jsEntry, ...args], { windowsHide: true, maxBuffer: 1024 * 1024, env, signal: abortController.signal })
+          .then((res) => finish(null, res))
+          .catch(finish)
+        return
+      }
+      const fullCmd = [executable, ...args].map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')
+      execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', fullCmd], { windowsHide: true, maxBuffer: 1024 * 1024, env, signal: abortController.signal })
+        .then((res) => finish(null, res))
+        .catch(finish)
+      return
+    }
+    execFileAsync(executable, args, { windowsHide: true, maxBuffer: 1024 * 1024, env, signal: abortController.signal })
+      .then((res) => finish(null, res))
+      .catch(finish)
+  })
 }
 
 async function isCliInstalled(executable: string): Promise<boolean> {
@@ -2158,110 +2151,53 @@ const CODEX_MODELS_PROMPT =
   'Output only a JSON array of model IDs from the Codex CLI /model menu. Example: ["gpt-5.3-codex","gpt-5.2-codex"]. No other text.'
 
 async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: string }[]> {
-  const timeoutMs = 120_000
-  const env = getCliSpawnEnv()
-  return new Promise((resolve, reject) => {
-    const args = ['exec', '--sandbox', 'read-only', '--json', CODEX_MODELS_PROMPT]
-    const proc =
-      process.platform === 'win32'
-        ? spawn('codex', args, {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            windowsHide: true,
-            env,
-          })
-        : spawn('codex', args, { stdio: ['pipe', 'pipe', 'pipe'], env })
-
-    let stdout = ''
-    proc.stdout?.setEncoding('utf8')
-    proc.stdout?.on('data', (chunk: string) => {
-      stdout += chunk
-    })
-    proc.stderr?.on('data', () => {})
-
-    const timer = setTimeout(() => {
-      proc.kill('SIGTERM')
-      reject(new Error('Codex CLI models query timed out'))
-    }, timeoutMs)
-
-    proc.on('error', (err) => {
-      clearTimeout(timer)
-      reject(err)
-    })
-    proc.on('exit', (code, signal) => {
-      clearTimeout(timer)
-      function tryExtractIds(text: string): string[] | null {
-        try {
-          const codeBlock = text.match(/```(?:json)?\s*([\s\S]*?)```/)
-          const jsonStr = codeBlock ? codeBlock[1].trim() : text.trim()
-          const ids = JSON.parse(jsonStr) as unknown
-          if (!Array.isArray(ids)) return null
-          return ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
-        } catch {
-          return null
-        }
-      }
-      try {
-        for (const line of stdout.split('\n')) {
-          const trimmed = line.trim()
-          if (!trimmed.includes('item.completed') && !trimmed.includes('agent_message')) continue
-          try {
-            const parsed = JSON.parse(trimmed) as { type?: string; item?: { type?: string; text?: string } }
-            if (parsed.type !== 'item.completed' || parsed.item?.type !== 'agent_message' || !parsed.item?.text) continue
-            const ids = tryExtractIds(parsed.item.text)
-            if (ids && ids.length > 0) {
-              resolve(ids.map((id) => ({ id, displayName: id })))
-              return
-            }
-          } catch {
-            continue
-          }
-        }
-        const start = stdout.indexOf('[')
-        const end = stdout.lastIndexOf(']')
-        if (start >= 0 && end > start) {
-          const ids = tryExtractIds(stdout.slice(start, end + 1))
-          if (ids && ids.length > 0) {
-            resolve(ids.map((id) => ({ id, displayName: id })))
-            return
-          }
-        }
-        resolve([])
-      } catch {
-        resolve([])
-      }
-    })
-  })
+  return [
+    { id: "gpt-5.3-codex", displayName: "GPT 5.3 (Codex)" },
+    { id: "gpt-5.3-codex-spark", displayName: "GPT 5.3 Codex Spark" },
+    { id: "gpt-5.2-codex", displayName: "GPT 5.2 (Codex)" },
+    { id: "gpt-5.1-codex", displayName: "GPT 5.1 (Codex)" },
+    { id: "gpt-4o", displayName: "GPT 4o" },
+    { id: "gpt-4o-mini", displayName: "GPT 4o Mini" },
+    { id: "gpt-4-turbo", displayName: "GPT 4 Turbo" }
+  ]
 }
 
 async function queryClaudeModelsViaExec(): Promise<{ id: string; displayName: string }[]> {
-  try {
-    const result = await runCliCommand(
-      'claude',
-      ['-p', CLAUDE_MODELS_PROMPT, '--output-format', 'json', '--tools', ''],
-      CLI_MODELS_QUERY_TIMEOUT_MS,
-    )
-    const out = (result.stdout ?? '').trim()
-    if (!out) return []
-    const parsed = JSON.parse(out) as { result?: string }
-    let jsonStr = (parsed.result ?? '').trim()
-    if (!jsonStr) return []
-    const codeBlock = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/)
-    if (codeBlock) jsonStr = codeBlock[1].trim()
-    const ids = JSON.parse(jsonStr) as string[]
-    if (!Array.isArray(ids)) return []
-    return ids
-      .filter((id): id is string => typeof id === 'string' && id.length > 0)
-      .map((id) => ({ id, displayName: id }))
-  } catch {
-    return []
-  }
+  return [
+    { id: "claude-opus-4", displayName: "Claude Opus 4" },
+    { id: "claude-sonnet-4.6", displayName: "Claude Sonnet 4.6" },
+    { id: "claude-haiku-4.5", displayName: "Claude Haiku 4.5" },
+    { id: "opus", displayName: "Claude Opus" },
+    { id: "sonnet", displayName: "Claude Sonnet" },
+    { id: "haiku", displayName: "Claude Haiku" }
+  ]
 }
 
 async function getAvailableModels(): Promise<ModelsByProvider> {
-  const codex = await queryCodexModelsViaExec().catch(() => [])
-  const claude = await queryClaudeModelsViaExec().catch(() => [])
-  const gemini = await getGeminiAvailableModels().catch(() => [])
-  const openrouter = await fetchOpenRouterModels().catch(() => [])
+  const [codex, claude, gemini, openrouter] = await Promise.all([
+    queryCodexModelsViaExec().catch((err) => {
+      console.error('[getAvailableModels] codex error:', err)
+      return []
+    }),
+    queryClaudeModelsViaExec().catch((err) => {
+      console.error('[getAvailableModels] claude error:', err)
+      return []
+    }),
+    getGeminiAvailableModels().catch((err) => {
+      console.error('[getAvailableModels] gemini error:', err)
+      return []
+    }),
+    fetchOpenRouterModels().catch((err) => {
+      console.error('[getAvailableModels] openrouter error:', err)
+      return []
+    }),
+  ])
+  console.log('[getAvailableModels] results:', {
+    codex: codex.length,
+    claude: claude.length,
+    gemini: gemini.length,
+    openrouter: openrouter.length
+  })
   return { codex, claude, gemini, openrouter }
 }
 
@@ -2291,65 +2227,13 @@ async function fetchOpenRouterModels(): Promise<{ id: string; displayName: strin
 }
 
 async function getGeminiAvailableModels(): Promise<{ id: string; displayName: string }[]> {
-  const timeoutMs = 45_000
-  const env = getCliSpawnEnv()
-  return new Promise((resolve, reject) => {
-    const args = ['-o', 'json', '-p', GEMINI_MODELS_PROMPT]
-    const proc =
-      process.platform === 'win32'
-        ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            windowsHide: true,
-            env,
-          })
-        : spawn('gemini', args, { stdio: ['pipe', 'pipe', 'pipe'], env })
-
-    let stdout = ''
-    proc.stdout?.setEncoding('utf8')
-    proc.stdout?.on('data', (chunk: string) => {
-      stdout += chunk
-    })
-    proc.stderr?.on('data', () => {}) // ignore stderr for this call
-
-    const timer = setTimeout(() => {
-      proc.kill('SIGTERM')
-      reject(new Error('Gemini CLI models query timed out'))
-    }, timeoutMs)
-
-    proc.on('error', (err) => {
-      clearTimeout(timer)
-      reject(err)
-    })
-    proc.on('exit', (code, signal) => {
-      clearTimeout(timer)
-      try {
-        const parsed = JSON.parse(stdout || '{}') as { response?: string }
-        const response = parsed?.response?.trim()
-        if (!response) {
-          resolve([])
-          return
-        }
-        // Response might be wrapped in markdown code block
-        let jsonStr = response
-        const codeBlock = response.match(/```(?:json)?\s*([\s\S]*?)```/)
-        if (codeBlock) jsonStr = codeBlock[1].trim()
-        const ids = JSON.parse(jsonStr) as string[]
-        if (!Array.isArray(ids)) {
-          resolve([])
-          return
-        }
-        const result = ids
-          .filter((id): id is string => typeof id === 'string' && id.length > 0)
-          .map((id) => ({
-            id: id.replace(/^models\//, ''),
-            displayName: id.replace(/^models\//, ''),
-          }))
-        resolve(result)
-      } catch {
-        resolve([])
-      }
-    })
-  })
+  return [
+    { id: "gemini-2.5-flash", displayName: "Gemini 2.5 Flash" },
+    { id: "gemini-2.5-flash-lite", displayName: "Gemini 2.5 Flash Lite" },
+    { id: "gemini-2.5-pro", displayName: "Gemini 2.5 Pro" },
+    { id: "gemini-3-pro-preview", displayName: "Gemini 3 Pro (Preview)" },
+    { id: "gemini-3-flash-preview", displayName: "Gemini 3 Flash (Preview)" }
+  ]
 }
 
 function buildCommitMessageFromEntries(entries: GitStatusEntry[]): { subject: string; body: string } {
@@ -2936,7 +2820,9 @@ const CONCISE_RESPONSE_PREFIX =
 
 ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: string, payload: { text: string; imagePaths?: string[]; priorMessagesForContext?: Array<{ role: string; content: string }>; interactionMode?: string; responseStyle?: 'concise' | 'standard' | 'detailed' }) => {
   const client = agentClients.get(agentWindowId)
-  if (!client) return {}
+  if (!client) {
+    throw new Error('Agent not connected. Try reconnecting the panel or switching the model.')
+  }
   let text = typeof payload?.text === 'string' ? payload.text : ''
   const responseStyle = payload?.responseStyle === 'concise' || payload?.responseStyle === 'standard' || payload?.responseStyle === 'detailed' ? payload.responseStyle : undefined
   if (responseStyle === 'concise') {
@@ -3519,7 +3405,12 @@ ipcMain.handle('agentorchestrator:getGeminiAvailableModels', async () => {
 })
 
 ipcMain.handle('agentorchestrator:getAvailableModels', async () => {
-  return getAvailableModels()
+  try {
+    return await getAvailableModels()
+  } catch (err) {
+    console.error('[getAvailableModels]', err)
+    throw err
+  }
 })
 
 ipcMain.handle('agentorchestrator:findInPage', async (evt, text: string) => {
@@ -3733,9 +3624,9 @@ function createAboutWindow() {
 function setAppMenu() {
   const recentSubmenu: Electron.MenuItemConstructorOptions[] =
     recentWorkspaces.length > 0
-      ? recentWorkspaces.slice(0, 10).map((p) => ({
-          label: path.basename(p) || p,
-          click: () => sendMenuAction('openWorkspace', { path: p }),
+      ? recentWorkspaces.slice(0, 10).map((workspacePath) => ({
+          label: path.basename(workspacePath) || workspacePath,
+          click: () => sendMenuAction('openWorkspace', { path: workspacePath }),
         }))
       : [{ label: '(none)', enabled: false }]
 
@@ -3779,13 +3670,18 @@ function setAppMenu() {
         { label: 'Paste', role: 'paste' },
         { label: 'Find', accelerator: 'CmdOrCtrl+F', click: () => sendMenuAction('findInPage') },
         { label: 'Find in Files', accelerator: 'CmdOrCtrl+Shift+F', click: () => sendMenuAction('findInFiles') },
-        { type: 'separator' },
+      ],
+    },
+    {
+      label: 'Settings',
+      submenu: [
         { label: 'Connectivity', click: () => sendMenuAction('openConnectivity') },
         { label: 'Models', click: () => sendMenuAction('openModelSetup') },
-        { label: 'Preferences', accelerator: 'CmdOrCtrl+,', click: () => sendMenuAction('openPreferences') },
         { label: 'Agents', click: () => sendMenuAction('openAgents') },
         { label: 'Orchestrator', click: () => sendMenuAction('openOrchestrator') },
+        { label: 'MCP Servers', click: () => sendMenuAction('openMcpServers') },
         { label: 'Diagnostics', click: () => sendMenuAction('openDiagnostics') },
+        { label: 'Preferences', accelerator: 'CmdOrCtrl+,', click: () => sendMenuAction('openPreferences') },
       ],
     },
     {
@@ -3799,8 +3695,14 @@ function setAppMenu() {
             { label: 'Tile / Grid', click: () => sendMenuAction('layoutGrid') },
           ],
         },
-        { label: 'View Workspace Window', click: () => sendMenuAction('toggleWorkspaceWindow') },
-        { label: 'View Code Window', click: () => sendMenuAction('toggleCodeWindow') },
+        { type: 'separator' },
+        { label: 'Orchestrator', click: () => sendMenuAction('toggleDockPanel', { panelId: 'orchestrator' }) },
+        { label: 'Workspace Folder', click: () => sendMenuAction('toggleDockPanel', { panelId: 'workspace-folder' }) },
+        { label: 'Workspace Settings', click: () => sendMenuAction('toggleDockPanel', { panelId: 'workspace-settings' }) },
+        { label: 'Application Settings', click: () => sendMenuAction('toggleDockPanel', { panelId: 'application-settings' }) },
+        { label: 'Source Control', click: () => sendMenuAction('toggleDockPanel', { panelId: 'source-control' }) },
+        { label: 'Terminal', click: () => sendMenuAction('toggleDockPanel', { panelId: 'terminal' }) },
+        { label: 'Debug Output', click: () => sendMenuAction('toggleDockPanel', { panelId: 'debug-output' }) },
         { type: 'separator' },
         { role: 'reload' },
         { role: 'toggleDevTools' },

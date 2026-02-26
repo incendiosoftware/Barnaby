@@ -1,5 +1,9 @@
 import type React from 'react'
-import type { AgentPanelState, LayoutMode, PermissionMode, SandboxMode, WorkspaceSettings } from '../types'
+import type { AgentPanelState, DockLayoutState, DockPanelId, DockZoneId, DropTargetHint, LayoutMode, PermissionMode, SandboxMode, WorkspaceSettings } from '../types'
+import { getZoneForPanel, migratePanelsOnSplit, normalizeDockLayout } from '../utils/dockLayout'
+
+export type DockDropTarget = { zoneId: DockZoneId; hint: DropTargetHint }
+export type DragOverTarget = DockDropTarget | string | null
 
 export interface PanelLayoutControllerContext {
   panelsRef: React.MutableRefObject<AgentPanelState[]>
@@ -22,7 +26,8 @@ export interface PanelLayoutControllerContext {
   setFocusedEditorId: React.Dispatch<React.SetStateAction<string | null>>
   setWorkspaceDockSide: React.Dispatch<React.SetStateAction<'left' | 'right'>>
   setDraggingPanelId: React.Dispatch<React.SetStateAction<string | null>>
-  setDragOverTarget: React.Dispatch<React.SetStateAction<string | null>>
+  setDragOverTarget: React.Dispatch<React.SetStateAction<DragOverTarget>>
+  setDockLayout: React.Dispatch<React.SetStateAction<DockLayoutState>>
 }
 
 export interface PanelLayoutController {
@@ -31,10 +36,12 @@ export interface PanelLayoutController {
   createAgentPanel: (sourcePanelId?: string) => void
   splitAgentPanel: (sourcePanelId: string) => void
   reorderAgentPanel: (draggedId: string, targetId: string) => void
-  handleDragStart: (e: React.DragEvent, type: 'workspace' | 'code' | 'agent', id: string) => void
+  handleDragStart: (e: React.DragEvent, type: 'workspace' | 'code' | 'agent' | 'dock', id: string) => void
   handleDragEnd: () => void
-  handleDockDrop: (e: React.DragEvent) => void
+  handleDockDrop: (e: React.DragEvent, target: DockDropTarget | string | null) => void
   handleAgentDrop: (e: React.DragEvent, targetAgentId: string) => void
+  handleDockDragOver: (e: React.DragEvent, target: DockDropTarget | null) => void
+  /** @deprecated Use handleDockDragOver */
   handleDragOver: (
     e: React.DragEvent,
     opts: { acceptDock?: boolean; acceptAgent?: boolean; targetId?: string },
@@ -92,7 +99,7 @@ export function createPanelLayoutController(ctx: PanelLayoutControllerContext): 
 
   function handleDragStart(
     e: React.DragEvent,
-    type: 'workspace' | 'code' | 'agent',
+    type: 'workspace' | 'code' | 'agent' | 'dock',
     id: string,
   ) {
     ctx.setDraggingPanelId(id)
@@ -105,16 +112,49 @@ export function createPanelLayoutController(ctx: PanelLayoutControllerContext): 
     ctx.setDragOverTarget(null)
   }
 
-  function handleDockDrop(e: React.DragEvent) {
+  function handleDockDrop(e: React.DragEvent, target: DockDropTarget | string | null) {
     e.preventDefault()
     ctx.setDragOverTarget(null)
     const raw = e.dataTransfer.getData(DND_TYPE_DOCK)
     if (!raw) return
     try {
-      const { type } = JSON.parse(raw) as { type: string; id: string }
+      const { type, id: draggedId } = JSON.parse(raw) as { type: string; id: string }
       if (type === 'workspace' || type === 'code') {
         ctx.setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))
+        return
       }
+      if (type !== 'dock' || !target || typeof target === 'string') return
+      const panelId = draggedId as DockPanelId
+      const { zoneId: targetZoneId } = target
+
+      ctx.setDockLayout((prev) => {
+        const layout = normalizeDockLayout(prev)
+        let zones = { ...layout.zones }
+        const activeTab = { ...layout.activeTab }
+
+        // Remove panel from ALL zones to ensure uniqueness
+        for (const [zoneId, tabs] of Object.entries(zones)) {
+          if (tabs?.includes(panelId)) {
+            const next = tabs.filter((t) => t !== panelId)
+            if (next.length === 0) delete zones[zoneId as DockZoneId]
+            else zones[zoneId as DockZoneId] = next
+            if (activeTab[zoneId as DockZoneId] === panelId) {
+              activeTab[zoneId as DockZoneId] = next[0]
+            }
+          }
+        }
+
+        // Migrate panels when creating split zones
+        zones = migratePanelsOnSplit(zones, targetZoneId)
+
+        // Add panel to target zone
+        const targetTabs = zones[targetZoneId] ?? []
+        if (targetTabs.includes(panelId)) return prev
+        zones[targetZoneId] = [...targetTabs, panelId]
+        activeTab[targetZoneId] = panelId
+
+        return { zones, activeTab }
+      })
     } catch {
       // ignore
     }
@@ -133,17 +173,22 @@ export function createPanelLayoutController(ctx: PanelLayoutControllerContext): 
     }
   }
 
+  function handleDockDragOver(e: React.DragEvent, target: DockDropTarget | null) {
+    e.preventDefault()
+    if (e.dataTransfer.types.includes(DND_TYPE_DOCK) && target) {
+      e.dataTransfer.dropEffect = 'move'
+      ctx.setDragOverTarget(target)
+    }
+  }
+
   function handleDragOver(
     e: React.DragEvent,
     opts: { acceptDock?: boolean; acceptAgent?: boolean; targetId?: string },
   ) {
     e.preventDefault()
-    if (opts.acceptDock && e.dataTransfer.types.includes(DND_TYPE_DOCK) && opts.targetId) {
+    if (opts.acceptAgent && e.dataTransfer.types.includes(DND_TYPE_AGENT) && opts.targetId) {
       e.dataTransfer.dropEffect = 'move'
-      ctx.setDragOverTarget(opts.targetId)
-    } else if (opts.acceptAgent && e.dataTransfer.types.includes(DND_TYPE_AGENT) && opts.targetId) {
-      e.dataTransfer.dropEffect = 'move'
-      ctx.setDragOverTarget(opts.targetId)
+      ctx.setDragOverTarget(opts.targetId as any)
     }
   }
 
@@ -157,6 +202,7 @@ export function createPanelLayoutController(ctx: PanelLayoutControllerContext): 
     handleDragEnd,
     handleDockDrop,
     handleAgentDrop,
+    handleDockDragOver,
     handleDragOver,
   }
 }

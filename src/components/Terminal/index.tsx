@@ -2,14 +2,68 @@ import React, { useEffect, useRef } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import type { StandaloneTheme } from '../../types'
 
 // React Strict Mode double-mounts in dev: effect runs, cleanup runs (destroy), then effect runs again.
 // Defer destroy so a remount can cancel it; avoids terminal dying immediately when panel opens.
 let pendingDestroyTimeout: ReturnType<typeof setTimeout> | null = null
 
+function buildXtermTheme(theme: StandaloneTheme): Record<string, string> {
+  const dark = theme.mode === 'dark'
+  if (dark) {
+    return {
+      background: theme.dark950,
+      foreground: theme.accentText,
+      cursor: theme.accent500,
+      cursorAccent: theme.dark950,
+      selectionBackground: theme.accent600,
+      black: theme.dark950,
+      red: '#ff7b72',
+      green: '#3fb950',
+      yellow: '#d29922',
+      blue: theme.accent500,
+      magenta: '#bc8cff',
+      cyan: '#39c5cf',
+      white: theme.accentText,
+      brightBlack: '#484f58',
+      brightRed: '#ff7b72',
+      brightGreen: '#3fb950',
+      brightYellow: '#d29922',
+      brightBlue: theme.accent500,
+      brightMagenta: '#bc8cff',
+      brightCyan: '#39c5cf',
+      brightWhite: '#ffffff',
+    }
+  }
+  return {
+    background: '#f8fafc',
+    foreground: theme.dark950,
+    cursor: theme.accent600,
+    cursorAccent: '#f8fafc',
+    selectionBackground: theme.accent500,
+    black: theme.dark950,
+    red: '#dc2626',
+    green: '#16a34a',
+    yellow: '#ca8a04',
+    blue: theme.accent600,
+    magenta: '#9333ea',
+    cyan: '#0891b2',
+    white: theme.dark950,
+    brightBlack: '#64748b',
+    brightRed: '#dc2626',
+    brightGreen: '#16a34a',
+    brightYellow: '#ca8a04',
+    brightBlue: theme.accent600,
+    brightMagenta: '#9333ea',
+    brightCyan: '#0891b2',
+    brightWhite: theme.dark950,
+  }
+}
+
 type EmbeddedTerminalProps = {
   workspaceRoot: string
   fontFamily?: string
+  activeTheme: StandaloneTheme
   api: {
     terminalSpawn: (cwd: string) => Promise<{ ok: boolean; error?: string }>
     terminalWrite: (data: string) => void
@@ -20,7 +74,7 @@ type EmbeddedTerminalProps = {
   }
 }
 
-export function EmbeddedTerminal({ workspaceRoot, fontFamily = 'Consolas, "Courier New", monospace', api }: EmbeddedTerminalProps) {
+export function EmbeddedTerminal({ workspaceRoot, fontFamily = 'Consolas, "Courier New", monospace', activeTheme, api }: EmbeddedTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -38,29 +92,7 @@ export function EmbeddedTerminal({ workspaceRoot, fontFamily = 'Consolas, "Couri
       cursorBlink: true,
       fontSize: 13,
       fontFamily,
-      theme: {
-        background: '#0d1117',
-        foreground: '#c9d1d9',
-        cursor: '#c9d1d9',
-        cursorAccent: '#0d1117',
-        selectionBackground: '#264f78',
-        black: '#0d1117',
-        red: '#ff7b72',
-        green: '#3fb950',
-        yellow: '#d29922',
-        blue: '#58a6ff',
-        magenta: '#bc8cff',
-        cyan: '#39c5cf',
-        white: '#c9d1d9',
-        brightBlack: '#484f58',
-        brightRed: '#ff7b72',
-        brightGreen: '#3fb950',
-        brightYellow: '#d29922',
-        brightBlue: '#58a6ff',
-        brightMagenta: '#bc8cff',
-        brightCyan: '#39c5cf',
-        brightWhite: '#ffffff',
-      },
+      theme: buildXtermTheme(activeTheme),
     })
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
@@ -117,6 +149,13 @@ export function EmbeddedTerminal({ workspaceRoot, fontFamily = 'Consolas, "Couri
       }, 150)
     }
   }, [workspaceRoot, fontFamily, api])
+
+  useEffect(() => {
+    const term = termRef.current
+    if (term) {
+      term.options.theme = buildXtermTheme(activeTheme)
+    }
+  }, [activeTheme])
 
   return (
     <div

@@ -38,7 +38,7 @@ export interface CodeWindowTileProps {
   onEditorContentChange: (id: string, value: string) => void
   onMouseDownCapture: (e: React.MouseEvent) => void
   draggingPanelId: string | null
-  dragOverTarget: string | null
+  dragOverTarget: string | { zoneId: string; hint: string } | null
 }
 
 export function CodeWindowTile({

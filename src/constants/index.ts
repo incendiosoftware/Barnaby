@@ -7,6 +7,9 @@ import type {
   AppSettingsView,
   ConnectivityProvider,
   DiagnosticsMessageColors,
+  DockLayoutState,
+  DockPanelId,
+  DockZoneId,
   ExplorerPrefs,
   ModelInterface,
   ProviderConfig,
@@ -61,6 +64,38 @@ export const PROVIDER_SUBSCRIPTION_URLS: Record<string, string> = {
 export const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
 export const CONNECTIVITY_PROVIDERS: ConnectivityProvider[] = ['codex', 'claude', 'gemini', 'openrouter']
 export const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'preferences', 'agents', 'orchestrator', 'mcp-servers', 'diagnostics']
+
+export const DOCK_PANEL_LABELS: Record<DockPanelId, string> = {
+  orchestrator: 'Orchestrator',
+  'workspace-folder': 'Workspace Folder',
+  'workspace-settings': 'Workspace Settings',
+  'application-settings': 'Application Settings',
+  'source-control': 'Source Control',
+  terminal: 'Terminal',
+  'debug-output': 'Debug Output',
+}
+
+export const DEFAULT_DOCK_LAYOUT: DockLayoutState = {
+  zones: {
+    'left-top': ['orchestrator'],
+    'left-bottom': ['workspace-folder', 'workspace-settings'],
+    right: ['application-settings', 'source-control'],
+    bottom: ['terminal', 'debug-output'],
+  },
+  activeTab: {
+    'left-top': 'orchestrator',
+    'left-bottom': 'workspace-folder',
+    right: 'application-settings',
+    bottom: 'terminal',
+  },
+}
+
+/** All dock zone IDs for iteration. */
+export const DOCK_ZONE_IDS: DockZoneId[] = [
+  'left', 'left-top', 'left-bottom',
+  'right', 'right-top', 'right-bottom',
+  'bottom', 'bottom-left', 'bottom-right',
+]
 
 export const PANEL_COMPLETION_NOTICE_MS = 15000
 export const LAST_USER_RECALL_EXPIRY_MS = 10000
@@ -166,7 +201,7 @@ export const FONT_SCALE_STEP = 0.05
 export const INPUT_MAX_HEIGHT_PX = 220
 export const CONNECT_TIMEOUT_MS = 30000
 export const TURN_START_TIMEOUT_MS = 300000
-export const STALL_WATCHDOG_MS = 180000
+export const STALL_WATCHDOG_MS = 120000
 export const COLLAPSIBLE_CODE_MIN_LINES = 14
 export const MAX_CHAT_HISTORY_ENTRIES = 80
 export const DEFAULT_GPT_CONTEXT_TOKENS = 200_000

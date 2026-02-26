@@ -6,6 +6,7 @@ import React from 'react'
 import type { GitOperation, GitStatusEntry, GitStatusState } from '../types'
 import {
   BuildIcon,
+  CloseIcon,
   CommitIcon,
   DeployIcon,
   PushIcon,
@@ -47,6 +48,7 @@ export interface GitPaneProps {
   onEntryClick: (entry: GitStatusEntry, event: React.MouseEvent<HTMLButtonElement>) => void
   onEntryDoubleClick: (relativePath: string) => void
   onEntryContextMenu: (event: React.MouseEvent<HTMLButtonElement>, entry: GitStatusEntry) => void
+  onClose?: () => void
 }
 
 export function GitPane({
@@ -62,6 +64,7 @@ export function GitPane({
   onEntryClick,
   onEntryDoubleClick,
   onEntryContextMenu,
+  onClose,
 }: GitPaneProps) {
   const canShowEntries = Boolean(gitStatus?.ok)
   const entries = gitStatus?.entries ?? []
@@ -73,13 +76,24 @@ export function GitPane({
   const commitTitle = hasSelection ? `Commit selected changes (${resolvedSelectedPaths.length})` : 'Commit all changes'
   const pushTitle = hasSelection ? `Push (commit selected ${resolvedSelectedPaths.length} first)` : 'Push'
   const iconBtnClass =
-    'h-8 w-8 inline-flex items-center justify-center rounded-md border font-medium border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed'
+    'h-8 w-8 inline-flex items-center justify-center rounded-md bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed'
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
       <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs flex items-center justify-between gap-2">
         <span className="font-medium text-neutral-700 dark:text-neutral-300 truncate">Git</span>
         <div className="flex items-center gap-1 shrink-0">
+          {onClose && (
+            <button
+              type="button"
+              className="h-6 w-6 inline-flex items-center justify-center rounded text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
+              onClick={onClose}
+              title="Close"
+              aria-label="Close"
+            >
+              <CloseIcon size={12} />
+            </button>
+          )}
           <button
             type="button"
             className={iconBtnClass}

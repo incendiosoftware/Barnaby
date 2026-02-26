@@ -5,20 +5,74 @@ import { buildTimelineForPanel } from './chat/timelineParser'
 import type { TimelineUnit } from './chat/timelineTypes'
 import {
   BuildIcon,
+  CloseIcon,
   CollapseAllIcon,
   CommitIcon,
   DeployIcon,
+  DebugOutputIcon,
   ExpandAllIcon,
+  FolderIcon,
+  GitIcon,
   PanelLeftIcon,
   PanelRightIcon,
   PushIcon,
   RefreshIcon,
   ReleaseIcon,
+  RobotIcon,
   SendIcon,
+  SettingsIcon,
   SpinnerIcon,
   StopIcon,
+  TerminalIcon,
 } from './components/icons'
 import { EmbeddedTerminal } from './components/Terminal'
+
+function DebugOutputPanel({ api, onClose }: { api: { getDebugLogContent?: () => Promise<{ ok: boolean; content: string }>; openDebugOutputWindow?: () => Promise<unknown> }; onClose?: () => void }) {
+  const [logContent, setLogContent] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      if (cancelled) return
+      try {
+        const r = await api.getDebugLogContent?.()
+        if (r?.ok && r.content) setLogContent(r.content)
+      } catch {}
+      if (!cancelled) setTimeout(poll, 2000)
+    }
+    poll()
+    return () => { cancelled = true }
+  }, [api])
+  return (
+    <div className="h-full flex flex-col bg-neutral-950 dark:bg-neutral-950 text-neutral-300 font-mono text-xs p-2 overflow-auto">
+      <div className="flex items-center justify-between mb-2 shrink-0 gap-2">
+        <span>Debug log (live tail)</span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className="px-2 py-1 rounded border border-neutral-600 hover:bg-neutral-800"
+            onClick={() => void api.openDebugOutputWindow?.()}
+          >
+            Open in separate window
+          </button>
+          {onClose && (
+            <button
+              type="button"
+              className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700"
+              onClick={onClose}
+              title="Close"
+              aria-label="Close"
+            >
+              <CloseIcon size={12} />
+            </button>
+          )}
+        </div>
+      </div>
+      <pre className="flex-1 min-h-0 overflow-auto whitespace-pre-wrap break-words">
+        {logContent || 'Loading...'}
+      </pre>
+    </div>
+  )
+}
 import { CodeMirrorEditor } from './components/CodeMirrorEditor'
 import { registerPluginHostCallbacks, unregisterPluginHostCallbacks } from './pluginHostRenderer'
 import type {
@@ -36,6 +90,8 @@ import type {
   ConnectivityProvider,
   CustomProviderConfig,
   DiagnosticsMessageColors,
+  DockLayoutState,
+  DockPanelId,
   EditorPanelState,
   ExplorerPrefs,
   GitOperation,
@@ -79,6 +135,8 @@ import {
   APP_STATE_AUTOSAVE_MS,
   APP_SETTINGS_VIEWS,
   AUTO_CONTINUE_PROMPT,
+  DEFAULT_DOCK_LAYOUT,
+  DOCK_PANEL_LABELS,
   CODEX_API_MODELS,
   CODE_WINDOW_TOOLBAR_BUTTON,
   CODE_WINDOW_TOOLBAR_BUTTON_SM,
@@ -155,7 +213,8 @@ import { useLocalStoragePersistence } from './hooks/useLocalStoragePersistence'
 import { useAppRuntimeEvents } from './hooks/useAppRuntimeEvents'
 import { createProviderConnectivityController, PROVIDERS_WITH_DEDICATED_PING } from './controllers/providerConnectivityController'
 import { createDiagnosticsImageController } from './controllers/diagnosticsImageController'
-import { createPanelLayoutController } from './controllers/panelLayoutController'
+import { createPanelLayoutController, type DockDropTarget } from './controllers/panelLayoutController'
+import { normalizeDockLayout, resolveDropTarget, getZoneForPanel } from './utils/dockLayout'
 import { createExplorerWorkflowController } from './controllers/explorerWorkflowController'
 import { createGitWorkflowController } from './controllers/gitWorkflowController'
 import { createWorkspaceSettingsController } from './controllers/workspaceSettingsController'
@@ -168,6 +227,7 @@ import { CodeWindowTile } from './components/panels/CodeWindowTile'
 import { PanelContentRenderer } from './components/panels/PanelContentRenderer'
 import { AppHeaderBar } from './components/layout/AppHeaderBar'
 import { DockedAppSettings } from './components/settings/DockedAppSettings'
+import { DockZone } from './components/dock/DockZone'
 import { AppModals } from './components/modals/AppModals'
 import {
   applyThemeOverrides,
@@ -338,7 +398,6 @@ export default function App() {
     provider: 'codex',
     enabled: true,
   })
-  const [dockTab, setDockTab] = useState<'orchestrator' | 'explorer' | 'git' | 'settings'>('explorer')
   const [loadedPlugins, setLoadedPlugins] = useState<Array<{ pluginId: string; displayName: string; version: string; active: boolean }> | null>(null)
   const [orchestratorSettings, setOrchestratorSettings] = useState<OrchestratorSettings>(() => getInitialOrchestratorSettings())
   const [orchestratorLicenseKeyState, setOrchestratorLicenseKeyState] = useState<{ hasKey: boolean } | null>(null)
@@ -358,9 +417,6 @@ export default function App() {
   const [mcpJsonError, setMcpJsonError] = useState<string | null>(null)
   const [mcpAddMode, setMcpAddMode] = useState(false)
   const [repairShortcutStatus, setRepairShortcutStatus] = useState<string | null>(null)
-  const [workspaceDockSide, setWorkspaceDockSide] = useState<WorkspaceDockSide>(() => getInitialWorkspaceDockSide())
-  const [gitDockSide, setGitDockSide] = useState<WorkspaceDockSide>('left')
-  const [settingsDockSide, setSettingsDockSide] = useState<WorkspaceDockSide>('right')
   const [workspaceTree, setWorkspaceTree] = useState<WorkspaceTreeNode[]>([])
   const [workspaceTreeLoading, setWorkspaceTreeLoading] = useState(false)
   const [workspaceTreeError, setWorkspaceTreeError] = useState<string | null>(null)
@@ -479,6 +535,7 @@ export default function App() {
   const lastFindInPageQueryRef = useRef('')
   const lastFindInFilesQueryRef = useRef('')
   const reconnectingRef = useRef(new Set<string>())
+  const reconnectPanelRef = useRef<((winId: string, reason: string) => Promise<void>) | null>(null)
   const activePromptStartedAtRef = useRef(new Map<string, number>())
   const zoomWheelThrottleRef = useRef(false)
   const needsContextOnNextCodexSendRef = useRef<Record<string, boolean>>({})
@@ -494,16 +551,163 @@ export default function App() {
   const lastScrollToUserMessageRef = useRef<{ panelId: string; messageId: string } | null>(null)
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('vertical')
-  const [showWorkspaceWindow, setShowWorkspaceWindow] = useState(true)
-  const [showGitWindow, setShowGitWindow] = useState(false)
-  const [showSettingsWindow, setShowSettingsWindow] = useState(false)
+  const [dockLayout, setDockLayout] = useState<DockLayoutState>(() => DEFAULT_DOCK_LAYOUT)
+  const [codeWindowTab, setCodeWindowTab] = useState<CodeWindowTab>('code')
+
+  const effectiveDockLayout = useMemo(() => normalizeDockLayout(dockLayout), [dockLayout])
+  const zones = effectiveDockLayout.zones ?? {}
+  const activeTab = effectiveDockLayout.activeTab ?? {}
+
+  const hasLeftZones = 'left-top' in zones || 'left-bottom' in zones
+  const hasRightZones = 'right' in zones || 'right-top' in zones || 'right-bottom' in zones
+  const hasBottomZones = 'bottom' in zones || 'bottom-left' in zones || 'bottom-right' in zones
+
+  const showLeftDock = hasLeftZones
+  const showRightDock = hasRightZones
+  const showBottomDock = hasBottomZones
+  const showWorkspaceWindow = showLeftDock
+  const showGitWindow = Boolean(zones['right']?.includes('source-control') || zones['right-top']?.includes('source-control') || zones['right-bottom']?.includes('source-control'))
+  const showSettingsWindow = showRightDock
+  const setShowSettingsWindow = (updater: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof updater === 'function' ? updater(showRightDock) : updater
+    setDockLayout((prev) => {
+      const layout = normalizeDockLayout(prev)
+      const z = { ...layout.zones }
+      if (!next) {
+        delete z.right
+        delete z['right-top']
+        delete z['right-bottom']
+        return { ...prev, zones: z, activeTab: layout.activeTab }
+      }
+      if (!('right' in z) && !('right-top' in z) && !('right-bottom' in z)) {
+        z.right = []
+        return { ...prev, zones: z }
+      }
+      return prev
+    })
+  }
+  const setShowWorkspaceWindow = (updater: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof updater === 'function' ? updater(showLeftDock) : updater
+    setDockLayout((prev) => {
+      const layout = normalizeDockLayout(prev)
+      const z = { ...layout.zones }
+      if (!next) {
+        delete z['left-top']
+        delete z['left-bottom']
+        return { ...prev, zones: z, activeTab: layout.activeTab }
+      }
+      if (!('left-top' in z) && !('left-bottom' in z)) {
+        z['left-top'] = []
+        return { ...prev, zones: z }
+      }
+      return prev
+    })
+  }
+  const setShowGitWindow = (updater: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof updater === 'function' ? updater(showGitWindow) : updater
+    setDockLayout((prev) => {
+      const layout = normalizeDockLayout(prev)
+      const z = { ...layout.zones }
+      if (!next) {
+        for (const k of ['right', 'right-top', 'right-bottom'] as const) {
+          const tabs = z[k]?.filter((t) => t !== 'source-control') ?? []
+          if (tabs.length === 0) delete z[k]
+          else z[k] = tabs
+        }
+        return { ...prev, zones: z }
+      }
+      if (!('right' in z) && !('right-top' in z) && !('right-bottom' in z)) {
+        z.right = []
+        return { ...prev, zones: z }
+      }
+      if (!z.right?.includes('source-control') && !z['right-top']?.includes('source-control') && !z['right-bottom']?.includes('source-control')) {
+        const target = z.right ?? z['right-top'] ?? z['right-bottom']
+        const key = z.right ? 'right' : z['right-top'] ? 'right-top' : 'right-bottom'
+        z[key] = [...(target ?? []), 'source-control']
+        return { ...prev, zones: z, activeTab: { ...layout.activeTab, [key]: 'source-control' } }
+      }
+      return prev
+    })
+  }
+  const dockTab: 'orchestrator' | 'explorer' | 'git' | 'settings' =
+    activeTab['left-bottom'] === 'workspace-folder' ? 'explorer'
+    : activeTab['left-bottom'] === 'workspace-settings' ? 'settings'
+    : activeTab.right === 'source-control' || activeTab['right-top'] === 'source-control' || activeTab['right-bottom'] === 'source-control' ? 'git'
+    : activeTab['left-top'] === 'orchestrator' ? 'orchestrator'
+    : 'explorer'
+  const setDockTab = (tabOrUpdater: React.SetStateAction<'orchestrator' | 'explorer' | 'git' | 'settings'>) => {
+    const tab = typeof tabOrUpdater === 'function' ? tabOrUpdater(dockTab) : tabOrUpdater
+    setDockLayout((p) => {
+      const layout = normalizeDockLayout(p)
+      const at = { ...layout.activeTab }
+      if (tab === 'orchestrator') at['left-top'] = 'orchestrator'
+      else if (tab === 'explorer') at['left-bottom'] = 'workspace-folder'
+      else if (tab === 'git') {
+        const z = layout.zones ?? {}
+        if (z['right']?.includes('source-control')) at.right = 'source-control'
+        else if (z['right-top']?.includes('source-control')) at['right-top'] = 'source-control'
+        else if (z['right-bottom']?.includes('source-control')) at['right-bottom'] = 'source-control'
+      } else if (tab === 'settings') at['left-bottom'] = 'workspace-settings'
+      return { ...p, activeTab: at }
+    })
+  }
+  const workspaceDockSide: WorkspaceDockSide = 'left'
+  const gitDockSide: WorkspaceDockSide = 'right'
+  const settingsDockSide: WorkspaceDockSide = 'right'
+  const setWorkspaceDockSide = (_?: unknown) => {}
+  const setGitDockSide = (_?: unknown) => {}
+  const setSettingsDockSide = (_?: unknown) => {}
   const showCodeWindow = showSettingsWindow
   const setShowCodeWindow = setShowSettingsWindow
-  const [codeWindowTab, setCodeWindowTab] = useState<CodeWindowTab>('code')
-  const [showTerminalBar, setShowTerminalBar] = useState(false)
+  const showTerminalBar = showBottomDock
+  const setShowTerminalBar = (updater: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof updater === 'function' ? updater(showBottomDock) : updater
+    setDockLayout((prev) => {
+      const layout = normalizeDockLayout(prev)
+      const z = { ...layout.zones }
+      if (!next) {
+        delete z.bottom
+        delete z['bottom-left']
+        delete z['bottom-right']
+        return { ...prev, zones: z }
+      }
+      if (!('bottom' in z) && !('bottom-left' in z) && !('bottom-right' in z)) {
+        z.bottom = []
+        return { ...prev, zones: z }
+      }
+      return prev
+    })
+  }
+
+  function toggleDockPanel(panelId: string) {
+    const id = panelId as DockPanelId
+    if (!Object.keys(DOCK_PANEL_LABELS).includes(id)) return
+    const zone = getZoneForPanel(effectiveDockLayout, id)
+    if (zone) {
+      setDockLayout((prev) => {
+        const layout = normalizeDockLayout(prev)
+        const z = { ...layout.zones }
+        const tabs = z[zone]?.filter((t) => t !== id) ?? []
+        if (tabs.length === 0) delete z[zone]
+        else z[zone] = tabs
+        const at = { ...layout.activeTab }
+        if (at[zone] === id) at[zone] = tabs[0]
+        return { ...prev, zones: z, activeTab: at }
+      })
+    } else {
+      setDockLayout((prev) => {
+        const layout = normalizeDockLayout(prev)
+        const z = { ...layout.zones }
+        const defaultZone = id === 'orchestrator' ? 'left-top' : id === 'workspace-folder' || id === 'workspace-settings' ? 'left-bottom' : id === 'application-settings' || id === 'source-control' ? 'right' : 'bottom'
+        const target = z[defaultZone] ?? []
+        z[defaultZone] = [...target, id]
+        return { ...prev, zones: z, activeTab: { ...layout.activeTab, [defaultZone]: id } }
+      })
+    }
+  }
   const [zoomLevel, setZoomLevel] = useState(0)
   const [draggingPanelId, setDraggingPanelId] = useState<string | null>(null)
-  const [dragOverTarget, setDragOverTarget] = useState<string | null>(null)
+  const [dragOverTarget, setDragOverTarget] = useState<DockDropTarget | string | null>(null)
   const [appStateHydrated, setAppStateHydrated] = useState(false)
   const [workspaceBootstrapComplete, setWorkspaceBootstrapComplete] = useState(false)
   const [pendingWorkspaceSwitch, setPendingWorkspaceSwitch] = useState<{
@@ -690,7 +894,7 @@ export default function App() {
   useEffect(() => { activePanelIdRef.current = activePanelId }, [activePanelId])
   useEffect(() => { editorPanelsRef.current = editorPanels }, [editorPanels])
   useEffect(() => { focusedEditorIdRef.current = focusedEditorId }, [focusedEditorId])
-  useEffect(() => { showWorkspaceWindowRef.current = showWorkspaceWindow }, [showWorkspaceWindow])
+  useEffect(() => { showWorkspaceWindowRef.current = showLeftDock }, [showLeftDock])
   useEffect(() => { workspaceTreeRef.current = workspaceTree }, [workspaceTree])
   useEffect(() => { showHiddenFilesRef.current = showHiddenFiles }, [showHiddenFiles])
   useEffect(() => { showNodeModulesRef.current = showNodeModules }, [showNodeModules])
@@ -758,13 +962,13 @@ export default function App() {
           setEditorPanels(restored.editorPanels)
         }
         if (typeof restored.showWorkspaceWindow === 'boolean') {
-          setShowWorkspaceWindow(restored.showWorkspaceWindow)
+          setShowWorkspaceWindow(() => restored.showWorkspaceWindow!)
         }
         if (typeof restored.showGitWindow === 'boolean') {
-          setShowGitWindow(restored.showGitWindow)
+          setShowGitWindow(() => restored.showGitWindow!)
         }
         if (typeof restored.showSettingsWindow === 'boolean') {
-          setShowSettingsWindow(restored.showSettingsWindow)
+          setShowSettingsWindow(() => restored.showSettingsWindow!)
         }
         if (restored.codeWindowTab) setCodeWindowTab(restored.codeWindowTab)
         if (restored.layoutMode) setLayoutMode(restored.layoutMode)
@@ -866,7 +1070,7 @@ export default function App() {
     () => resolveProviderConfigs(providerRegistry),
     [providerRegistry],
   )
-  const showDockedAppSettings = showSettingsWindow && codeWindowTab === 'settings'
+  const showDockedAppSettings = showRightDock && (activeTab.right === 'application-settings' || activeTab['right-top'] === 'application-settings' || activeTab['right-bottom'] === 'application-settings')
 
   // Warm up provider auth status on startup so status dots are available immediately.
   // Times the auth check; for providers with a deeper ping (claude, codex) runs that too.
@@ -2261,6 +2465,7 @@ export default function App() {
     setWorkspaceDockSide,
     setDraggingPanelId,
     setDragOverTarget,
+    setDockLayout,
   }), [workspaceRoot, workspaceSettingsByPath])
   const {
     DND_TYPE_DOCK,
@@ -2272,6 +2477,7 @@ export default function App() {
     handleDragEnd,
     handleDockDrop,
     handleAgentDrop,
+    handleDockDragOver,
     handleDragOver,
   } = panelLayoutCtrl
 
@@ -2279,6 +2485,7 @@ export default function App() {
     api,
     workspaceList,
     workspaceRoot,
+    reconnectPanelRef,
     appendPanelDebug,
     markPanelActivity,
     formatToolTrace,
@@ -2323,6 +2530,7 @@ export default function App() {
     setShowSettingsWindow,
     setShowCodeWindow: setShowSettingsWindow, // alias for runtime events
     setZoomLevel,
+    toggleDockPanel,
   })
 
   function setEditorTabEditMode(editorId: string, editMode: boolean) {
@@ -2343,7 +2551,425 @@ export default function App() {
   function openAppSettingsInRightDock(view: AppSettingsView) {
     setAppSettingsView(view)
     setCodeWindowTab('settings')
-    if (!showSettingsWindow) setShowSettingsWindow(true)
+    setDockLayout((p) => {
+      const layout = normalizeDockLayout(p)
+      const z = { ...layout.zones }
+      const target = z.right ?? z['right-top'] ?? z['right-bottom']
+      const key = z.right ? 'right' : z['right-top'] ? 'right-top' : z['right-bottom'] ? 'right-bottom' : 'right'
+      if (!target?.includes('application-settings')) {
+        z[key] = [...(target ?? []), 'application-settings']
+      }
+      return { ...p, zones: z, activeTab: { ...layout.activeTab, [key]: 'application-settings' } }
+    })
+  }
+
+  const leftDockRef = useRef<HTMLDivElement>(null)
+
+  function renderDockPanelContent(panelId: DockPanelId) {
+    switch (panelId) {
+      case 'orchestrator':
+        return renderAgentOrchestratorPane()
+      case 'workspace-folder':
+        return (
+          <ExplorerPane
+            workspaceTree={workspaceTree}
+            workspaceTreeLoading={workspaceTreeLoading}
+            workspaceTreeError={workspaceTreeError}
+            workspaceTreeTruncated={workspaceTreeTruncated}
+            showHiddenFiles={showHiddenFiles}
+            showNodeModules={showNodeModules}
+            onExplorerPrefsChange={setExplorerPrefs}
+            onRefresh={() => void refreshWorkspaceTree()}
+            onExpandAll={expandAllDirectories}
+            onCollapseAll={collapseAllDirectories}
+            expandedDirectories={expandedDirectories}
+            isDirectoryExpanded={isDirectoryExpanded}
+            onToggleDirectory={toggleDirectory}
+            selectedWorkspaceFile={selectedWorkspaceFile}
+            onSelectFile={setSelectedWorkspaceFile}
+            onOpenFile={(relativePath) => void openEditorForRelativePath(relativePath)}
+            onOpenContextMenu={openExplorerContextMenu}
+            onCloseGitContextMenu={() => setGitContextMenu(null)}
+          />
+        )
+      case 'workspace-settings':
+        return (
+          <WorkspaceSettingsPane
+            workspaceForm={workspaceForm}
+            workspaceFormTextDraft={workspaceFormTextDraft}
+            modelOptions={getModelOptions(workspaceForm.defaultModel)}
+            onPathChange={(path) => setWorkspaceForm((prev) => ({ ...prev, path }))}
+            onPathBlur={(path) => {
+              const next = workspaceSettings.normalizeWorkspaceSettingsForm({ ...workspaceForm, path })
+              if (!next.path) return
+              void workspaceSettings.persistWorkspaceSettings(next, { requestSwitch: true })
+            }}
+            onBrowse={browseForWorkspaceIntoForm}
+            onDefaultModelChange={(value) =>
+              workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, defaultModel: value }))
+            }
+            onSandboxChange={(value) =>
+              workspaceSettings.updateDockedWorkspaceForm((prev) => ({
+                ...prev,
+                sandbox: value,
+                permissionMode: value === 'read-only' ? 'verify-first' : prev.permissionMode,
+              }))
+            }
+            onPermissionModeChange={(value) =>
+              workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, permissionMode: value }))
+            }
+            onTextDraftChange={workspaceSettings.updateDockedWorkspaceTextDraft}
+          />
+        )
+      case 'application-settings':
+        return (
+          <div className="h-full flex flex-col bg-neutral-50 dark:bg-neutral-900">
+            <div ref={codeWindowSettingsHostRef} className="flex-1 min-h-0" />
+          </div>
+        )
+      case 'source-control':
+        return (
+          <GitPane
+            gitStatus={gitStatus}
+            gitStatusLoading={gitStatusLoading}
+            gitStatusError={gitStatusError}
+            gitOperationPending={gitOperationPending}
+            gitOperationSuccess={gitOperationSuccess}
+            workspaceRoot={workspaceRoot ?? ''}
+            resolvedSelectedPaths={resolveGitSelection()}
+            onRunOperation={(op) => void runGitOperation(op)}
+            onRefresh={() => void refreshGitStatus()}
+            onEntryClick={handleGitEntryClick}
+            onEntryDoubleClick={(relativePath) => void openEditorForRelativePath(relativePath)}
+            onEntryContextMenu={openGitContextMenu}
+          />
+        )
+      case 'terminal':
+        return api && typeof api.terminalSpawn === 'function' ? (
+          <EmbeddedTerminal
+            workspaceRoot={workspaceRoot?.trim() || ''}
+            fontFamily={MONO_FONT_OPTIONS.find((f) => f.id === applicationSettings.fontCode)?.fontStack ?? MONO_FONT_OPTIONS[0].fontStack}
+            activeTheme={activeTheme}
+            api={api}
+          />
+        ) : (
+          <div className="h-full flex items-center justify-center text-neutral-500 text-sm">Terminal requires Electron</div>
+        )
+      case 'debug-output':
+        return <DebugOutputPanel api={api} />
+      default:
+        return null
+    }
+  }
+
+  function closeDockPanel(panelId: DockPanelId) {
+    const zone = getZoneForPanel(effectiveDockLayout, panelId)
+    if (!zone) return
+    setDockLayout((prev) => {
+      const layout = normalizeDockLayout(prev)
+      const z = { ...layout.zones }
+      const tabs = z[zone]?.filter((t) => t !== panelId) ?? []
+      if (tabs.length === 0) delete z[zone]
+      else z[zone] = tabs
+      const at = { ...layout.activeTab }
+      if (at[zone] === panelId) at[zone] = tabs[0]
+      return { ...prev, zones: z, activeTab: at }
+    })
+  }
+
+  function setActiveDockTab(zoneId: keyof typeof activeTab, panelId: DockPanelId) {
+    setDockLayout((p) => ({ ...p, activeTab: { ...effectiveDockLayout.activeTab, [zoneId]: panelId } }))
+  }
+
+  const dockDropTarget = typeof dragOverTarget === 'object' && dragOverTarget && 'zoneId' in dragOverTarget ? dragOverTarget : null
+
+  const DOCK_DROP_OVERLAY_STYLE: React.CSSProperties = {
+    backgroundColor: 'color-mix(in srgb, var(--theme-accent-500) 28%, transparent)',
+  }
+
+  function renderLeftDock() {
+    const leftTopTabs = zones['left-top'] ?? []
+    const leftBottomTabs = zones['left-bottom'] ?? []
+    const hasLeftTop = 'left-top' in zones
+    const hasLeftBottom = 'left-bottom' in zones
+    const existingZones = { top: hasLeftTop, bottom: hasLeftBottom }
+
+    const handleLeftDragOver = (e: React.DragEvent) => {
+      if (!e.dataTransfer.types.includes(DND_TYPE_DOCK)) return
+      e.stopPropagation()
+      const rect = leftDockRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const target = resolveDropTarget('left', rect, e.clientX, e.clientY, existingZones)
+      setDragOverTarget(target)
+      handleDockDragOver(e, target)
+    }
+
+    const handleLeftDragLeave = (e: React.DragEvent) => {
+      const rect = leftDockRef.current?.getBoundingClientRect()
+      if (!rect) return
+      // Only clear if actually leaving the dock area
+      if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+        setDragOverTarget(null)
+      }
+    }
+
+    return (
+      <div
+        ref={leftDockRef}
+        className="relative h-full flex flex-col min-h-0 border-r border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900"
+        onDragOver={handleLeftDragOver}
+        onDragLeave={handleLeftDragLeave}
+        onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+      >
+        {draggingPanelId && dockDropTarget && (dockDropTarget.zoneId === 'left-top' || dockDropTarget.zoneId === 'left-bottom') && (
+          <div className="absolute inset-0 pointer-events-none z-20">
+            {dockDropTarget.hint === 'top' && (
+              <div className="absolute top-0 left-0 right-0 h-1/2" style={DOCK_DROP_OVERLAY_STYLE} />
+            )}
+            {dockDropTarget.hint === 'bottom' && (
+              <div className="absolute bottom-0 left-0 right-0 h-1/2" style={DOCK_DROP_OVERLAY_STYLE} />
+            )}
+            {dockDropTarget.hint === 'center' && (
+              <div className="absolute inset-0" style={DOCK_DROP_OVERLAY_STYLE} />
+            )}
+          </div>
+        )}
+        {hasLeftTop && hasLeftBottom ? (
+          <Group orientation="vertical" className="flex-1 min-h-0">
+            <Panel id="left-top-panel" defaultSize="50" minSize="15" className="min-h-0">
+              <DockZone
+                zoneId="left-top"
+                tabs={leftTopTabs}
+                activeTab={activeTab['left-top']}
+                content={leftTopTabs.length > 0 ? renderDockPanelContent(activeTab['left-top'] ?? leftTopTabs[0]) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+                dockSide="left"
+                existingZones={existingZones}
+                draggingPanelId={draggingPanelId}
+                dragOverTarget={dockDropTarget}
+                onTabSelect={(id) => setActiveDockTab('left-top', id)}
+                onTabClose={closeDockPanel}
+                onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+                onTabDragEnd={handleDragEnd}
+                onDragOver={handleLeftDragOver}
+                onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+                dndType={DND_TYPE_DOCK}
+              />
+            </Panel>
+            <Separator className="h-1 shrink-0 cursor-row-resize bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
+            <Panel id="left-bottom-panel" defaultSize="50" minSize="15" className="min-h-0">
+              <DockZone
+                zoneId="left-bottom"
+                tabs={leftBottomTabs}
+                activeTab={activeTab['left-bottom']}
+                content={leftBottomTabs.length > 0 ? renderDockPanelContent(activeTab['left-bottom'] ?? leftBottomTabs[0]) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+                dockSide="left"
+                existingZones={existingZones}
+                draggingPanelId={draggingPanelId}
+                dragOverTarget={dockDropTarget}
+                onTabSelect={(id) => setActiveDockTab('left-bottom', id)}
+                onTabClose={closeDockPanel}
+                onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+                onTabDragEnd={handleDragEnd}
+                onDragOver={handleLeftDragOver}
+                onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+                dndType={DND_TYPE_DOCK}
+              />
+            </Panel>
+          </Group>
+        ) : hasLeftTop ? (
+          <DockZone
+            zoneId="left-top"
+            tabs={leftTopTabs}
+            activeTab={activeTab['left-top']}
+            content={leftTopTabs.length > 0 ? renderDockPanelContent(activeTab['left-top'] ?? leftTopTabs[0]) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+            dockSide="left"
+            existingZones={existingZones}
+            draggingPanelId={draggingPanelId}
+            dragOverTarget={dockDropTarget}
+            onTabSelect={(id) => setActiveDockTab('left-top', id)}
+            onTabClose={closeDockPanel}
+            onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+            onTabDragEnd={handleDragEnd}
+            onDragOver={handleLeftDragOver}
+            onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+            dndType={DND_TYPE_DOCK}
+          />
+        ) : hasLeftBottom ? (
+          <DockZone
+            zoneId="left-bottom"
+            tabs={leftBottomTabs}
+            activeTab={activeTab['left-bottom']}
+            content={leftBottomTabs.length > 0 ? renderDockPanelContent(activeTab['left-bottom'] ?? leftBottomTabs[0]) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+            dockSide="left"
+            existingZones={existingZones}
+            draggingPanelId={draggingPanelId}
+            dragOverTarget={dockDropTarget}
+            onTabSelect={(id) => setActiveDockTab('left-bottom', id)}
+            onTabClose={closeDockPanel}
+            onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+            onTabDragEnd={handleDragEnd}
+            onDragOver={handleLeftDragOver}
+            onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+            dndType={DND_TYPE_DOCK}
+          />
+        ) : null}
+      </div>
+    )
+  }
+
+  const rightDockRef = useRef<HTMLDivElement>(null)
+  const bottomDockRef = useRef<HTMLDivElement>(null)
+
+  function renderRightDock() {
+    const rightTabs = zones['right'] ?? []
+    const rightTopTabs = zones['right-top'] ?? []
+    const rightBottomTabs = zones['right-bottom'] ?? []
+    const allRightTabs = [...rightTabs, ...rightTopTabs, ...rightBottomTabs]
+    const activeRight = activeTab.right ?? activeTab['right-top'] ?? activeTab['right-bottom'] ?? allRightTabs[0]
+    const hasRight = 'right' in zones
+    const hasRightTop = 'right-top' in zones
+    const hasRightBottom = 'right-bottom' in zones
+    const existingZones = { top: hasRightTop, bottom: hasRightBottom }
+
+    const handleRightDragOver = (e: React.DragEvent) => {
+      if (!e.dataTransfer.types.includes(DND_TYPE_DOCK)) return
+      e.stopPropagation()
+      const rect = rightDockRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const target = resolveDropTarget('right', rect, e.clientX, e.clientY, existingZones)
+      setDragOverTarget(target)
+      handleDockDragOver(e, target)
+    }
+
+    const handleRightDragLeave = (e: React.DragEvent) => {
+      const rect = rightDockRef.current?.getBoundingClientRect()
+      if (!rect) return
+      // Only clear if actually leaving the dock area
+      if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+        setDragOverTarget(null)
+      }
+    }
+
+    return (
+      <div
+        ref={rightDockRef}
+        className="relative h-full flex flex-col min-h-0 border-l border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900"
+        onDragOver={handleRightDragOver}
+        onDragLeave={handleRightDragLeave}
+        onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+      >
+        {draggingPanelId && dockDropTarget && (dockDropTarget.zoneId === 'right' || dockDropTarget.zoneId === 'right-top' || dockDropTarget.zoneId === 'right-bottom') && (
+          <div className="absolute inset-0 pointer-events-none z-20">
+            {dockDropTarget.hint === 'top' && (
+              <div className="absolute top-0 left-0 right-0 h-1/2" style={DOCK_DROP_OVERLAY_STYLE} />
+            )}
+            {dockDropTarget.hint === 'bottom' && (
+              <div className="absolute bottom-0 left-0 right-0 h-1/2" style={DOCK_DROP_OVERLAY_STYLE} />
+            )}
+            {dockDropTarget.hint === 'center' && (
+              <div className="absolute inset-0" style={DOCK_DROP_OVERLAY_STYLE} />
+            )}
+          </div>
+        )}
+        {hasRightTop && hasRightBottom ? (
+          <Group orientation="vertical" className="flex-1 min-h-0">
+            <Panel id="right-top-panel" defaultSize="50" minSize="15" className="min-h-0">
+              <DockZone
+                zoneId="right-top"
+                tabs={rightTopTabs}
+                activeTab={activeTab['right-top']}
+                content={rightTopTabs.length > 0 ? renderDockPanelContent(activeTab['right-top'] ?? rightTopTabs[0]) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+                dockSide="right"
+                existingZones={existingZones}
+                draggingPanelId={draggingPanelId}
+                dragOverTarget={dockDropTarget}
+                onTabSelect={(id) => setActiveDockTab('right-top', id)}
+                onTabClose={closeDockPanel}
+                onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+                onTabDragEnd={handleDragEnd}
+                onDragOver={handleRightDragOver}
+                onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+                dndType={DND_TYPE_DOCK}
+              />
+            </Panel>
+            <Separator className="h-1 shrink-0 cursor-row-resize bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
+            <Panel id="right-bottom-panel" defaultSize="50" minSize="15" className="min-h-0">
+              <DockZone
+                zoneId="right-bottom"
+                tabs={rightBottomTabs}
+                activeTab={activeTab['right-bottom']}
+                content={rightBottomTabs.length > 0 ? renderDockPanelContent(activeTab['right-bottom'] ?? rightBottomTabs[0]) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+                dockSide="right"
+                existingZones={existingZones}
+                draggingPanelId={draggingPanelId}
+                dragOverTarget={dockDropTarget}
+                onTabSelect={(id) => setActiveDockTab('right-bottom', id)}
+                onTabClose={closeDockPanel}
+                onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+                onTabDragEnd={handleDragEnd}
+                onDragOver={handleRightDragOver}
+                onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+                dndType={DND_TYPE_DOCK}
+              />
+            </Panel>
+          </Group>
+        ) : hasRightTop ? (
+          <DockZone
+            zoneId="right-top"
+            tabs={rightTopTabs}
+            activeTab={activeTab['right-top']}
+            content={rightTopTabs.length > 0 ? renderDockPanelContent(activeTab['right-top'] ?? rightTopTabs[0]) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+            dockSide="right"
+            existingZones={existingZones}
+            draggingPanelId={draggingPanelId}
+            dragOverTarget={dockDropTarget}
+            onTabSelect={(id) => setActiveDockTab('right-top', id)}
+            onTabClose={closeDockPanel}
+            onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+            onTabDragEnd={handleDragEnd}
+            onDragOver={handleRightDragOver}
+            onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+            dndType={DND_TYPE_DOCK}
+          />
+        ) : hasRightBottom ? (
+          <DockZone
+            zoneId="right-bottom"
+            tabs={rightBottomTabs}
+            activeTab={activeTab['right-bottom']}
+            content={rightBottomTabs.length > 0 ? renderDockPanelContent(activeTab['right-bottom'] ?? rightBottomTabs[0]) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+            dockSide="right"
+            existingZones={existingZones}
+            draggingPanelId={draggingPanelId}
+            dragOverTarget={dockDropTarget}
+            onTabSelect={(id) => setActiveDockTab('right-bottom', id)}
+            onTabClose={closeDockPanel}
+            onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+            onTabDragEnd={handleDragEnd}
+            onDragOver={handleRightDragOver}
+            onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+            dndType={DND_TYPE_DOCK}
+          />
+        ) : hasRight ? (
+          <DockZone
+            zoneId="right"
+            tabs={rightTabs}
+            activeTab={activeTab.right}
+            content={rightTabs.length > 0 ? renderDockPanelContent(activeRight) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+            dockSide="right"
+            existingZones={existingZones}
+            draggingPanelId={draggingPanelId}
+            dragOverTarget={dockDropTarget}
+            onTabSelect={(id) => setActiveDockTab('right', id)}
+            onTabClose={closeDockPanel}
+            onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+            onTabDragEnd={handleDragEnd}
+            onDragOver={handleRightDragOver}
+            onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+            dndType={DND_TYPE_DOCK}
+          />
+        ) : null}
+      </div>
+    )
   }
 
   function renderWorkspaceTile() {
@@ -2428,7 +3054,7 @@ export default function App() {
         dockContent={dockContent}
         onMouseDownCapture={() => setFocusedEditorId(null)}
         onDragOver={(e) => showSettingsWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
-        onDrop={(e) => showSettingsWindow && handleDockDrop(e)}
+        onDrop={(e) => showSettingsWindow && handleDockDrop(e, dragOverTarget)}
         onDragStart={(e) => showSettingsWindow && handleDragStart(e, 'workspace', 'workspace-window')}
         onDragEnd={handleDragEnd}
         onWheel={(e) => {
@@ -2444,7 +3070,7 @@ export default function App() {
         }}
         onDockTabChange={(tab) => setDockTab(tab)}
         onWorkspaceSettingsTab={workspaceSettings.openWorkspaceSettingsTab}
-        onDockSideToggle={() => setWorkspaceDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
+        onDockSideToggle={() => setWorkspaceDockSide((prev: 'left' | 'right') => (prev === 'right' ? 'left' : 'right'))}
         onClose={() => setShowWorkspaceWindow(false)}
       />
     )
@@ -2479,6 +3105,8 @@ export default function App() {
   }
 
   function renderLayoutPane(panelId: string) {
+    if (panelId === 'left-dock') return renderLeftDock()
+    if (panelId === 'right-dock') return renderRightDock()
     if (panelId === 'workspace-window') return renderWorkspaceTile()
     if (panelId === 'git-window') return renderGitTile()
     if (panelId === 'settings-window') return renderSettingsTile()
@@ -2517,13 +3145,13 @@ export default function App() {
         }
         onMouseDownCapture={() => setFocusedEditorId(null)}
         onDragOver={(e) => showSettingsWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
-        onDrop={(e) => showSettingsWindow && handleDockDrop(e)}
+        onDrop={(e) => showSettingsWindow && handleDockDrop(e, dragOverTarget)}
         onDragStart={(e) => showSettingsWindow && handleDragStart(e, 'workspace', 'git-window')}
         onDragEnd={handleDragEnd}
         onWheel={() => {}}
         onDockTabChange={(tab) => setDockTab(tab)}
         onWorkspaceSettingsTab={workspaceSettings.openWorkspaceSettingsTab}
-        onDockSideToggle={() => setGitDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
+        onDockSideToggle={() => setGitDockSide((prev: 'left' | 'right') => (prev === 'right' ? 'left' : 'right'))}
         onClose={() => setShowGitWindow(false)}
       />
     )
@@ -2539,19 +3167,18 @@ export default function App() {
         dragOverTarget={dragOverTarget}
         dockContent={
           <div className="h-full flex flex-col bg-neutral-50 dark:bg-neutral-900">
-            {codeWindowSettingsHostRef.current ? null : <div ref={codeWindowSettingsHostRef} className="flex-1 min-h-0" />}
             <div ref={codeWindowSettingsHostRef} className="flex-1 min-h-0" />
           </div>
         }
         onMouseDownCapture={() => setFocusedEditorId(null)}
         onDragOver={(e) => showSettingsWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
-        onDrop={(e) => showSettingsWindow && handleDockDrop(e)}
+        onDrop={(e) => showSettingsWindow && handleDockDrop(e, dragOverTarget)}
         onDragStart={(e) => showSettingsWindow && handleDragStart(e, 'workspace', 'settings-window')}
         onDragEnd={handleDragEnd}
         onWheel={() => {}}
         onDockTabChange={(tab) => setDockTab(tab)}
         onWorkspaceSettingsTab={workspaceSettings.openWorkspaceSettingsTab}
-        onDockSideToggle={() => setSettingsDockSide((prev) => (prev === 'right' ? 'left' : 'right'))}
+        onDockSideToggle={() => setSettingsDockSide((prev: 'left' | 'right') => (prev === 'right' ? 'left' : 'right'))}
         onClose={() => setShowSettingsWindow(false)}
       />
     )
@@ -2570,12 +3197,12 @@ export default function App() {
       <Group orientation="vertical" className="flex-1 min-h-0 min-w-0" id="grid-outer">
         {panelChunks.map((rowPanels, rowIdx) => (
           <React.Fragment key={rowIdx}>
-            {rowIdx > 0 && <Separator className="h-1 bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400 data-[resize-handle-active]:bg-blue-500" />}
+            {rowIdx > 0 && <Separator className="h-1 cursor-row-resize bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />}
             <Panel id={`grid-row-${rowIdx}`} defaultSize={`${100 / rows}`} minSize="10" className="min-h-0 min-w-0">
               <Group orientation="horizontal" className="h-full min-w-0" id={`grid-row-${rowIdx}-inner`}>
                 {rowPanels.map((panelId, colIdx) => (
                   <React.Fragment key={panelId}>
-                    {colIdx > 0 && <Separator className="w-1 bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400" />}
+                    {colIdx > 0 && <Separator className="w-1 cursor-col-resize bg-neutral-300 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />}
                     <Panel id={`panel-${panelId}`} defaultSize={`${100 / rowPanels.length}`} minSize="15" className="min-h-0 min-w-0">
                       {renderLayoutPane(panelId)}
                     </Panel>
@@ -2605,6 +3232,7 @@ export default function App() {
     clampPanelSecurityForWorkspace,
   }), [modelConfig, workspaceSettingsByPath, workspaceRoot, api])
   const { connectWindow, reconnectPanel, connectWindowWithRetry, formatConnectionError } = panelLifecycleCtrl
+  reconnectPanelRef.current = reconnectPanel
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -2783,8 +3411,8 @@ export default function App() {
         ? 'shadow-inner bg-neutral-200 border-neutral-400 text-neutral-800 dark:bg-neutral-700 dark:border-neutral-600 dark:text-neutral-100'
         : 'border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
     }`
-  const workspaceDockButtonOnLeft = workspaceDockSide === 'left'
-  const toolsDockButtonsOnLeft = workspaceDockSide === 'right'
+  const workspaceDockButtonOnLeft = true
+  const toolsDockButtonsOnLeft = false
 
   const leftDockToggleButton = (
     <button
@@ -2847,24 +3475,16 @@ export default function App() {
               ...panels.map((p) => p.id),
               ...editorPanels.map((p) => p.id),
             ]
-            const leftDockPanels = [
-              ...(showWorkspaceWindow && workspaceDockSide === 'left' ? ['workspace-window'] : []),
-              ...(showGitWindow && gitDockSide === 'left' ? ['git-window'] : []),
-              ...(showSettingsWindow && settingsDockSide === 'left' ? ['settings-window'] : [])
-            ]
-            const rightDockPanels = [
-              ...(showWorkspaceWindow && workspaceDockSide === 'right' ? ['workspace-window'] : []),
-              ...(showGitWindow && gitDockSide === 'right' ? ['git-window'] : []),
-              ...(showSettingsWindow && settingsDockSide === 'right' ? ['settings-window'] : [])
-            ]
+            const leftDockPanels = showLeftDock ? ['left-dock'] : []
+            const rightDockPanels = showRightDock ? ['right-dock'] : []
             
             const layoutPaneIds = [...leftDockPanels, ...contentPaneIds, ...rightDockPanels]
             if (layoutPaneIds.length === 1) {
               const id = layoutPaneIds[0]
-              if (id === 'workspace-window' || id === 'git-window' || id === 'settings-window') {
+              if (id === 'left-dock' || id === 'right-dock') {
                 return (
                   <div className="flex-1 min-h-0 min-w-0 overflow-hidden px-3 py-3">
-                    <div className="h-full min-h-0 max-w-full" style={{ width: '32%' }}>
+                    <div className="h-full min-h-0 max-w-full" style={{ width: id === 'left-dock' ? '22%' : '28%' }}>
                       {renderLayoutPane(id)}
                     </div>
                   </div>
@@ -2927,7 +3547,7 @@ export default function App() {
                         ))}
                       </div>
                     </Panel>
-                    <Separator className="w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
+                    <Separator className="w-1 min-w-1 cursor-col-resize bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
                   </>
                 )}
                 <Panel id="panel-content-tiled" defaultSize={leftPaneId && rightPaneId ? '70' : leftPaneId || rightPaneId ? '85' : '100'} minSize="20" className="min-h-0 min-w-0">
@@ -2935,7 +3555,7 @@ export default function App() {
                 </Panel>
                 {rightPaneId && (
                   <>
-                    <Separator className="w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
+                    <Separator className="w-1 min-w-1 cursor-col-resize bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
                     <Panel
                       id={`panel-${rightPaneId}`}
                       defaultSize="15"
@@ -2960,39 +3580,148 @@ export default function App() {
           </div>
         </div>
 
-        {showTerminalBar && (
-          <div className="shrink-0 flex flex-col border-t border-neutral-200 dark:border-neutral-800 bg-neutral-900 dark:bg-neutral-950" style={{ height: 220 }}>
-            <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-neutral-700 shrink-0">
-              <span className="text-xs font-semibold text-neutral-300">
-                Terminal{workspaceRoot?.trim() ? ` (${workspaceRoot.split(/[/\\]/).pop() || workspaceRoot})` : ''}
-              </span>
-              <button
-                type="button"
-                className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-600 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700"
-                onClick={() => setShowTerminalBar(false)}
-                title="Close terminal"
-                aria-label="Close terminal"
-              >
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-                  <path d="M2 2L8 8M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                </svg>
-              </button>
-            </div>
-            <div className="flex-1 min-h-0 overflow-hidden p-1">
-              {api && typeof api.terminalSpawn === 'function' ? (
-                <EmbeddedTerminal
-                  workspaceRoot={workspaceRoot?.trim() || ''}
-                  fontFamily={MONO_FONT_OPTIONS.find((f) => f.id === applicationSettings.fontCode)?.fontStack ?? MONO_FONT_OPTIONS[0].fontStack}
-                  api={api}
-                />
-              ) : (
-                <div className="h-full flex items-center justify-center text-neutral-500 text-sm">
-                  Terminal requires Electron
+        {showBottomDock && (() => {
+          const bottomTabs = zones['bottom'] ?? []
+          const bottomLeftTabs = zones['bottom-left'] ?? []
+          const bottomRightTabs = zones['bottom-right'] ?? []
+          const hasBottom = 'bottom' in zones
+          const hasBottomLeft = 'bottom-left' in zones
+          const hasBottomRight = 'bottom-right' in zones
+          const existingZones = { left: hasBottomLeft, right: hasBottomRight }
+          const handleBottomDragOver = (e: React.DragEvent) => {
+            if (!e.dataTransfer.types.includes(DND_TYPE_DOCK)) return
+            e.stopPropagation()
+            const rect = bottomDockRef.current?.getBoundingClientRect()
+            if (!rect) return
+            const target = resolveDropTarget('bottom', rect, e.clientX, e.clientY, existingZones)
+            setDragOverTarget(target)
+            handleDockDragOver(e, target)
+          }
+          const handleBottomDragLeave = (e: React.DragEvent) => {
+            const rect = bottomDockRef.current?.getBoundingClientRect()
+            if (!rect) return
+            // Only clear if actually leaving the dock area
+            if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+              setDragOverTarget(null)
+            }
+          }
+          const hasSingle = hasBottom && !hasBottomLeft && !hasBottomRight
+          const hasSplit = hasBottomLeft || hasBottomRight
+          const activeBottom = activeTab.bottom ?? activeTab['bottom-left'] ?? activeTab['bottom-right']
+          const activeBottomLeft = activeTab['bottom-left'] ?? bottomLeftTabs[0]
+          const activeBottomRight = activeTab['bottom-right'] ?? bottomRightTabs[0]
+          return (
+            <div
+              ref={bottomDockRef}
+              className="relative shrink-0 flex flex-col border-t border-neutral-200 dark:border-neutral-800 bg-neutral-900 dark:bg-neutral-950"
+              style={{ height: 220 }}
+              onDragOver={handleBottomDragOver}
+              onDragLeave={handleBottomDragLeave}
+              onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+            >
+              {draggingPanelId && dockDropTarget && (dockDropTarget.zoneId === 'bottom' || dockDropTarget.zoneId === 'bottom-left' || dockDropTarget.zoneId === 'bottom-right') && (
+                <div className="absolute inset-0 pointer-events-none z-20">
+                  {dockDropTarget.hint === 'left' && (
+                    <div className="absolute top-0 left-0 bottom-0 w-1/2" style={DOCK_DROP_OVERLAY_STYLE} />
+                  )}
+                  {dockDropTarget.hint === 'right' && (
+                    <div className="absolute top-0 right-0 bottom-0 w-1/2" style={DOCK_DROP_OVERLAY_STYLE} />
+                  )}
+                  {dockDropTarget.hint === 'center' && (
+                    <div className="absolute inset-0" style={DOCK_DROP_OVERLAY_STYLE} />
+                  )}
                 </div>
               )}
+              <div className="flex-1 min-h-0 flex flex-row">
+                {hasSingle && (
+                  <div className="flex-1 min-h-0 flex flex-col">
+                    <DockZone
+                      zoneId="bottom"
+                      tabs={bottomTabs}
+                      activeTab={activeBottom}
+                      content={bottomTabs.length > 0 ? renderDockPanelContent(activeBottom ?? bottomTabs[0]) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+                      dockSide="bottom"
+                      existingZones={existingZones}
+                      draggingPanelId={draggingPanelId}
+                      dragOverTarget={dockDropTarget}
+                      onTabSelect={(id) => setActiveDockTab('bottom', id)}
+                      onTabClose={closeDockPanel}
+                      onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+                      onTabDragEnd={handleDragEnd}
+                      onDragOver={handleBottomDragOver}
+                      onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+                      dndType={DND_TYPE_DOCK}
+                    />
+                  </div>
+                )}
+                {hasSplit && (
+                  <Group orientation="horizontal" className="flex-1 min-h-0 min-w-0">
+                    {hasBottomLeft && (
+                      <Panel id="bottom-left-panel" defaultSize="50" minSize="15" className="min-h-0 min-w-0">
+                        <DockZone
+                          zoneId="bottom-left"
+                          tabs={bottomLeftTabs}
+                          activeTab={activeBottomLeft}
+                          content={bottomLeftTabs.length > 0 ? renderDockPanelContent(activeBottomLeft) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+                          dockSide="bottom"
+                          existingZones={existingZones}
+                          draggingPanelId={draggingPanelId}
+                          dragOverTarget={dockDropTarget}
+                          onTabSelect={(id) => setActiveDockTab('bottom-left', id)}
+                          onTabClose={closeDockPanel}
+                          onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+                          onTabDragEnd={handleDragEnd}
+                          onDragOver={handleBottomDragOver}
+                          onDragLeave={() => setDragOverTarget(null)}
+                          onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+                          dndType={DND_TYPE_DOCK}
+                        />
+                      </Panel>
+                    )}
+                    {hasBottomLeft && hasBottomRight && (
+                      <Separator className="w-1 shrink-0 cursor-col-resize bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
+                    )}
+                    {hasBottomRight && (
+                      <Panel id="bottom-right-panel" defaultSize="50" minSize="15" className="min-h-0 min-w-0">
+                        <DockZone
+                          zoneId="bottom-right"
+                          tabs={bottomRightTabs}
+                          activeTab={activeBottomRight}
+                          content={bottomRightTabs.length > 0 ? renderDockPanelContent(activeBottomRight) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
+                          dockSide="bottom"
+                          existingZones={existingZones}
+                          draggingPanelId={draggingPanelId}
+                          dragOverTarget={dockDropTarget}
+                          onTabSelect={(id) => setActiveDockTab('bottom-right', id)}
+                          onTabClose={closeDockPanel}
+                          onTabDragStart={(e, id) => handleDragStart(e, 'dock', id)}
+                          onTabDragEnd={handleDragEnd}
+                          onDragOver={handleBottomDragOver}
+                          onDragLeave={() => setDragOverTarget(null)}
+                          onDrop={(e) => handleDockDrop(e, dockDropTarget)}
+                          dndType={DND_TYPE_DOCK}
+                        />
+                      </Panel>
+                    )}
+                  </Group>
+                )}
+              </div>
+              <div className="shrink-0 flex justify-end px-2 py-1 border-t border-neutral-700">
+                <button
+                  type="button"
+                  className="h-7 w-7 inline-flex items-center justify-center rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700"
+                  onClick={() => setShowTerminalBar(false)}
+                  title="Close bottom dock"
+                  aria-label="Close bottom dock"
+                >
+                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
+                    <path d="M2 2L8 8M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          )
+        })()}
 
         <footer className="shrink-0 px-4 py-2 border-t border-neutral-200/80 dark:border-neutral-800 bg-white/85 dark:bg-neutral-950 text-xs text-neutral-600 dark:text-neutral-400 flex items-center gap-4 backdrop-blur">
           <span className="font-mono truncate max-w-[40ch]" title={workspaceRoot}>
@@ -3159,7 +3888,7 @@ export default function App() {
         visible={showDockedAppSettings}
         appSettingsView={appSettingsView}
         setAppSettingsView={setAppSettingsView}
-        onClose={() => { if (showDockedAppSettings) setCodeWindowTab('code') }}
+        onClose={() => { if (showDockedAppSettings) setActiveDockTab('right', 'source-control') }}
         api={api}
         modelConfig={modelConfig}
         setModelConfig={setModelConfig}

@@ -112,7 +112,7 @@ export function resolveProviderConfigs(registry: ProviderRegistry): ProviderConf
       })
     }
   }
-  for (const custom of registry.customProviders) {
+  for (const custom of registry.customProviders ?? []) {
     result.push({ ...custom, isBuiltIn: false })
   }
   return result

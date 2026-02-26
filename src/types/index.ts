@@ -45,6 +45,50 @@ export type LayoutMode = 'vertical' | 'horizontal' | 'grid'
 export type WorkspaceDockSide = 'left' | 'right'
 export type CodeWindowTab = 'code' | 'settings'
 
+export type DockPanelId =
+  | 'orchestrator'
+  | 'workspace-folder'
+  | 'workspace-settings'
+  | 'application-settings'
+  | 'source-control'
+  | 'terminal'
+  | 'debug-output'
+
+/** Dock zone IDs. Single zones: left, right, bottom. Split: left-top, left-bottom, right-top, right-bottom, bottom-left, bottom-right. */
+export type DockZoneId =
+  | 'left'
+  | 'left-top'
+  | 'left-bottom'
+  | 'right'
+  | 'right-top'
+  | 'right-bottom'
+  | 'bottom'
+  | 'bottom-left'
+  | 'bottom-right'
+
+/** Drop target: which zone and optional split hint (top/bottom for side docks, left/right for bottom). */
+export type DropTargetHint = 'center' | 'top' | 'bottom' | 'left' | 'right'
+
+export type DockLayoutState = {
+  /** Tab lists per zone. Empty array = zone hidden. Panels can move between zones. */
+  zones: Partial<Record<DockZoneId, DockPanelId[]>>
+  /** Active tab per zone. */
+  activeTab: Partial<Record<DockZoneId, DockPanelId>>
+  /** @deprecated Use zones. Kept for migration. */
+  visible?: Record<DockPanelId, boolean>
+  /** @deprecated Use zones. Kept for migration. */
+  leftTopTab?: 'orchestrator'
+  /** @deprecated Use zones. Kept for migration. */
+  leftBottomTab?: 'workspace-folder' | 'workspace-settings'
+  /** @deprecated Use zones. Kept for migration. */
+  rightTab?: 'application-settings' | 'source-control'
+  /** @deprecated Use zones. Kept for migration. */
+  bottomTab?: 'terminal' | 'debug-output'
+  leftBottomTabs?: [DockPanelId, DockPanelId]
+  rightTabs?: [DockPanelId, DockPanelId]
+  bottomTabs?: [DockPanelId, DockPanelId]
+}
+
 export type AgentPanelState = {
   id: string
   historyId: string

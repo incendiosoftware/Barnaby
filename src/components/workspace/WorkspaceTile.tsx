@@ -17,7 +17,7 @@ export interface WorkspaceTileProps {
   workspaceDockSide: 'left' | 'right'
   showCodeWindow: boolean
   draggingPanelId: string | null
-  dragOverTarget: string | null
+  dragOverTarget: string | { zoneId: string; hint: string } | null
   dockContent: React.ReactNode
   onMouseDownCapture: () => void
   onDragOver: (e: React.DragEvent) => void

@@ -5,6 +5,7 @@
 import React from 'react'
 import type { PermissionMode, SandboxMode, WorkspaceSettings, WorkspaceSettingsTextDraft } from '../types'
 import { UI_INPUT_CLASS, UI_SELECT_CLASS } from '../constants'
+import { CloseIcon } from './icons'
 
 function sandboxModeDescription(mode: SandboxMode): string {
   if (mode === 'read-only') return 'Read project files only; no file edits or shell writes.'
@@ -22,6 +23,7 @@ export interface WorkspaceSettingsPaneProps {
   onSandboxChange: (value: SandboxMode) => void
   onPermissionModeChange: (value: PermissionMode) => void
   onTextDraftChange: (field: keyof WorkspaceSettingsTextDraft, value: string) => void
+  onClose?: () => void
 }
 
 export function WorkspaceSettingsPane({
@@ -35,11 +37,23 @@ export function WorkspaceSettingsPane({
   onSandboxChange,
   onPermissionModeChange,
   onTextDraftChange,
+  onClose,
 }: WorkspaceSettingsPaneProps) {
   return (
     <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
-      <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
+      <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs flex items-center justify-between gap-2">
         <span className="font-medium text-neutral-700 dark:text-neutral-300">Workspace settings</span>
+        {onClose && (
+          <button
+            type="button"
+            className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
+            onClick={onClose}
+            title="Close"
+            aria-label="Close"
+          >
+            <CloseIcon size={12} />
+          </button>
+        )}
       </div>
       <div className="flex-1 overflow-auto px-3 py-3">
         <div className="space-y-3 text-xs">
@@ -54,7 +68,7 @@ export function WorkspaceSettingsPane({
               />
               <button
                 type="button"
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-md bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                 onClick={onBrowse}
                 title="Browse for workspace folder"
                 aria-label="Browse for workspace folder"

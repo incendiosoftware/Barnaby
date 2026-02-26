@@ -310,6 +310,24 @@ export function SplitVerticalIcon({ className, size = 24 }: IconProps) {
   )
 }
 
+export function TerminalIcon({ className, size = 24 }: IconProps) {
+  return (
+    <svg {...iconProps} width={size} height={size} className={className}>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="M6 9h4M10 12l2-2 2 2M6 15h8" />
+    </svg>
+  )
+}
+
+export function DebugOutputIcon({ className, size = 24 }: IconProps) {
+  return (
+    <svg {...iconProps} width={size} height={size} className={className}>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="M7 8h10M7 12h8M7 16h6" />
+    </svg>
+  )
+}
+
 export function StopIcon({ className, size = 24 }: IconProps) {
   return (
     <svg {...iconProps} width={size} height={size} className={className}>

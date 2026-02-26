@@ -5,6 +5,7 @@ export function useAppRuntimeEvents(ctx: any) {
     api,
     workspaceList,
     workspaceRoot,
+    reconnectPanelRef,
     appendPanelDebug,
     markPanelActivity,
     formatToolTrace,
@@ -115,6 +116,13 @@ export function useAppRuntimeEvents(ctx: any) {
         if ((evt.status === 'closed' || evt.status === 'error') && !isRetryableError) {
           activePromptStartedAtRef.current.delete(agentWindowId)
           queueMicrotask(() => kickQueuedMessage(agentWindowId))
+          if (evt.status === 'closed' && reconnectPanelRef?.current) {
+            setTimeout(() => {
+              if (panelsRef.current?.some((p: any) => p.id === agentWindowId)) {
+                reconnectPanelRef.current?.(agentWindowId, 'connection closed')
+              }
+            }, 1500)
+          }
         }
         return
       }
@@ -285,6 +293,17 @@ export function useAppRuntimeEvents(ctx: any) {
       }
       if (action === 'openOrchestrator') {
         openAppSettingsInRightDock('orchestrator')
+        return
+      }
+      if (action === 'openMcpServers') {
+        openAppSettingsInRightDock('mcp-servers')
+        return
+      }
+      if (action === 'toggleDockPanel') {
+        const payload = msg as { panelId?: string }
+        const panelId = payload?.panelId
+        if (typeof panelId !== 'string') return
+        ctx.toggleDockPanel?.(panelId)
         return
       }
       if (action === 'saveEditorFile') {

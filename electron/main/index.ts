@@ -3012,7 +3012,7 @@ ipcMain.handle('agentorchestrator:getOrchestratorLicenseKeyState', async () => {
   const secrets = readOrchestratorSecrets(getAppStorageDirPath)
   const key = (secrets.licenseKey ?? '').trim()
   if (!key) return { hasKey: false, valid: false, reason: 'No key entered' }
-  const result = validateLicenseKey(key)
+  const result = await validateLicenseKey(key, os.hostname(), app.getVersion())
   return {
     hasKey: true,
     valid: result.valid,
@@ -3028,7 +3028,7 @@ ipcMain.handle('agentorchestrator:setOrchestratorLicenseKey', async (_evt, rawKe
   secrets.licenseKey = key || undefined
   writeOrchestratorSecrets(getAppStorageDirPath, secrets)
   if (!key) return { ok: true, hasKey: false, valid: false }
-  const result = validateLicenseKey(key)
+  const result = await validateLicenseKey(key, os.hostname(), app.getVersion())
   return { ok: true, hasKey: true, valid: result.valid, reason: result.reason, email: result.payload?.email }
 })
 
@@ -3695,7 +3695,6 @@ function createAboutWindow() {
 
   aboutWindow.on('closed', () => {
     aboutWindow = null
-    try { fs.unlinkSync(tmpHtmlPath) } catch { /* ignore */ }
   })
 }
 

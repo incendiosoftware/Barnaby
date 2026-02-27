@@ -20,6 +20,7 @@ export interface PanelLayoutControllerContext {
     sandbox: SandboxMode,
     permissionMode: PermissionMode,
   ) => { sandbox: SandboxMode; permissionMode: PermissionMode }
+  getModelProvider: (model: string) => import('../types').ModelProvider
   setPanels: React.Dispatch<React.SetStateAction<AgentPanelState[]>>
   setLayoutMode: React.Dispatch<React.SetStateAction<LayoutMode>>
   setActivePanelId: React.Dispatch<React.SetStateAction<string>>
@@ -61,6 +62,7 @@ export function createPanelLayoutController(ctx: PanelLayoutControllerContext): 
     const startupModel = sourcePanel?.model ?? ws?.defaultModel ?? ctx.DEFAULT_MODEL
     const p = ctx.makeDefaultPanel(id, panelWorkspace)
     p.model = startupModel
+    p.provider = ctx.getModelProvider(startupModel)  // Lock provider based on initial model
     p.messages = ctx.withModelBanner(p.messages, startupModel)
     p.interactionMode = ctx.parseInteractionMode(sourcePanel?.interactionMode)
     p.permissionMode = sourcePanel?.permissionMode ?? ws?.permissionMode ?? p.permissionMode

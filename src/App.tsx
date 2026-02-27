@@ -464,12 +464,17 @@ export default function App() {
       (entry) => normalizeWorkspacePathForCompare(entry.workspaceRoot || '') === normalizedWorkspaceRoot,
     )
   }, [chatHistory, workspaceRoot])
-  function getModelOptions(includeCurrent?: string): string[] {
+  function getModelOptions(includeCurrent?: string, filterProvider?: ModelProvider): string[] {
     const seen = new Set<string>()
     const base: string[] = []
     for (const id of modelList) {
       const value = String(id ?? '').trim()
       if (!value || seen.has(value)) continue
+      // Filter by provider if specified
+      if (filterProvider) {
+        const modelProvider = getModelProvider(value)
+        if (modelProvider !== filterProvider) continue
+      }
       seen.add(value)
       base.push(value)
     }
@@ -936,7 +941,7 @@ export default function App() {
       try {
         const loaded = await api.loadAppState?.()
         if (cancelled || !loaded) return
-        const restored = parsePersistedAppState(loaded, workspaceRootRef.current || getInitialWorkspaceRoot())
+        const restored = parsePersistedAppState(loaded, workspaceRootRef.current || getInitialWorkspaceRoot(), getModelProvider)
         if (!restored) return
 
         workspaceSnapshotsRef.current = restored.workspaceSnapshotsByRoot
@@ -1757,6 +1762,7 @@ export default function App() {
     const restoredMessages = cloneChatMessages(stripSyntheticAutoContinueMessages(entry.messages))
     setPanels((prev) => {
       if (prev.length >= MAX_PANELS) return prev
+      const model = entry.model || DEFAULT_MODEL
       return [
         ...prev,
         {
@@ -1764,7 +1770,8 @@ export default function App() {
           historyId: entry.id,
           title: entry.title,
           cwd: entry.workspaceRoot || workspaceRoot,
-          model: entry.model || DEFAULT_MODEL,
+          provider: getModelProvider(model),
+          model,
           interactionMode: 'agent',
           permissionMode: entry.permissionMode,
           sandbox: entry.sandbox,
@@ -2133,6 +2140,7 @@ export default function App() {
         const p = makeDefaultPanel(id, panelWorkspace)
         if (options.model) p.model = options.model
         else if (ws?.defaultModel) p.model = ws.defaultModel
+        p.provider = getModelProvider(p.model)  // Lock provider based on model
         p.messages = withModelBanner(p.messages, p.model)
         if (options.interactionMode) p.interactionMode = parseInteractionMode(options.interactionMode as any)
         if (options.permissionMode) p.permissionMode = options.permissionMode as any
@@ -2458,6 +2466,7 @@ export default function App() {
     withModelBanner,
     parseInteractionMode,
     clampPanelSecurityForWorkspace,
+    getModelProvider,
     setPanels,
     setLayoutMode,
     setActivePanelId,

@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-electron/
+build/
+release/
+
+# Large binary files
+*.png
+*.afphoto
+*.tgz
+
+# Lock files
+package-lock.json

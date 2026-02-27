@@ -2164,12 +2164,20 @@ async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: str
 
 async function queryClaudeModelsViaExec(): Promise<{ id: string; displayName: string }[]> {
   return [
-    { id: "claude-opus-4", displayName: "Claude Opus 4" },
-    { id: "claude-sonnet-4.6", displayName: "Claude Sonnet 4.6" },
-    { id: "claude-haiku-4.5", displayName: "Claude Haiku 4.5" },
-    { id: "opus", displayName: "Claude Opus" },
-    { id: "sonnet", displayName: "Claude Sonnet" },
-    { id: "haiku", displayName: "Claude Haiku" }
+    // Latest models (per Anthropic API docs)
+    { id: "claude-opus-4-6", displayName: "Claude Opus 4.6" },
+    { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6" },
+    { id: "claude-haiku-4-5-20251001", displayName: "Claude Haiku 4.5" },
+    // Legacy models
+    { id: "claude-sonnet-4-5-20250929", displayName: "Claude Sonnet 4.5" },
+    { id: "claude-opus-4-5-20251101", displayName: "Claude Opus 4.5" },
+    { id: "claude-opus-4-1-20250805", displayName: "Claude Opus 4.1" },
+    { id: "claude-sonnet-4-20250514", displayName: "Claude Sonnet 4" },
+    { id: "claude-opus-4-20250514", displayName: "Claude Opus 4" },
+    // Aliases for backwards compatibility
+    { id: "opus", displayName: "Claude Opus (alias)" },
+    { id: "sonnet", displayName: "Claude Sonnet (alias)" },
+    { id: "haiku", displayName: "Claude Haiku (alias)" }
   ]
 }
 

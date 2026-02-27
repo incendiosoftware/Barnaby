@@ -139,7 +139,7 @@ export interface ChatInputSectionProps {
   providerAuthByName: Partial<Record<string, ProviderAuthStatus>>
   providerVerifiedByName: Record<string, boolean>
   getModelProvider: (model: string) => ModelProvider
-  getModelOptions: (includeCurrent?: string) => string[]
+  getModelOptions: (includeCurrent?: string, filterProvider?: ModelProvider) => string[]
   textareaRef: (el: HTMLTextAreaElement | null) => void
   onInputChange: (value: string) => void
   onFocus: () => void
@@ -544,7 +544,7 @@ export function ChatInputSection({
                 value={panel.model}
                 onChange={(e) => onSwitchModel(e.target.value)}
               >
-                {getModelOptions(panel.model).map((id) => (
+                {getModelOptions(panel.model, panel.provider).map((id) => (
                   <option key={id} value={id}>
                     {id}
                   </option>

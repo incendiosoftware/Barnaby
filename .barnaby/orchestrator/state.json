@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "phase": "idle",
+  "goal": null,
+  "tasks": [],
+  "activePanels": [],
+  "config": {
+    "orchestratorModel": "claude-sonnet-4-20250514",
+    "workerModel": "claude-sonnet-4-20250514",
+    "workerProvider": "codex",
+    "maxParallelPanels": 2,
+    "maxTaskAttempts": 3
+  },
+  "lastHeartbeat": 1772100385421,
+  "startedAt": null,
+  "completedAt": null,
+  "error": null
+}

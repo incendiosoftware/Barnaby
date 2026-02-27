@@ -6,7 +6,8 @@ import { EventEmitter } from 'node:events'
 
 import { generateWorkspaceTreeText } from './fileTree'
 import { resolveAtFileReferences } from './atFileResolver'
-import { buildSystemPrompt } from './systemPrompt'
+import { buildStableSystemPrompt, buildDynamicContext } from './systemPrompt'
+import { truncateHistory } from './historyTruncation'
 
 /** Ensure npm global bin is in PATH so Electron can find claude CLI. */
 function getClaudeSpawnEnv(): NodeJS.ProcessEnv {
@@ -233,18 +234,13 @@ export class ClaudeClient extends EventEmitter {
    * Writes the system prompt to a temp file to avoid command-line length limits.
    */
   private async spawnPersistentProcess() {
-    // Build system prompt and write to temp file
-    const tree = generateWorkspaceTreeText(this.cwd)
-    const systemPrompt = buildSystemPrompt({
-      workspaceTree: tree,
-      cwd: this.cwd,
-      permissionMode: this.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first',
-      sandbox: this.sandbox,
-      interactionMode: this.interactionMode,
-    })
+    // Write only the STABLE system prompt to the temp file.
+    // This part does not change across turns, so Claude can cache it internally.
+    // Dynamic context (workspace tree, git status) is prepended per-turn in sendUserMessage().
+    const stablePrompt = buildStableSystemPrompt({ interactionMode: this.interactionMode })
     const tmpDir = os.tmpdir()
     this.systemPromptFile = path.join(tmpDir, `barnaby-claude-prompt-${Date.now()}.txt`)
-    fs.writeFileSync(this.systemPromptFile, systemPrompt, 'utf8')
+    fs.writeFileSync(this.systemPromptFile, stablePrompt, 'utf8')
 
     const permissionMode = this.permissionMode === 'proceed-always' ? 'bypassPermissions' : 'default'
     const args = [
@@ -461,12 +457,24 @@ export class ClaudeClient extends EventEmitter {
     this.seenToolUseIds.clear()
     this.assistantText = ''
 
+    // Build per-turn dynamic context (workspace tree + git status).
+    // The stable system prompt is already cached via the temp file.
+    const tree = generateWorkspaceTreeText(this.cwd)
+    const dynamicCtx = buildDynamicContext({
+      workspaceTree: tree,
+      cwd: this.cwd,
+      permissionMode: this.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first',
+      sandbox: this.sandbox,
+      gitStatus: options?.gitStatus,
+    })
+    const messageWithContext = `[Workspace context]\n${dynamicCtx}\n\n---\n\n${fullText}`
+
     // Write the user message as a JSONL line to the persistent process's stdin
     const userMsg = JSON.stringify({
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: fullText }],
+        content: [{ type: 'text', text: messageWithContext }],
       },
     }) + '\n'
 
@@ -572,7 +580,7 @@ export class ClaudeClient extends EventEmitter {
   }
 
   private buildPrompt(): string {
-    const recent = this.history.slice(-12)
+    const recent = truncateHistory(this.history)
     const transcript = recent
       .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}:\n${m.text}`)
       .join('\n\n')

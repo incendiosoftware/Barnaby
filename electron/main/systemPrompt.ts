@@ -1,6 +1,11 @@
 /**
  * Shared system prompt builder for all AI clients.
  * Phase 1 of agent quality improvement — replaces minimal prompts with Cursor-quality instructions.
+ *
+ * The prompt is split into two parts for cache efficiency:
+ *   - **Stable prefix**: behavioural rules, code quality, tool usage, mode — does not change
+ *     within a session. CLI providers can cache this across turns.
+ *   - **Dynamic suffix**: workspace tree, git status, cwd — refreshed on each turn.
  */
 
 export type SystemPromptOptions = {
@@ -9,6 +14,18 @@ export type SystemPromptOptions = {
   permissionMode: string
   sandbox: string
   interactionMode?: string
+  gitStatus?: string
+}
+
+export type StablePromptOptions = {
+  interactionMode?: string
+}
+
+export type DynamicContextOptions = {
+  workspaceTree: string
+  cwd: string
+  permissionMode: string
+  sandbox: string
   gitStatus?: string
 }
 
@@ -26,9 +43,12 @@ function getModeInstruction(mode?: string): string {
   return MODE_INSTRUCTIONS[normalized] ?? MODE_INSTRUCTIONS.agent
 }
 
-export function buildSystemPrompt(options: SystemPromptOptions): string {
-  const { workspaceTree, cwd, permissionMode, sandbox, interactionMode, gitStatus } = options
-  const modeInstruction = getModeInstruction(interactionMode)
+/**
+ * Build the stable portion of the system prompt.
+ * This content does not change within a session and is ideal for caching.
+ */
+export function buildStableSystemPrompt(options: StablePromptOptions): string {
+  const modeInstruction = getModeInstruction(options.interactionMode)
 
   const parts: string[] = []
 
@@ -64,7 +84,18 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
   parts.push('## Current mode')
   parts.push(modeInstruction)
 
-  parts.push('')
+  return parts.join('\n')
+}
+
+/**
+ * Build the dynamic portion of the system prompt.
+ * This content changes per turn (workspace tree, git status) and should NOT be cached.
+ */
+export function buildDynamicContext(options: DynamicContextOptions): string {
+  const { workspaceTree, cwd, permissionMode, sandbox, gitStatus } = options
+
+  const parts: string[] = []
+
   parts.push('## Workspace context')
   parts.push(`- Workspace root: ${cwd}`)
   parts.push(`- Permission mode: ${permissionMode}`)
@@ -81,4 +112,30 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
   parts.push(workspaceTree)
 
   return parts.join('\n')
+}
+
+/**
+ * Build both parts of the system prompt separately.
+ * Use this when you need to cache the stable part and refresh the dynamic part per turn.
+ */
+export function buildSystemPromptParts(options: SystemPromptOptions): { stable: string; dynamic: string } {
+  return {
+    stable: buildStableSystemPrompt({ interactionMode: options.interactionMode }),
+    dynamic: buildDynamicContext({
+      workspaceTree: options.workspaceTree,
+      cwd: options.cwd,
+      permissionMode: options.permissionMode,
+      sandbox: options.sandbox,
+      gitStatus: options.gitStatus,
+    }),
+  }
+}
+
+/**
+ * Build the full system prompt as a single string.
+ * Backward-compatible — used by clients that don't need the split.
+ */
+export function buildSystemPrompt(options: SystemPromptOptions): string {
+  const { stable, dynamic } = buildSystemPromptParts(options)
+  return `${stable}\n\n${dynamic}`
 }

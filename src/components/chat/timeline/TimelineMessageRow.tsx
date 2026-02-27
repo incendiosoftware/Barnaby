@@ -31,7 +31,10 @@ export interface TimelineMessageRowProps {
   messageContainerStyle: React.CSSProperties | undefined
   showCompletedDurationOnMessage: boolean
   completedPromptDurationLabel: string | null
+  completedPromptTimestamp: number | null
   isLastUserMessage: boolean
+  isLastAssistantMessage: boolean
+  isStreaming: boolean
   canRecallLastUserMessage: boolean
   canResendLastUserMessage: boolean
   resendingPanelId: string | null
@@ -69,7 +72,10 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
     messageContainerStyle,
     showCompletedDurationOnMessage,
     completedPromptDurationLabel,
+    completedPromptTimestamp,
     isLastUserMessage,
+    isLastAssistantMessage,
+    isStreaming,
     canRecallLastUserMessage,
     canResendLastUserMessage,
     resendingPanelId,
@@ -281,6 +287,9 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={createMarkdownComponents(false)}>
               {content}
             </ReactMarkdown>
+            {isLastAssistantMessage && isStreaming && (
+              <span className="inline-block ml-0.5 w-2 h-4 bg-current opacity-80 animate-pulse motion-reduce:animate-none" aria-hidden>▊</span>
+            )}
           </div>
         ) : content ? (
           <div className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${isDebugSystemNote ? 'italic text-red-800 dark:text-red-200' : ''}`}>
@@ -331,7 +340,14 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
         )}
         {showCompletedDurationOnMessage && completedPromptDurationLabel && (
           <div className="mt-2 flex justify-end">
-            <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400" title="Response duration">
+            <span
+              className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400"
+              title={
+                completedPromptTimestamp
+                  ? `Completed at ${new Date(completedPromptTimestamp).toLocaleTimeString()}\nDuration: ${completedPromptDurationLabel}`
+                  : `Response duration: ${completedPromptDurationLabel}`
+              }
+            >
               t+{completedPromptDurationLabel}
             </span>
           </div>

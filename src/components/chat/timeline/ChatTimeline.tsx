@@ -63,6 +63,7 @@ export interface ChatTimelineProps {
   lastAgentTimelineUnitId: string | null
   lastUserUnitId: string | null
   completedPromptDurationLabel: string | null
+  completedPromptTimestamp: number | null
   resendingPanelId: string | null
   queueCount: number
   pendingInputs: string[]

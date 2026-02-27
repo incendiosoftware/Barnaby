@@ -18,7 +18,8 @@ function getGeminiSpawnEnv(): NodeJS.ProcessEnv {
 
 import { resolveAtFileReferences } from './atFileResolver'
 import { generateWorkspaceTreeText } from './fileTree'
-import { buildSystemPrompt } from './systemPrompt'
+import { buildStableSystemPrompt, buildDynamicContext } from './systemPrompt'
+import { truncateHistory } from './historyTruncation'
 
 export type GeminiClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
@@ -49,6 +50,8 @@ export class GeminiClient extends EventEmitter {
   private mcpServerNames: string[] = []
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeProc: ChildProcessWithoutNullStreams | null = null
+  /** Track whether a session has been established (for --resume on turns 2+). */
+  private hasActiveSession: boolean = false
 
   private static TURN_INACTIVITY_TIMEOUT_MS = 120_000
   private turnInactivityTimer: ReturnType<typeof setTimeout> | null = null
@@ -163,7 +166,8 @@ export class GeminiClient extends EventEmitter {
     this.history.push({ role: 'user', text: fullMessage })
 
     const prompt = this.buildGeminiPrompt(fullMessage, options?.interactionMode, options?.gitStatus)
-    await this.runTurn(prompt)
+    const isResume = this.hasActiveSession
+    await this.runTurn(prompt, isResume)
   }
 
   async sendUserMessage(text: string, options?: { interactionMode?: string; gitStatus?: string }) {
@@ -175,13 +179,19 @@ export class GeminiClient extends EventEmitter {
     this.history.push({ role: 'user', text: fullMessage })
 
     const prompt = this.buildGeminiPrompt(fullMessage, options?.interactionMode, options?.gitStatus)
-    await this.runTurn(prompt)
+    const isResume = this.hasActiveSession
+    await this.runTurn(prompt, isResume)
   }
 
-  private async runTurn(prompt: string): Promise<void> {
+  private async runTurn(prompt: string, resume: boolean = false): Promise<void> {
     const startTurn = (modelId: string): Promise<void> =>
       new Promise((resolve, reject) => {
         const args = ['-m', modelId, '--yolo', '--output-format', 'stream-json']
+        if (resume) {
+          // Resume the previous session to avoid re-sending the system prompt.
+          // Gemini CLI caches session context internally when resumed.
+          args.push('--resume')
+        }
         if (this.mcpServerNames.length > 0) {
           args.push('--allowed-mcp-server-names', ...this.mcpServerNames)
         }
@@ -193,9 +203,9 @@ export class GeminiClient extends EventEmitter {
         const proc =
           process.platform === 'win32'
             ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
-                ...spawnOpts,
-                windowsHide: true,
-              } as object)
+              ...spawnOpts,
+              windowsHide: true,
+            } as object)
             : spawn('gemini', args, spawnOpts)
 
         this.activeProc = proc
@@ -276,8 +286,8 @@ export class GeminiClient extends EventEmitter {
                 const isError = toolStatus === 'error' || toolStatus === 'failure'
                 const output = typeof evt.output === 'string' ? evt.output
                   : typeof evt.result === 'string' ? evt.result
-                  : typeof evt.response === 'string' ? evt.response
-                  : typeof evt.error === 'string' ? evt.error : ''
+                    : typeof evt.response === 'string' ? evt.response
+                      : typeof evt.error === 'string' ? evt.error : ''
                 const toolName = evt.tool_name ?? evt.name ?? evt.toolName ?? 'tool'
                 if (isError || /^error/i.test(output)) {
                   const errMsg = output.length > 300 ? output.slice(0, 300) + '...' : output
@@ -292,7 +302,7 @@ export class GeminiClient extends EventEmitter {
               case 'thought': {
                 const text = typeof evt.content === 'string' ? evt.content
                   : typeof evt.message === 'string' ? evt.message
-                  : typeof evt.text === 'string' ? evt.text : ''
+                    : typeof evt.text === 'string' ? evt.text : ''
                 if (text && !SUBAGENT_NOISE.test(text)) {
                   const short = text.length > 200 ? text.slice(0, 200) + '...' : text
                   this.emitEvent({ type: 'thinking', message: short })
@@ -373,6 +383,7 @@ export class GeminiClient extends EventEmitter {
           }
           if (code === 0) {
             this.history.push({ role: 'assistant', text: assistantText.trim() || assistantText })
+            this.hasActiveSession = true
             this.emitEvent({ type: 'assistantCompleted' })
           } else {
             this.emitEvent({ type: 'status', status: 'error', message: this.formatGeminiExitError(code, signal, stderr) })
@@ -422,26 +433,36 @@ export class GeminiClient extends EventEmitter {
   async close() {
     await this.interruptActiveTurn()
     this.history = []
+    this.hasActiveSession = false
   }
 
   private buildGeminiPrompt(userMessage: string, interactionMode?: string, gitStatus?: string): string {
     const tree = generateWorkspaceTreeText(this.cwd)
     const mode = interactionMode ?? this.interactionMode
-    const systemPrompt = buildSystemPrompt({
+
+    // Build dynamic context (changes per turn)
+    const dynamicCtx = buildDynamicContext({
       workspaceTree: tree,
       cwd: this.cwd,
       permissionMode: this.permissionMode,
       sandbox: this.sandbox,
-      interactionMode: mode,
       gitStatus,
     })
 
-    const lastAssistant = [...this.history].reverse().find((m) => m.role === 'assistant')
-    const continuationHint = lastAssistant
-      ? `\n\nFor context, your previous response was:\n${lastAssistant.text.slice(0, 1200)}\n\n`
+    // On resumed turns, only send dynamic context + user message.
+    // The stable system prompt is already cached in the Gemini session.
+    if (this.hasActiveSession) {
+      return `[Workspace context]\n${dynamicCtx}\n\n---\n\n${userMessage}`
+    }
+
+    // First turn: send full system prompt (stable + dynamic) + truncated history
+    const stablePrompt = buildStableSystemPrompt({ interactionMode: mode })
+    const truncated = truncateHistory(this.history.slice(0, -1)) // exclude the message we're about to send
+    const historyHint = truncated.length > 0
+      ? '\n\n' + truncated.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}:\n${m.text}`).join('\n\n') + '\n\n'
       : ''
 
-    return `${systemPrompt}\n\n---\n\n${continuationHint}${userMessage}`
+    return `${stablePrompt}\n\n${dynamicCtx}\n\n---\n${historyHint}${userMessage}`
   }
 
   /**
@@ -523,9 +544,9 @@ export class GeminiClient extends EventEmitter {
       const proc =
         process.platform === 'win32'
           ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', '--version'], {
-              ...spawnOpts,
-              windowsHide: true,
-            } as object)
+            ...spawnOpts,
+            windowsHide: true,
+          } as object)
           : spawn('gemini', ['--version'], spawnOpts)
 
       let stderr = ''

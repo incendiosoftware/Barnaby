@@ -1,0 +1,16 @@
+`buildSystemPrompt` in `electron/main/systemPrompt.ts` builds one large system prompt string by appending prompt “parts” and joining them with newlines. It:
+
+- Picks a mode-specific instruction via `getModeInstruction(interactionMode)` (defaults to `agent`).
+- Injects runtime context (`cwd`, `permissionMode`, `sandbox`, optional `gitStatus`, `workspaceTree`).
+- Returns the final prompt text for AI clients.
+
+Sections included in the prompt (in order) from `electron/main/systemPrompt.ts`:
+
+1. Intro sentence (no heading): Barnaby coding-agent context
+2. `## Behavioral rules`
+3. `## Code quality rules`
+4. `## Tool usage`
+5. `## Current mode`
+6. `## Workspace context`
+7. `## Git status` (only if `gitStatus` is non-empty)
+8. `## Workspace structure`

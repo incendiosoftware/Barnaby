@@ -68,6 +68,8 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
     ctx.applicationSettings.showResponseDurationAfterPrompt && !isRunning && !isQueued && typeof lastPromptDurationMs === 'number'
       ? formatDurationLabel(lastPromptDurationMs)
       : null
+  const completedPromptTimestamp =
+    completedPromptDurationLabel && typeof completionNoticeAt === 'number' ? completionNoticeAt : null
   const lastAgentTimelineUnitId = completedPromptDurationLabel
     ? [...timelineUnits]
         .reverse()
@@ -151,6 +153,7 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
           lastAgentTimelineUnitId={lastAgentTimelineUnitId}
           lastUserUnitId={lastUserUnitId}
           completedPromptDurationLabel={completedPromptDurationLabel}
+          completedPromptTimestamp={completedPromptTimestamp}
           resendingPanelId={ctx.resendingPanelId}
           queueCount={queueCount}
           pendingInputs={w.pendingInputs}

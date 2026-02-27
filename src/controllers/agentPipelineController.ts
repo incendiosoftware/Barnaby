@@ -180,6 +180,39 @@ export function createAgentPipelineController(ctx: AgentPipelineContext): AgentP
   }
 
   async function switchModel(winId: string, nextModel: string) {
+    const panel = ctx.panelsRef.current.find((p) => p.id === winId)
+    if (!panel) {
+      ctx.setPanels((prev) => prev.map((x) => x.id !== winId ? x : { ...x, streaming: false, status: 'Panel not found – model switch failed.' }))
+      return
+    }
+
+    const nextProvider = ctx.getModelProvider(nextModel)
+
+    // Provider lock: prevent cross-provider model switches
+    if (panel.provider !== nextProvider) {
+      const providerNames: Record<ModelProvider, string> = {
+        'claude': 'Claude',
+        'codex': 'OpenAI Codex',
+        'gemini': 'Google Gemini',
+        'openrouter': 'OpenRouter',
+      }
+      const currentProviderName = providerNames[panel.provider] || panel.provider
+      const nextProviderName = providerNames[nextProvider] || nextProvider
+      const errMsg = `Cannot switch from ${currentProviderName} to ${nextProviderName}.\n\nThis is a ${currentProviderName} panel and can only use ${currentProviderName} models.\n\nTo use ${nextProviderName}, please create a new ${nextProviderName} panel using the + button.`
+      ctx.setPanels((prev) =>
+        prev.map((w) =>
+          w.id !== winId
+            ? w
+            : {
+                ...w,
+                status: 'Model switch blocked',
+                messages: [...w.messages, { id: newId(), role: 'system' as const, content: errMsg, format: 'text' as const, createdAt: Date.now() }],
+              },
+        ),
+      )
+      return
+    }
+
     ctx.setPanels((prev) =>
       prev.map((w) =>
         w.id !== winId
@@ -187,12 +220,10 @@ export function createAgentPipelineController(ctx: AgentPipelineContext): AgentP
           : { ...w, model: nextModel, connected: false, status: 'Switching model...' },
       ),
     )
-    const panel = ctx.panelsRef.current.find((p) => p.id === winId)
-    const permissionMode = panel?.permissionMode ?? 'verify-first'
-    const sandbox = panel?.sandbox ?? 'workspace-write'
-    const provider = ctx.getModelProvider(nextModel)
+    const permissionMode = panel.permissionMode ?? 'verify-first'
+    const sandbox = panel.sandbox ?? 'workspace-write'
     try {
-      await ctx.ensureProviderReady(provider, `${nextModel}`)
+      await ctx.ensureProviderReady(nextProvider, `${nextModel}`)
       await ctx.connectWindow(winId, nextModel, ctx.workspaceRoot, permissionMode, sandbox)
       ctx.setPanels((prev) =>
         prev.map((w) => {
@@ -201,7 +232,7 @@ export function createAgentPipelineController(ctx: AgentPipelineContext): AgentP
         }),
       )
     } catch (e) {
-      const errMsg = ctx.formatConnectionError(e, provider)
+      const errMsg = ctx.formatConnectionError(e, nextProvider)
       ctx.setPanels((prev) =>
         prev.map((w) =>
           w.id !== winId

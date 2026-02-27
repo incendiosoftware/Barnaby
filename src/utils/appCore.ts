@@ -866,7 +866,11 @@ export function applyWorkspaceTextDraftField(
   return { ...form, deniedAutoWritePrefixes: parsed }
 }
 
-export function parsePersistedAgentPanel(raw: unknown, fallbackWorkspaceRoot: string): AgentPanelState | null {
+export function parsePersistedAgentPanel(
+  raw: unknown,
+  fallbackWorkspaceRoot: string,
+  getModelProvider?: (model: string) => ModelProvider
+): AgentPanelState | null {
   if (!raw || typeof raw !== 'object') return null
   const rec = raw as PersistedAgentPanelState
   const messages = parseHistoryMessages(rec.messages)
@@ -878,12 +882,18 @@ export function parsePersistedAgentPanel(raw: unknown, fallbackWorkspaceRoot: st
   const permissionMode: PermissionMode = rec.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first'
   const cwd =
     typeof rec.cwd === 'string' && rec.cwd.trim() ? rec.cwd : fallbackWorkspaceRoot || ''
+  const model = typeof rec.model === 'string' && rec.model ? rec.model : DEFAULT_MODEL
+
+  // Migration: infer provider from model if not present in persisted state
+  const provider = getModelProvider ? getModelProvider(model) : 'codex'
+
   return {
     id,
     historyId: typeof rec.historyId === 'string' && rec.historyId ? rec.historyId : newId(),
     title,
     cwd,
-    model: typeof rec.model === 'string' && rec.model ? rec.model : DEFAULT_MODEL,
+    provider,
+    model,
     interactionMode: parseInteractionMode(rec.interactionMode),
     permissionMode,
     sandbox,
@@ -929,7 +939,11 @@ export function parsePersistedEditorPanel(raw: unknown, fallbackWorkspaceRoot: s
   }
 }
 
-export function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: string): ParsedAppState | null {
+export function parsePersistedAppState(
+  raw: unknown,
+  fallbackWorkspaceRoot: string,
+  getModelProvider?: (model: string) => ModelProvider
+): ParsedAppState | null {
   if (!raw || typeof raw !== 'object') return null
   const rec = raw as PersistedAppState
   const workspaceRoot =
@@ -948,7 +962,7 @@ export function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: stri
       const snapshot = snapshotRaw as Partial<WorkspaceUiSnapshot>
       const parsedPanels = Array.isArray(snapshot.panels)
         ? snapshot.panels
-            .map((panel) => parsePersistedAgentPanel(panel, workspacePath))
+            .map((panel) => parsePersistedAgentPanel(panel, workspacePath, getModelProvider))
             .filter((panel): panel is AgentPanelState => Boolean(panel))
         : []
       const parsedEditors = Array.isArray(snapshot.editorPanels)
@@ -1007,7 +1021,7 @@ export function parsePersistedAppState(raw: unknown, fallbackWorkspaceRoot: stri
   }
   const panels = Array.isArray(rec.panels)
     ? rec.panels
-        .map((item) => parsePersistedAgentPanel(item, fallbackWorkspaceRoot))
+        .map((item) => parsePersistedAgentPanel(item, fallbackWorkspaceRoot, getModelProvider))
         .filter((x): x is AgentPanelState => Boolean(x))
         .slice(0, MAX_PANELS)
     : []
@@ -1504,6 +1518,7 @@ export function makeDefaultPanel(id: string, cwd: string, historyId = newId()): 
     historyId,
     title: `Agent ${id.slice(-4)}`,
     cwd,
+    provider: 'codex',  // Default provider - will be updated when model is set
     model: DEFAULT_MODEL,
     interactionMode: 'agent',
     permissionMode: 'verify-first',

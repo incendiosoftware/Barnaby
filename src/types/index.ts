@@ -94,6 +94,7 @@ export type AgentPanelState = {
   historyId: string
   title: string
   cwd: string
+  provider: ModelProvider  // Immutable - locked at panel creation
   model: string
   interactionMode: AgentInteractionMode
   permissionMode: PermissionMode

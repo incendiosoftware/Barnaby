@@ -36,6 +36,7 @@ export interface TimelineUnitRowProps {
   lastAgentTimelineUnitId: string | null
   lastUserUnitId: string | null
   completedPromptDurationLabel: string | null
+  completedPromptTimestamp: number | null
   resendingPanelId: string | null
   formatToolTrace: (raw: string) => string
   onChatLinkClick: (href: string) => void
@@ -130,6 +131,7 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
     props.completedPromptDurationLabel && props.lastAgentTimelineUnitId === unit.id
   )
   const isLastUserMessage = m.role === 'user' && unit.id === props.lastUserUnitId
+  const isLastAssistantMessage = m.role === 'assistant' && unit.id === props.lastAgentTimelineUnitId
   const lastUserMessageAgeMs = isLastUserMessage
     ? Math.max(0, props.activityClock - (m.createdAt ?? props.activityClock))
     : Number.POSITIVE_INFINITY
@@ -158,7 +160,10 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
       messageContainerStyle={messageContainerStyle}
       showCompletedDurationOnMessage={showCompletedDurationOnMessage}
       completedPromptDurationLabel={props.completedPromptDurationLabel}
+      completedPromptTimestamp={props.completedPromptTimestamp}
       isLastUserMessage={isLastUserMessage}
+      isLastAssistantMessage={isLastAssistantMessage}
+      isStreaming={props.isStreaming}
       canRecallLastUserMessage={canRecallLastUserMessage}
       canResendLastUserMessage={canResendLastUserMessage}
       resendingPanelId={props.resendingPanelId}

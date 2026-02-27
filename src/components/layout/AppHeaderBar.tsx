@@ -1,5 +1,5 @@
 import React from 'react'
-import type { ChatHistoryEntry, LayoutMode } from '../../types'
+import type { ChatHistoryEntry, LayoutMode, ModelInterface, ConnectivityProvider } from '../../types'
 import { PanelBottomIcon } from '../icons'
 
 interface AppHeaderBarProps {
@@ -23,9 +23,10 @@ interface AppHeaderBarProps {
   openChatFromHistory: (id: string) => void
   formatHistoryOptionLabel: (entry: ChatHistoryEntry) => string
   setDeleteHistoryIdPending: React.Dispatch<React.SetStateAction<string | null>>
-  createAgentPanel: () => void
+  createAgentPanel: (opts?: { sourcePanelId?: string; initialModel?: string }) => void
   layoutMode: LayoutMode
   setLayoutMode: React.Dispatch<React.SetStateAction<LayoutMode>>
+  modelInterfaces: ModelInterface[]
 }
 
 export function AppHeaderBar(props: AppHeaderBarProps) {
@@ -53,7 +54,36 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
     createAgentPanel,
     layoutMode,
     setLayoutMode,
+    modelInterfaces,
   } = props
+
+  const [newChatDropdownOpen, setNewChatDropdownOpen] = React.useState(false)
+  const newChatDropdownRef = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (newChatDropdownRef.current && !newChatDropdownRef.current.contains(event.target as Node)) {
+        setNewChatDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Group models by provider and select the first enabled model for each
+  const defaultModelsByProvider: Partial<Record<ConnectivityProvider, string>> = {}
+  for (const m of modelInterfaces) {
+    if (m.enabled && !defaultModelsByProvider[m.provider]) {
+      defaultModelsByProvider[m.provider] = m.id
+    }
+  }
+
+  const providerLabels: Record<ConnectivityProvider, { label: string; desc: string }> = {
+    codex: { label: 'OpenAI (Codex)', desc: 'CLI / API' },
+    claude: { label: 'Anthropic Claude', desc: 'CLI' },
+    gemini: { label: 'Google Gemini', desc: 'CLI' },
+    openrouter: { label: 'OpenRouter', desc: 'API' },
+  }
 
   return (
     <div data-app-header-bar="true" className="shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 px-4 py-3 bg-white dark:bg-neutral-950">
@@ -154,22 +184,57 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
               </div>
             )}
           </div>
-          <button
-            type="button"
-            className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
-            onClick={() => createAgentPanel()}
-            title="New chat"
-            aria-label="New chat"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-            </svg>
-          </button>
+          {/* Dropdown container */}
+          <div ref={newChatDropdownRef} className="relative shrink-0">
+            <button
+              type="button"
+              className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
+              onClick={() => setNewChatDropdownOpen((o) => !o)}
+              title="New chat"
+              aria-label="New chat"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+            </button>
+            {newChatDropdownOpen && (
+              <div className="absolute top-full left-0 mt-1 rounded-lg bg-neutral-50 dark:bg-neutral-800 shadow-xl z-50 min-w-[220px] overflow-hidden">
+                <div className="px-3 py-2 text-xs font-semibold text-neutral-500 dark:text-neutral-400 bg-neutral-100 dark:bg-neutral-900 border-b border-neutral-200/50 dark:border-neutral-700/50">
+                  Choose Provider
+                </div>
+                <div className="py-1 flex flex-col">
+                  {Object.entries(defaultModelsByProvider).map(([p, modelId]) => {
+                    const provider = p as ConnectivityProvider
+                    const info = providerLabels[provider]
+                    if (!info || !modelId) return null
+                    return (
+                      <button
+                        key={provider}
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-neutral-200/50 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 flex items-center justify-between group"
+                        onClick={() => {
+                          createAgentPanel({ initialModel: modelId })
+                          setNewChatDropdownOpen(false)
+                        }}
+                      >
+                        <span>{info.label}</span>
+                        <span className="text-[10px] text-neutral-400 dark:text-neutral-500 opacity-0 group-hover:opacity-100 transition-opacity">{info.desc}</span>
+                      </button>
+                    )
+                  })}
+                  {Object.keys(defaultModelsByProvider).length === 0 && (
+                    <div className="px-3 py-2 text-sm text-neutral-500 dark:text-neutral-400">
+                      No models enabled
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
           <div data-layout-toolbar="true" className="flex items-center gap-1">
             <button
-              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
-                layoutMode === 'vertical' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-              }`}
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${layoutMode === 'vertical' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                }`}
               onClick={() => setLayoutMode('vertical')}
               title="Tile Vertical"
               aria-label="Tile Vertical"
@@ -180,9 +245,8 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
               </svg>
             </button>
             <button
-              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
-                layoutMode === 'horizontal' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-              }`}
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${layoutMode === 'horizontal' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                }`}
               onClick={() => setLayoutMode('horizontal')}
               title="Tile Horizontal"
               aria-label="Tile Horizontal"
@@ -193,9 +257,8 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
               </svg>
             </button>
             <button
-              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${
-                layoutMode === 'grid' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-              }`}
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${layoutMode === 'grid' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                }`}
               onClick={() => setLayoutMode('grid')}
               title="Tile Grid"
               aria-label="Tile Grid"

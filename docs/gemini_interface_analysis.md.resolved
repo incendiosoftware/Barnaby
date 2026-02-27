@@ -1,0 +1,173 @@
+# Gemini CLI Interface Analysis: Comparison with Claude & Codex
+
+## Executive Summary
+
+The Gemini CLI integration in Barnaby is **architecturally inferior** to the Claude and Codex implementations. It suffers from per-turn process spawning (vs persistent connections), lack of proper system instruction separation, an outdated model normalization map, and no real-time streaming. These issues collectively explain the user's experience of Gemini being "slow and not replying well."
+
+---
+
+## Architecture Comparison
+
+| Feature | Codex (GPT) | Claude | Gemini |
+|---|---|---|---|
+| **Connection model** | Persistent JSON-RPC process | Persistent stream-JSON process | ❌ New process per turn |
+| **Protocol** | JSON-RPC over stdio | JSONL stream-json on stdin/stdout | ❌ Pipe prompt to stdin, read stream-json stdout |
+| **System prompt** | Managed by `codex app-server` | `--append-system-prompt-file` (temp file) | ❌ Crammed into user message text |
+| **Real-time streaming** | ✅ Notifications push deltas | ✅ `--include-partial-messages` | ⚠️ stream-json output, but process must finish |
+| **Session continuity** | Built-in thread/turn model | Built-in session via persistent process | ⚠️ `--resume` flag (fragile, spawns new process) |
+| **Model resolution** | Pass-through to server | Alias map (sonnet/opus/haiku) | ❌ Stale map, maps `gemini-2.0-flash` → `flash` but missing 2.5-pro, 2.5-flash |
+| **Win32 spawn** | `cmd.exe /c codex app-server` | Node.js direct (resolves .cmd shim) | `cmd.exe /c gemini` (no shim resolution) |
+| **Interrupt support** | `turn/interrupt` JSON-RPC call | Write to persistent stdin / kill | Kill process (loses session) |
+| **MCP server sync** | Via CLI config file | Via `--mcp-config` flag | ✅ Writes to `~/.gemini/settings.json` |
+| **Image support** | `localImage` input type | N/A | `@path` references in message |
+
+---
+
+## Critical Issues (Ranked by Impact)
+
+### 1. 🔴 Per-Turn Process Spawning — Massive Latency
+
+**Current:** [geminiClient.ts:186-209](file:///e:/Barnaby/barnaby-app/electron/main/geminiClient.ts#L186-L209)
+
+Every single user message spawns a brand new `gemini` CLI process via `cmd.exe`. This means:
+- **Cold start overhead** on every turn (~2-5 seconds just to launch Node.js + load the CLI)
+- **No session state** carried in-process (relies on `--resume` which must re-read session from disk)
+- **No streaming until the process writes output** — the user sees nothing until Gemini starts responding
+
+**Claude comparison:** [claudeClient.ts:236-316](file:///e:/Barnaby/barnaby-app/electron/main/claudeClient.ts#L236-L316) — spawns ONE process at [connect()](file:///e:/Barnaby/barnaby-app/electron/main/openaiClient.ts#68-97) time and keeps it alive. Each [sendUserMessage()](file:///e:/Barnaby/barnaby-app/electron/main/geminiClient.ts#173-185) just writes a JSON line to stdin. Near-zero latency between turns.
+
+**Codex comparison:** [codexAppServerClient.ts:101-185](file:///e:/Barnaby/barnaby-app/electron/main/codexAppServerClient.ts#L101-L185) — spawns ONE `codex app-server` process and communicates via JSON-RPC. Full bidirectional protocol.
+
+> [!IMPORTANT]
+> **Fix:** Rewrite [GeminiClient](file:///e:/Barnaby/barnaby-app/electron/main/geminiClient.ts#43-574) to use a persistent process model. The Gemini CLI supports `-p/--prompt` for non-interactive mode but also supports interactive mode by default. We should investigate whether the CLI's interactive mode can accept JSONL input like Claude does, or whether we need to use `-p` with `--resume` but keep the process alive.
+
+---
+
+### 2. 🔴 System Prompt Crammed into User Message
+
+**Current:** [geminiClient.ts:439-466](file:///e:/Barnaby/barnaby-app/electron/main/geminiClient.ts#L439-L466)
+
+```typescript
+// First turn: send full system prompt + dynamic context + history + user message
+// ALL as a single stdin blob
+return `${stablePrompt}\n\n${dynamicCtx}\n\n---\n${historyHint}${userMessage}`
+```
+
+The entire system prompt (~2KB of behavioral rules), workspace tree, git status, conversation history, AND the user's message are concatenated into one giant string and piped to stdin. The Gemini model sees this as "the user said all of this" — not as system instructions.
+
+**Claude comparison:** [claudeClient.ts:240-254](file:///e:/Barnaby/barnaby-app/electron/main/claudeClient.ts#L240-L254) — writes stable system prompt to a temp file, passes via `--append-system-prompt-file`. Only dynamic context is prepended to user messages. The CLI treats the file content as proper system instructions that the model distinguishes from user input.
+
+**Impact:** Gemini may not follow behavioral rules as reliably because it treats them as user conversation rather than system-level instructions. This directly degrades response quality.
+
+> [!IMPORTANT]
+> **Fix:** The Gemini CLI does not currently expose a `--system-prompt-file` flag (confirmed via `gemini --help`). However, the CLI's own system prompt (`GEMINI_SYSTEM_PROMPT` env var or `~/.gemini/settings.json:systemPrompt`) may be configurable. Alternatively, we can write Barnaby's system prompt to `~/.gemini/AGENTS.md` or use the policy engine. **Research needed** to find the best injection point.
+
+---
+
+### 3. 🟡 Stale Model Normalization Map
+
+**Current:** [geminiClient.ts:78-88](file:///e:/Barnaby/barnaby-app/electron/main/geminiClient.ts#L78-L88)
+
+```typescript
+const legacyMap: Record<string, string> = {
+  'gemini-1.5-pro': 'pro',
+  'gemini-1.5-flash': 'flash',
+  'gemini-2.0-flash': 'flash',
+  'gemini-3-pro': 'pro',
+  'gemini-pro': 'flash',
+  'gemini-1.0-pro': 'flash',
+}
+```
+
+Problems:
+- **`gemini-2.5-pro` is missing** — so if the user selects it from the model picker, it passes through as `gemini-2.5-pro` to the CLI's `-m` flag. This *might* work if the CLI resolves it, but it's untested.
+- **`gemini-2.5-flash` is missing** — same issue.
+- **`gemini-3-pro` maps to [pro](file:///e:/Barnaby/barnaby-app/electron/main/claudeClient.ts#337-428)** — this is speculative and may not be correct.
+- The Claude client maps to simple aliases (`sonnet`, `opus`, `haiku`) which the CLI recognizes. The Gemini CLI appears to accept both full model names and short aliases but the map is inconsistent.
+
+> [!TIP]
+> **Fix:** Update the map to include all current models. Test what the Gemini CLI actually accepts for `-m` by running `gemini -m gemini-2.5-pro -p "test"` and checking if it works.
+
+---
+
+### 4. 🟡 No Windows Shim Resolution
+
+**Current:** [geminiClient.ts:203-209](file:///e:/Barnaby/barnaby-app/electron/main/geminiClient.ts#L203-L209) — spawns via `cmd.exe /c gemini`.
+
+**Claude comparison:** [claudeClient.ts:28-80](file:///e:/Barnaby/barnaby-app/electron/main/claudeClient.ts#L28-L80) — has 50 lines of careful Windows handling:
+1. Resolves `claude.cmd` npm shim to find the actual [.js](file:///e:/Barnaby/barnaby-app/tailwind.config.js) entry point
+2. Finds `node.exe` on PATH
+3. Spawns `node.exe script.js` directly, bypassing `cmd.exe`'s 8KB command-line limit
+
+The Gemini client doesn't do this. For short prompts piped via stdin this is unlikely to cause issues *today*, but it's a robustness gap.
+
+> [!NOTE]
+> **Fix:** Port the [resolveClaudeJsEntryPoint](file:///e:/Barnaby/barnaby-app/electron/main/claudeClient.ts#23-45) + [findNodeExe](file:///e:/Barnaby/barnaby-app/electron/main/claudeClient.ts#47-58) pattern to Gemini. The npm package is `@google/gemini-cli`, so look for `gemini.cmd` in `%APPDATA%/npm/`.
+
+---
+
+### 5. 🟡 No Auto-Reconnect on Process Death
+
+**Claude:** If the persistent process dies between turns, [sendUserMessage()](file:///e:/Barnaby/barnaby-app/electron/main/geminiClient.ts#173-185) automatically detects `!this.proc` and calls [spawnPersistentProcess()](file:///e:/Barnaby/barnaby-app/electron/main/claudeClient.ts#232-318) to reconnect transparently.
+
+**Codex:** The `codex app-server` process emits an `exit` event which triggers [cleanupAfterExit()](file:///e:/Barnaby/barnaby-app/electron/main/codexAppServerClient.ts#247-265) and surfaces a status error to the user.
+
+**Gemini:** Since it spawns a new process per turn anyway, "reconnection" isn't applicable — but if the `--resume` flag fails (e.g., session expired or corrupt), the entire turn fails with no retry logic except for model-not-found errors.
+
+---
+
+### 6. 🟢 Conversation History Handling
+
+**Gemini:** Manually truncates and serializes conversation history into the prompt text on first turn, then relies on `--resume` for subsequent turns. If `--resume` fails, history is lost.
+
+**Claude:** Keeps history in memory and rebuilds a transcript prompt via [buildPrompt()](file:///e:/Barnaby/barnaby-app/electron/main/claudeClient.ts#574-581). The persistent process maintains its own session context.
+
+**Codex:** Fully managed by the `codex app-server` — Barnaby just sends `turn/start` with the user's message and the server handles everything.
+
+---
+
+## Recommended Changes (Priority Order)
+
+### Phase 1: Quick Wins (Low Risk)
+
+1. **Update model normalization map** — add `gemini-2.5-pro`, `gemini-2.5-flash`, remove speculative entries
+2. **Add Windows shim resolution** — port the `resolveJsEntryPoint` pattern from Claude
+3. **Increase inactivity timeout** — Gemini 2.5 Pro is a thinking model and can take 30-60+ seconds on complex prompts; the current 120s timeout may be fine but worth monitoring
+
+### Phase 2: System Prompt Improvement (Medium Risk)
+
+4. **Investigate Gemini CLI system prompt injection** — check if `~/.gemini/settings.json` supports a `systemPrompt` field, or if `GEMINI_SYSTEM_PROMPT` env var exists
+5. **If no CLI support exists**, consider writing a `.gemini/AGENTS.md` file in the workspace root that the CLI will auto-load as instructions
+
+### Phase 3: Architecture Overhaul (High Impact, Higher Risk)
+
+6. **Convert to persistent process model** — investigate whether `gemini` CLI can run in interactive mode with `--output-format stream-json` and accept prompts on stdin (similar to Claude's `--input-format stream-json`). If so, rewrite [GeminiClient](file:///e:/Barnaby/barnaby-app/electron/main/geminiClient.ts#43-574) to match [ClaudeClient](file:///e:/Barnaby/barnaby-app/electron/main/claudeClient.ts#119-619)'s architecture.
+7. **If interactive streaming isn't supported**, investigate using the Gemini API directly (REST) instead of the CLI, similar to how [openRouterClient.ts](file:///e:/Barnaby/barnaby-app/electron/main/openRouterClient.ts) works. This would give full control over system instructions, streaming, and session management.
+
+---
+
+## Files That Need Changes
+
+| File | Change |
+|---|---|
+| [geminiClient.ts](file:///e:/Barnaby/barnaby-app/electron/main/geminiClient.ts) | Core rewrite — persistent process, system prompt, model map |
+| [systemPrompt.ts](file:///e:/Barnaby/barnaby-app/electron/main/systemPrompt.ts) | May need Gemini-specific prompt variant |
+| [constants/index.ts](file:///e:/Barnaby/barnaby-app/src/constants/index.ts) | Update Gemini model definitions if needed |
+
+---
+
+## Test Commands
+
+```bash
+# Check what models the CLI accepts
+gemini -m gemini-2.5-pro -p "say hello" --output-format stream-json
+
+# Check if interactive mode supports stream-json
+echo "hello" | gemini --output-format stream-json
+
+# Check if there's a system prompt config
+type %USERPROFILE%\.gemini\settings.json
+
+# Check CLI version
+gemini --version
+```

@@ -162,7 +162,6 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
           onChatLinkClick={ctx.onChatLinkClick}
           onGrantPermissionAndResend={() => ctx.grantPermissionAndResend(w.id)}
           onRecallLastUserMessage={() => ctx.recallLastUserMessage(w.id)}
-          onResendLastUserMessage={() => ctx.resendLastUserMessage(w.id)}
           onBeginQueuedMessageEdit={(i) => ctx.beginQueuedMessageEdit(w.id, i)}
           onInjectQueuedMessage={(i) => ctx.injectQueuedMessage(w.id, i)}
           onRemoveQueuedMessage={(i) => ctx.removeQueuedMessage(w.id, i)}
@@ -197,6 +196,9 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         modelConfig={ctx.modelConfig}
         providerAuthByName={ctx.providerAuthByName}
         providerVerifiedByName={ctx.providerVerifiedByName}
+        modelPingResults={ctx.modelPingResults}
+        modelPingPending={ctx.modelPingPending}
+        showOnlyResponsiveModels={ctx.showOnlyResponsiveModels}
         getModelProvider={ctx.getModelProvider}
         getModelOptions={ctx.getModelOptions}
         textareaRef={(el) => ctx.registerTextarea(w.id, el)}

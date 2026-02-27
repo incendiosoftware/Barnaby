@@ -32,6 +32,7 @@ export interface DockZoneProps {
   activeTab: DockPanelId | undefined
   content: React.ReactNode
   dockSide: 'left' | 'right' | 'bottom'
+  showCloseButtons?: boolean
   existingZones: SideDockZones | BottomDockZones
   draggingPanelId: string | null
   dragOverTarget: { zoneId: DockZoneId; hint: DropTargetHint } | null
@@ -51,6 +52,7 @@ export function DockZone({
   activeTab,
   content,
   dockSide,
+  showCloseButtons = true,
   existingZones,
   draggingPanelId,
   dragOverTarget,
@@ -105,6 +107,7 @@ export function DockZone({
             isActive={activeTab === panelId}
             onSelect={() => onTabSelect(panelId)}
             onClose={() => onTabClose(panelId)}
+            showCloseButton={showCloseButtons}
             onDragStart={(e) => onTabDragStart(e, panelId)}
             onDragEnd={onTabDragEnd}
             isDragging={draggingPanelId === panelId}

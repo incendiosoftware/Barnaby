@@ -15,12 +15,13 @@ import type {
 import { SendIcon, SpinnerIcon, StopIcon } from '../icons'
 import {
   formatRateLimitLabel,
+  getModelPingKey,
   getRateLimitPercent,
 } from '../../utils/appCore'
 import { INTERACTION_MODE_META, PANEL_INTERACTION_MODES, STATUS_SYMBOL_ICON_CLASS } from '../../constants'
 
 type InputDraftEditState = { kind: 'queued'; index: number } | { kind: 'recalled' }
-type SettingsPopover = 'mode' | 'sandbox' | 'permission' | null
+type SettingsPopover = 'mode' | 'sandbox' | 'permission' | 'model' | null
 
 export interface ContextUsageInfo {
   modelContextTokens: number
@@ -138,6 +139,9 @@ export interface ChatInputSectionProps {
   modelConfig: ModelConfig
   providerAuthByName: Partial<Record<string, ProviderAuthStatus>>
   providerVerifiedByName: Record<string, boolean>
+  modelPingResults: Record<string, { ok: boolean; durationMs: number; error?: string }>
+  modelPingPending: Set<string>
+  showOnlyResponsiveModels: boolean
   getModelProvider: (model: string) => ModelProvider
   getModelOptions: (includeCurrent?: string, filterProvider?: ModelProvider) => string[]
   textareaRef: (el: HTMLTextAreaElement | null) => void
@@ -186,6 +190,9 @@ export function ChatInputSection({
   modelConfig,
   providerAuthByName,
   providerVerifiedByName,
+  modelPingResults,
+  modelPingPending,
+  showOnlyResponsiveModels,
   getModelProvider,
   getModelOptions,
   textareaRef,
@@ -512,10 +519,29 @@ export function ChatInputSection({
               </div>
             )}
           </div>
-          <div className="rounded-md border border-neutral-200/70 bg-neutral-50/75 px-1.5 py-1 dark:border-neutral-800 dark:bg-neutral-900/60">
-            <div className="flex items-center gap-1.5">
-              {(() => {
-                const prov = getModelProvider(panel.model)
+          <div className="relative" data-settings-popover-root="true">
+            {(() => {
+              const renderModelStatusDot = (modelId: string) => {
+                const prov = getModelProvider(modelId)
+                const key = getModelPingKey(prov, modelId)
+                const pending = modelPingPending.has(key)
+                const ping = modelPingResults[key]
+                if (pending) {
+                  return (
+                    <svg className="h-2 w-2 shrink-0 animate-spin text-neutral-400" viewBox="0 0 16 16" fill="none" aria-label="Testing...">
+                      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2" />
+                      <path d="M8 2a6 6 0 0 1 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  )
+                }
+                if (ping) {
+                  return (
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full shrink-0 ${ping.ok ? 'bg-emerald-500' : 'bg-red-500'}`}
+                      title={ping.ok ? `Working (${ping.durationMs}ms)` : (ping.error ?? 'Failed')}
+                    />
+                  )
+                }
                 const pStatus = providerAuthByName[prov]
                 const pVerified = providerVerifiedByName[prov]
                 const dotCls = !pStatus
@@ -538,19 +564,53 @@ export function ChatInputSection({
                     title={dotTitle}
                   />
                 )
-              })()}
-              <select
-                className="h-7 max-w-full text-[11px] rounded border border-neutral-300 bg-white text-neutral-900 px-1.5 py-0.5 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
-                value={panel.model}
-                onChange={(e) => onSwitchModel(e.target.value)}
-              >
-                {getModelOptions(panel.model, panel.provider).map((id) => (
-                  <option key={id} value={id}>
-                    {id}
-                  </option>
-                ))}
-              </select>
-            </div>
+              }
+              return (
+                <>
+                  <button
+                    type="button"
+                    className={[
+                      'h-7 inline-flex items-center gap-1.5 rounded-md border px-1.5 text-[11px] transition-colors',
+                      settingsPopover === 'model'
+                        ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
+                        : 'border-neutral-200/70 bg-neutral-50/75 text-neutral-700 hover:bg-neutral-100 dark:border-neutral-800 dark:bg-neutral-900/60 dark:text-neutral-200 dark:hover:bg-neutral-800',
+                    ].join(' ')}
+                    title={`Model: ${panel.model}`}
+                    onClick={() => setSettingsPopover(settingsPopover === 'model' ? null : 'model')}
+                  >
+                    {renderModelStatusDot(panel.model)}
+                    <span className="max-w-[160px] truncate">{panel.model}</span>
+                  </button>
+                  {settingsPopover === 'model' && (
+                    <div className="absolute right-0 bottom-[calc(100%+6px)] z-[120] w-72 max-h-64 overflow-y-auto rounded-lg border border-neutral-300/90 bg-neutral-50/95 p-1.5 text-neutral-800 shadow-2xl ring-1 ring-black/10 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:ring-white/10">
+                      {getModelOptions(panel.model, panel.provider).filter((id) => {
+                        if (!showOnlyResponsiveModels) return true
+                        const modelPingKey = getModelPingKey(panel.provider, id)
+                        const ping = modelPingResults[modelPingKey]
+                        const pending = modelPingPending.has(modelPingKey)
+                        // Show if not pending and (no ping yet or ping is ok)
+                        return !pending && (ping === null || ping === undefined || ping.ok === true)
+                      }).map((id) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className={[
+                            'w-full flex items-center gap-2 appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded',
+                            id === panel.model
+                              ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
+                              : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
+                          ].join(' ')}
+                          onClick={() => { onSwitchModel(id); setSettingsPopover(null) }}
+                        >
+                          {renderModelStatusDot(id)}
+                          <span className="truncate">{id}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )
+            })()}
           </div>
         </div>
       </div>

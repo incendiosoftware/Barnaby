@@ -36,7 +36,7 @@ function DebugOutputPanel({ api, onClose }: { api: { getDebugLogContent?: () => 
       try {
         const r = await api.getDebugLogContent?.()
         if (r?.ok && r.content) setLogContent(r.content)
-      } catch {}
+      } catch { }
       if (!cancelled) setTimeout(poll, 2000)
     }
     poll()
@@ -222,6 +222,7 @@ import { createWorkspaceLifecycleController } from './controllers/workspaceLifec
 import { AgentPanelHeader } from './components/panels/AgentPanelHeader'
 import { EditorPanel } from './components/panels/EditorPanel'
 import { WorkspaceTile } from './components/workspace/WorkspaceTile'
+import { OrchestratorPane } from './components/workspace/OrchestratorPane'
 import { AgentPanelShell } from './components/panels/AgentPanelShell'
 import { CodeWindowTile } from './components/panels/CodeWindowTile'
 import { PanelContentRenderer } from './components/panels/PanelContentRenderer'
@@ -363,6 +364,7 @@ export default function App() {
   const [applicationSettings, setApplicationSettings] = useState<ApplicationSettings>(() => getInitialApplicationSettings())
   const [themeOverrides, setThemeOverrides] = useState<ThemeOverrides>(() => getInitialThemeOverrides())
   const [selectedThemeEditorId, setSelectedThemeEditorId] = useState<string>(() => getInitialThemeId())
+  const [showOnlyResponsiveModels, setShowOnlyResponsiveModels] = useState(true)
   const [themeEditorDraft, setThemeEditorDraft] = useState<StandaloneTheme | null>(null)
   const [themeEditorStatus, setThemeEditorStatus] = useState<string | null>(null)
   const [diagnosticsInfo, setDiagnosticsInfo] = useState<{
@@ -398,7 +400,7 @@ export default function App() {
     provider: 'codex',
     enabled: true,
   })
-  const [loadedPlugins, setLoadedPlugins] = useState<Array<{ pluginId: string; displayName: string; version: string; active: boolean }> | null>(null)
+  const [loadedPlugins, setLoadedPlugins] = useState<Array<{ pluginId: string; displayName: string; version: string; active: boolean; licensed: boolean }> | null>(null)
   const [orchestratorSettings, setOrchestratorSettings] = useState<OrchestratorSettings>(() => getInitialOrchestratorSettings())
   const [orchestratorLicenseKeyState, setOrchestratorLicenseKeyState] = useState<{ hasKey: boolean } | null>(null)
   const [orchestratorLicenseKeyDraft, setOrchestratorLicenseKeyDraft] = useState('')
@@ -445,7 +447,7 @@ export default function App() {
   const [lastPromptDurationMsByPanel, setLastPromptDurationMsByPanel] = useState<Record<string, number>>({})
   const [panelTurnCompleteAtById, setPanelTurnCompleteAtById] = useState<Record<string, number>>({})
   type InputDraftEditState = { kind: 'queued'; index: number } | { kind: 'recalled' }
-  const [settingsPopoverByPanel, setSettingsPopoverByPanel] = useState<Record<string, 'mode' | 'sandbox' | 'permission' | null>>({})
+  const [settingsPopoverByPanel, setSettingsPopoverByPanel] = useState<Record<string, 'mode' | 'sandbox' | 'permission' | 'model' | null>>({})
   const [inputDraftEditByPanel, setInputDraftEditByPanel] = useState<Record<string, InputDraftEditState | null>>({})
   const [codeBlockOpenById, setCodeBlockOpenById] = useState<Record<string, boolean>>({})
   const [timelineOpenByUnitId, setTimelineOpenByUnitId] = useState<Record<string, boolean>>({})
@@ -500,7 +502,7 @@ export default function App() {
         if (CODEX_API_MODELS.includes(m.id)) codexApi.push(m.id)
         else codexCli.push(m.id)
       } else {
-        ;(byProvider[m.provider] ??= []).push(m.id)
+        ; (byProvider[m.provider] ??= []).push(m.id)
       }
     }
     if (codexCli.length) groups.push({ label: 'OpenAI (CLI)', modelIds: codexCli })
@@ -636,10 +638,10 @@ export default function App() {
   }
   const dockTab: 'orchestrator' | 'explorer' | 'git' | 'settings' =
     activeTab['left-bottom'] === 'workspace-folder' ? 'explorer'
-    : activeTab['left-bottom'] === 'workspace-settings' ? 'settings'
-    : activeTab.right === 'source-control' || activeTab['right-top'] === 'source-control' || activeTab['right-bottom'] === 'source-control' ? 'git'
-    : activeTab['left-top'] === 'orchestrator' ? 'orchestrator'
-    : 'explorer'
+      : activeTab['left-bottom'] === 'workspace-settings' ? 'settings'
+        : activeTab.right === 'source-control' || activeTab['right-top'] === 'source-control' || activeTab['right-bottom'] === 'source-control' ? 'git'
+          : activeTab['left-top'] === 'orchestrator' ? 'orchestrator'
+            : 'explorer'
   const setDockTab = (tabOrUpdater: React.SetStateAction<'orchestrator' | 'explorer' | 'git' | 'settings'>) => {
     const tab = typeof tabOrUpdater === 'function' ? tabOrUpdater(dockTab) : tabOrUpdater
     setDockLayout((p) => {
@@ -659,9 +661,9 @@ export default function App() {
   const workspaceDockSide: WorkspaceDockSide = 'left'
   const gitDockSide: WorkspaceDockSide = 'right'
   const settingsDockSide: WorkspaceDockSide = 'right'
-  const setWorkspaceDockSide = (_?: unknown) => {}
-  const setGitDockSide = (_?: unknown) => {}
-  const setSettingsDockSide = (_?: unknown) => {}
+  const setWorkspaceDockSide = (_?: unknown) => { }
+  const setGitDockSide = (_?: unknown) => { }
+  const setSettingsDockSide = (_?: unknown) => { }
   const showCodeWindow = showSettingsWindow
   const setShowCodeWindow = setShowSettingsWindow
   const showTerminalBar = showBottomDock
@@ -677,8 +679,8 @@ export default function App() {
         return { ...prev, zones: z }
       }
       if (!('bottom' in z) && !('bottom-left' in z) && !('bottom-right' in z)) {
-        z.bottom = []
-        return { ...prev, zones: z }
+        z.bottom = ['terminal', 'debug-output']
+        return { ...prev, zones: z, activeTab: { ...layout.activeTab, bottom: 'terminal' } }
       }
       return prev
     })
@@ -782,7 +784,7 @@ export default function App() {
   }, [themeCatalog, selectedThemeEditorId, applicationSettings.themeId])
   useEffect(() => {
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
-    void api.setWindowTheme?.(effectiveTheme).catch(() => {})
+    void api.setWindowTheme?.(effectiveTheme).catch(() => { })
   }, [api, effectiveTheme])
   useEffect(() => {
     const root = document.documentElement
@@ -836,7 +838,7 @@ export default function App() {
     return () => { cancelled = true }
   }, [api])
   useEffect(() => {
-    void api.saveChatHistory?.(chatHistory).catch(() => {})
+    void api.saveChatHistory?.(chatHistory).catch(() => { })
   }, [api, chatHistory])
 
   // ── Ref syncs ─────────────────────────────────────────────────────
@@ -877,12 +879,12 @@ export default function App() {
         normalizeWorkspacePathForCompare(p.cwd) === normalizeWorkspacePathForCompare(workspaceRoot)
           ? p
           : {
-              ...p,
-              cwd: workspaceRoot,
-              connected: false,
-              streaming: false,
-              status: 'Workspace changed. Reconnect on next send.',
-            },
+            ...p,
+            cwd: workspaceRoot,
+            connected: false,
+            streaming: false,
+            status: 'Workspace changed. Reconnect on next send.',
+          },
       ),
     )
   }, [workspaceRoot])
@@ -976,7 +978,7 @@ export default function App() {
           setShowSettingsWindow(() => restored.showSettingsWindow!)
         }
         if (restored.codeWindowTab) setCodeWindowTab(restored.codeWindowTab)
-        if (restored.layoutMode) setLayoutMode(restored.layoutMode)
+        setLayoutMode('vertical')
         if (restored.dockTab) setDockTab(restored.dockTab)
         if (restored.workspaceDockSide) setWorkspaceDockSide(restored.workspaceDockSide)
         if (restored.gitDockSide) setGitDockSide(restored.gitDockSide)
@@ -1287,7 +1289,7 @@ export default function App() {
         applicationSettings,
         themeOverrides,
       }
-      void api.saveAppState(payload).catch(() => {})
+      void api.saveAppState(payload).catch(() => { })
       appStateSaveTimerRef.current = null
     }, APP_STATE_AUTOSAVE_MS)
 
@@ -1423,9 +1425,9 @@ export default function App() {
           p.id !== panelId
             ? p
             : {
-                ...p,
-                messages: [...p.messages, { id: newId(), role: 'system', content: notice, format: 'text', createdAt: Date.now() }],
-              },
+              ...p,
+              messages: [...p.messages, { id: newId(), role: 'system', content: notice, format: 'text', createdAt: Date.now() }],
+            },
         ),
       )
     })
@@ -1711,14 +1713,14 @@ export default function App() {
     if (!workspaceBootstrapComplete) return
     if (workspaceTreeLoading || gitStatusLoading) return
     startupReadyNotifiedRef.current = true
-    void api.notifyRendererReady?.().catch(() => {})
+    void api.notifyRendererReady?.().catch(() => { })
   }, [api, appStateHydrated, workspaceBootstrapComplete, workspaceTreeLoading, gitStatusLoading])
 
   useEffect(
     () => () => {
       const lockedRoot = activeWorkspaceLockRef.current
       if (!lockedRoot) return
-      void api.releaseWorkspace(lockedRoot).catch(() => {})
+      void api.releaseWorkspace(lockedRoot).catch(() => { })
       activeWorkspaceLockRef.current = ''
     },
     [api],
@@ -1760,6 +1762,16 @@ export default function App() {
     }
     const panelId = newId()
     const restoredMessages = cloneChatMessages(stripSyntheticAutoContinueMessages(entry.messages))
+
+    // Add a synthetic message indicating that historical chats are read-only
+    restoredMessages.push({
+      id: newId(),
+      role: 'system',
+      content: 'This chat was loaded from history and is locked (read-only). To continue, start a new chat.',
+      format: 'text',
+      createdAt: Date.now(),
+    })
+
     setPanels((prev) => {
       if (prev.length >= MAX_PANELS) return prev
       const model = entry.model || DEFAULT_MODEL
@@ -1772,10 +1784,10 @@ export default function App() {
           cwd: entry.workspaceRoot || workspaceRoot,
           provider: getModelProvider(model),
           model,
-          interactionMode: 'agent',
+          interactionMode: 'agent', // Keep as 'agent' (Valid modes: agent, plan, ask, debug)
           permissionMode: entry.permissionMode,
-          sandbox: entry.sandbox,
-          status: `Loaded from history (${new Date(entry.savedAt).toLocaleString()})`,
+          sandbox: 'read-only', // Force read-only for historical chats
+          status: `Locked — Loaded from history (${new Date(entry.savedAt).toLocaleString()})`,
           connected: false,
           streaming: false,
           messages: restoredMessages,
@@ -1939,9 +1951,9 @@ export default function App() {
       prev.map((p) =>
         p.id === panelId
           ? {
-              ...p,
-              fontScale: getNextFontScale(p.fontScale, deltaY),
-            }
+            ...p,
+            fontScale: getNextFontScale(p.fontScale, deltaY),
+          }
           : p,
       ),
     )
@@ -1952,9 +1964,9 @@ export default function App() {
       prev.map((p) =>
         p.id === editorId
           ? {
-              ...p,
-              fontScale: getNextFontScale(p.fontScale, deltaY),
-            }
+            ...p,
+            fontScale: getNextFontScale(p.fontScale, deltaY),
+          }
           : p,
       ),
     )
@@ -2057,9 +2069,9 @@ export default function App() {
           p.id !== agentWindowId
             ? p
             : {
-                ...p,
-                messages: [...p.messages, { id: newId(), role: 'system', content: debugLine, format: 'text', createdAt: Date.now() }],
-              },
+              ...p,
+              messages: [...p.messages, { id: newId(), role: 'system', content: debugLine, format: 'text', createdAt: Date.now() }],
+            },
         ),
       )
     })
@@ -2180,8 +2192,8 @@ export default function App() {
   useEffect(() => {
     const fetchPlugins = () => {
       api.getLoadedPlugins?.().then((list) => {
-        setLoadedPlugins(list ?? [])
-      }).catch(() => setLoadedPlugins([]))
+        setLoadedPlugins((list ?? []).map((p) => ({ ...p, licensed: (p as any).licensed ?? true })))
+      }).catch(() => setLoadedPlugins(null))
     }
     if (dockTab === 'orchestrator') {
       fetchPlugins()
@@ -2337,7 +2349,7 @@ export default function App() {
     () =>
       createEditorFileController({
         workspaceRoot,
-        setShowCodeWindow: () => {}, // Editor panels no longer require showing a specific dock window
+        setShowCodeWindow: () => { }, // Editor panels no longer require showing a specific dock window
         setCodeWindowTab,
         setEditorPanels,
         setFocusedEditor,
@@ -2987,72 +2999,72 @@ export default function App() {
         ? renderAgentOrchestratorPane()
         : dockTab === 'explorer'
           ? (
-              <ExplorerPane
-                workspaceTree={workspaceTree}
-                workspaceTreeLoading={workspaceTreeLoading}
-                workspaceTreeError={workspaceTreeError}
-                workspaceTreeTruncated={workspaceTreeTruncated}
-                showHiddenFiles={showHiddenFiles}
-                showNodeModules={showNodeModules}
-                onExplorerPrefsChange={setExplorerPrefs}
-                onRefresh={() => void refreshWorkspaceTree()}
-                onExpandAll={expandAllDirectories}
-                onCollapseAll={collapseAllDirectories}
-                expandedDirectories={expandedDirectories}
-                isDirectoryExpanded={isDirectoryExpanded}
-                onToggleDirectory={toggleDirectory}
-                selectedWorkspaceFile={selectedWorkspaceFile}
-                onSelectFile={setSelectedWorkspaceFile}
-                onOpenFile={(relativePath) => void openEditorForRelativePath(relativePath)}
-                onOpenContextMenu={openExplorerContextMenu}
-                onCloseGitContextMenu={() => setGitContextMenu(null)}
-              />
-            )
+            <ExplorerPane
+              workspaceTree={workspaceTree}
+              workspaceTreeLoading={workspaceTreeLoading}
+              workspaceTreeError={workspaceTreeError}
+              workspaceTreeTruncated={workspaceTreeTruncated}
+              showHiddenFiles={showHiddenFiles}
+              showNodeModules={showNodeModules}
+              onExplorerPrefsChange={setExplorerPrefs}
+              onRefresh={() => void refreshWorkspaceTree()}
+              onExpandAll={expandAllDirectories}
+              onCollapseAll={collapseAllDirectories}
+              expandedDirectories={expandedDirectories}
+              isDirectoryExpanded={isDirectoryExpanded}
+              onToggleDirectory={toggleDirectory}
+              selectedWorkspaceFile={selectedWorkspaceFile}
+              onSelectFile={setSelectedWorkspaceFile}
+              onOpenFile={(relativePath) => void openEditorForRelativePath(relativePath)}
+              onOpenContextMenu={openExplorerContextMenu}
+              onCloseGitContextMenu={() => setGitContextMenu(null)}
+            />
+          )
           : dockTab === 'git'
             ? (
-                <GitPane
-                  gitStatus={gitStatus}
-                  gitStatusLoading={gitStatusLoading}
-                  gitStatusError={gitStatusError}
-                  gitOperationPending={gitOperationPending}
-                  gitOperationSuccess={gitOperationSuccess}
-                  workspaceRoot={workspaceRoot ?? ''}
-                  resolvedSelectedPaths={resolveGitSelection()}
-                  onRunOperation={(op) => void runGitOperation(op)}
-                  onRefresh={() => void refreshGitStatus()}
-                  onEntryClick={handleGitEntryClick}
-                  onEntryDoubleClick={(relativePath) => void openEditorForRelativePath(relativePath)}
-                  onEntryContextMenu={openGitContextMenu}
-                />
-              )
+              <GitPane
+                gitStatus={gitStatus}
+                gitStatusLoading={gitStatusLoading}
+                gitStatusError={gitStatusError}
+                gitOperationPending={gitOperationPending}
+                gitOperationSuccess={gitOperationSuccess}
+                workspaceRoot={workspaceRoot ?? ''}
+                resolvedSelectedPaths={resolveGitSelection()}
+                onRunOperation={(op) => void runGitOperation(op)}
+                onRefresh={() => void refreshGitStatus()}
+                onEntryClick={handleGitEntryClick}
+                onEntryDoubleClick={(relativePath) => void openEditorForRelativePath(relativePath)}
+                onEntryContextMenu={openGitContextMenu}
+              />
+            )
             : (
-                <WorkspaceSettingsPane
-                  workspaceForm={workspaceForm}
-                  workspaceFormTextDraft={workspaceFormTextDraft}
-                  modelOptions={getModelOptions(workspaceForm.defaultModel)}
-                  onPathChange={(path) => setWorkspaceForm((prev) => ({ ...prev, path }))}
-                  onPathBlur={(path) => {
-                    const next = workspaceSettings.normalizeWorkspaceSettingsForm({ ...workspaceForm, path })
-                    if (!next.path) return
-                    void workspaceSettings.persistWorkspaceSettings(next, { requestSwitch: true })
-                  }}
-                  onBrowse={browseForWorkspaceIntoForm}
-                  onDefaultModelChange={(value) =>
-                    workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, defaultModel: value }))
-                  }
-                  onSandboxChange={(value) =>
-                    workspaceSettings.updateDockedWorkspaceForm((prev) => ({
-                      ...prev,
-                      sandbox: value,
-                      permissionMode: value === 'read-only' ? 'verify-first' : prev.permissionMode,
-                    }))
-                  }
-                  onPermissionModeChange={(value) =>
-                    workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, permissionMode: value }))
-                  }
-                  onTextDraftChange={workspaceSettings.updateDockedWorkspaceTextDraft}
-                />
-              )
+              <WorkspaceSettingsPane
+                workspaceForm={workspaceForm}
+                workspaceFormTextDraft={workspaceFormTextDraft}
+                modelOptions={getModelOptions(workspaceForm.defaultModel)}
+                onPathChange={(path) => setWorkspaceForm((prev) => ({ ...prev, path }))}
+                onPathBlur={(path) => {
+                  const next = workspaceSettings.normalizeWorkspaceSettingsForm({ ...workspaceForm, path })
+                  if (!next.path) return
+                  void workspaceSettings.persistWorkspaceSettings(next, { requestSwitch: true })
+                }}
+                onBrowse={browseForWorkspaceIntoForm}
+                onDefaultModelChange={(value) =>
+                  workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, defaultModel: value }))
+                }
+                onSandboxChange={(value) =>
+                  workspaceSettings.updateDockedWorkspaceForm((prev) => ({
+                    ...prev,
+                    sandbox: value,
+                    permissionMode: value === 'read-only' ? 'verify-first' : prev.permissionMode,
+                  }))
+                }
+                onPermissionModeChange={(value) =>
+                  workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, permissionMode: value }))
+                }
+                onTextDraftChange={workspaceSettings.updateDockedWorkspaceTextDraft}
+              />
+            )
     return (
       <WorkspaceTile
         dockTab={dockTab}
@@ -3157,7 +3169,7 @@ export default function App() {
         onDrop={(e) => showSettingsWindow && handleDockDrop(e, dragOverTarget)}
         onDragStart={(e) => showSettingsWindow && handleDragStart(e, 'workspace', 'git-window')}
         onDragEnd={handleDragEnd}
-        onWheel={() => {}}
+        onWheel={() => { }}
         onDockTabChange={(tab) => setDockTab(tab)}
         onWorkspaceSettingsTab={workspaceSettings.openWorkspaceSettingsTab}
         onDockSideToggle={() => setGitDockSide((prev: 'left' | 'right') => (prev === 'right' ? 'left' : 'right'))}
@@ -3184,7 +3196,7 @@ export default function App() {
         onDrop={(e) => showSettingsWindow && handleDockDrop(e, dragOverTarget)}
         onDragStart={(e) => showSettingsWindow && handleDragStart(e, 'workspace', 'settings-window')}
         onDragEnd={handleDragEnd}
-        onWheel={() => {}}
+        onWheel={() => { }}
         onDockTabChange={(tab) => setDockTab(tab)}
         onWorkspaceSettingsTab={workspaceSettings.openWorkspaceSettingsTab}
         onDockSideToggle={() => setSettingsDockSide((prev: 'left' | 'right') => (prev === 'right' ? 'left' : 'right'))}
@@ -3363,6 +3375,20 @@ export default function App() {
   function renderAgentOrchestratorPane() {
     const orchestratorPlugin = loadedPlugins?.find((p) => p.pluginId === 'orchestrator')
     const pluginInstalled = Boolean(orchestratorPlugin?.active)
+
+    // When plugin is active, render the full orchestrator UI
+    if (pluginInstalled && orchestratorPlugin) {
+      return (
+        <OrchestratorPane
+          pluginDisplayName={orchestratorPlugin.displayName ?? 'Orchestrator'}
+          pluginVersion={orchestratorPlugin.version ?? '?'}
+          licensed={orchestratorPlugin.licensed ?? false}
+          onOpenSettings={() => openAppSettingsInRightDock('orchestrator')}
+        />
+      )
+    }
+
+    // Fallback: plugin not installed
     return (
       <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
         <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
@@ -3386,16 +3412,8 @@ export default function App() {
           </p>
           <div className="mt-2.5 flex flex-col gap-2">
             <div className="flex items-center gap-1.5">
-              <span
-                className={`inline-block w-2 h-2 rounded-full shrink-0 ${
-                  pluginInstalled ? 'bg-green-500 dark:bg-green-600' : 'bg-neutral-300 dark:bg-neutral-600'
-                }`}
-              />
-              <span className="text-neutral-500 dark:text-neutral-400">
-                {pluginInstalled
-                  ? `Plugin: ${orchestratorPlugin?.displayName ?? 'Orchestrator'} v${orchestratorPlugin?.version ?? '?'}`
-                  : 'Plugin: not installed'}
-              </span>
+              <span className="inline-block w-2 h-2 rounded-full shrink-0 bg-neutral-300 dark:bg-neutral-600" />
+              <span className="text-neutral-500 dark:text-neutral-400">Plugin: not installed</span>
             </div>
             <button
               type="button"
@@ -3415,10 +3433,9 @@ export default function App() {
     : 0
   const gitContextFileCountLabel = `${gitContextSelectedCount} ${gitContextSelectedCount === 1 ? 'file' : 'files'}`
   const headerDockToggleButtonClass = (isActive: boolean) =>
-    `h-9 w-9 inline-flex items-center justify-center rounded-lg border shrink-0 ${
-      isActive
-        ? 'shadow-inner bg-neutral-200 border-neutral-400 text-neutral-800 dark:bg-neutral-700 dark:border-neutral-600 dark:text-neutral-100'
-        : 'border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+    `h-9 w-9 inline-flex items-center justify-center rounded-lg border shrink-0 ${isActive
+      ? 'shadow-inner bg-neutral-200 border-neutral-400 text-neutral-800 dark:bg-neutral-700 dark:border-neutral-600 dark:text-neutral-100'
+      : 'border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
     }`
   const workspaceDockButtonOnLeft = true
   const toolsDockButtonsOnLeft = false
@@ -3471,121 +3488,122 @@ export default function App() {
         openChatFromHistory={openChatFromHistory}
         formatHistoryOptionLabel={formatHistoryOptionLabel}
         setDeleteHistoryIdPending={setDeleteHistoryIdPending}
-        createAgentPanel={() => createAgentPanel()}
+        createAgentPanel={(opts) => createAgentPanel(opts)}
         layoutMode={layoutMode}
         setLayoutMode={setLayoutMode}
+        modelInterfaces={modelConfig.interfaces.filter(m => m.enabled)}
       />
 
       <div className="flex-1 flex flex-col min-h-0 min-w-0">
         <div className="relative flex-1 min-h-0 min-w-0 bg-gradient-to-b from-neutral-100/90 to-neutral-100/60 dark:from-neutral-900 dark:to-neutral-950">
           <div ref={layoutRef} className="h-full flex flex-col min-h-0 min-w-0">
-          {(() => {
-            const contentPaneIds = [
-              ...panels.map((p) => p.id),
-              ...editorPanels.map((p) => p.id),
-            ]
-            const leftDockPanels = showLeftDock ? ['left-dock'] : []
-            const rightDockPanels = showRightDock ? ['right-dock'] : []
-            
-            const layoutPaneIds = [...leftDockPanels, ...contentPaneIds, ...rightDockPanels]
-            if (layoutPaneIds.length === 1) {
-              const id = layoutPaneIds[0]
-              if (id === 'left-dock' || id === 'right-dock') {
-                return (
-                  <div className="flex-1 min-h-0 min-w-0 overflow-hidden px-3 py-3">
-                    <div className="h-full min-h-0 max-w-full" style={{ width: id === 'left-dock' ? '22%' : '28%' }}>
-                      {renderLayoutPane(id)}
+            {(() => {
+              const contentPaneIds = [
+                ...panels.map((p) => p.id),
+                ...editorPanels.map((p) => p.id),
+              ]
+              const leftDockPanels = showLeftDock ? ['left-dock'] : []
+              const rightDockPanels = showRightDock ? ['right-dock'] : []
+
+              const layoutPaneIds = [...leftDockPanels, ...contentPaneIds, ...rightDockPanels]
+              if (layoutPaneIds.length === 1) {
+                const id = layoutPaneIds[0]
+                if (id === 'left-dock' || id === 'right-dock') {
+                  return (
+                    <div className="flex-1 min-h-0 min-w-0 overflow-hidden px-3 py-3">
+                      <div className="h-full min-h-0 max-w-full" style={{ width: id === 'left-dock' ? '22%' : '28%' }}>
+                        {renderLayoutPane(id)}
+                      </div>
                     </div>
-                  </div>
-                )
+                  )
+                }
+                return <div className="flex-1 min-h-0 min-w-0 overflow-hidden">{renderLayoutPane(id)}</div>
               }
-              return <div className="flex-1 min-h-0 min-w-0 overflow-hidden">{renderLayoutPane(id)}</div>
-            }
-            // Tile vertical, horizontal, and grid: sidebars honour workspaceDockSide; only agent panels are tiled.
-            const leftPaneId = leftDockPanels.length > 0 ? 'left-dock' : null
-            const rightPaneId = rightDockPanels.length > 0 ? 'right-dock' : null
-            const paneFlowOrientation = layoutMode === 'horizontal' ? 'vertical' : 'horizontal'
-            const layoutGroupKey = `${layoutMode}:${leftDockPanels.join(',')}:${rightDockPanels.join(',')}:${contentPaneIds.join('|')}`
-            const contentPane =
-              contentPaneIds.length === 0 ? null : contentPaneIds.length === 1 ? (
-                <div className="h-full min-h-0 overflow-hidden">{renderLayoutPane(contentPaneIds[0])}</div>
-              ) : layoutMode === 'grid' ? (
-                renderGridLayout(contentPaneIds as string[])
-              ) : (
-                <Group orientation={paneFlowOrientation} className="h-full min-h-0 min-w-0" id="content-tiles">
-                  {(contentPaneIds as string[]).map((panelId, idx) => (
-                    <React.Fragment key={panelId}>
-                      {idx > 0 && (
-                        <Separator
-                          className={
-                            paneFlowOrientation === 'horizontal'
-                              ? 'w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
-                              : 'h-1 min-h-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
-                          }
-                        />
-                      )}
+              // Tile vertical, horizontal, and grid: sidebars honour workspaceDockSide; only agent panels are tiled.
+              const leftPaneId = leftDockPanels.length > 0 ? 'left-dock' : null
+              const rightPaneId = rightDockPanels.length > 0 ? 'right-dock' : null
+              const paneFlowOrientation = layoutMode === 'horizontal' ? 'vertical' : 'horizontal'
+              const layoutGroupKey = `${layoutMode}:${leftDockPanels.join(',')}:${rightDockPanels.join(',')}:${contentPaneIds.join('|')}`
+              const contentPane =
+                contentPaneIds.length === 0 ? null : contentPaneIds.length === 1 ? (
+                  <div className="h-full min-h-0 overflow-hidden">{renderLayoutPane(contentPaneIds[0])}</div>
+                ) : layoutMode === 'grid' ? (
+                  renderGridLayout(contentPaneIds as string[])
+                ) : (
+                  <Group orientation={paneFlowOrientation} className="h-full min-h-0 min-w-0" id="content-tiles">
+                    {(contentPaneIds as string[]).map((panelId, idx) => (
+                      <React.Fragment key={panelId}>
+                        {idx > 0 && (
+                          <Separator
+                            className={
+                              paneFlowOrientation === 'horizontal'
+                                ? 'w-1 min-w-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
+                                : 'h-1 min-h-1 bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500'
+                            }
+                          />
+                        )}
+                        <Panel
+                          id={`panel-${panelId}`}
+                          defaultSize={`${100 / contentPaneIds.length}`}
+                          minSize="15"
+                          className="min-h-0 min-w-0"
+                        >
+                          {renderLayoutPane(panelId)}
+                        </Panel>
+                      </React.Fragment>
+                    ))}
+                  </Group>
+                )
+              return (
+                <Group key={layoutGroupKey} orientation="horizontal" className="flex-1 min-h-0 min-w-0" id="main-layout">
+                  {leftPaneId && (
+                    <>
                       <Panel
-                        id={`panel-${panelId}`}
-                        defaultSize={`${100 / contentPaneIds.length}`}
+                        id={`panel-${leftPaneId}`}
+                        defaultSize="15"
                         minSize="15"
+                        maxSize="55"
                         className="min-h-0 min-w-0"
                       >
-                        {renderLayoutPane(panelId)}
+                        <div className="h-full flex flex-col min-h-0 overflow-hidden">
+                          {leftDockPanels.map((id, idx) => (
+                            <React.Fragment key={id}>
+                              {idx > 0 && <div className="h-px shrink-0 bg-neutral-200 dark:bg-neutral-700" />}
+                              <div className="flex-1 min-h-0 overflow-hidden">{renderLayoutPane(id)}</div>
+                            </React.Fragment>
+                          ))}
+                        </div>
                       </Panel>
-                    </React.Fragment>
-                  ))}
+                      <Separator className="w-1 min-w-1 cursor-col-resize bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
+                    </>
+                  )}
+                  <Panel id="panel-content-tiled" defaultSize={leftPaneId && rightPaneId ? '70' : leftPaneId || rightPaneId ? '85' : '100'} minSize="20" className="min-h-0 min-w-0">
+                    {contentPane}
+                  </Panel>
+                  {rightPaneId && (
+                    <>
+                      <Separator className="w-1 min-w-1 cursor-col-resize bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
+                      <Panel
+                        id={`panel-${rightPaneId}`}
+                        defaultSize="15"
+                        minSize="15"
+                        maxSize="55"
+                        className="min-h-0 min-w-0"
+                      >
+                        <div className="h-full flex flex-col min-h-0 overflow-hidden">
+                          {rightDockPanels.map((id, idx) => (
+                            <React.Fragment key={id}>
+                              {idx > 0 && <div className="h-px shrink-0 bg-neutral-200 dark:bg-neutral-700" />}
+                              <div className="flex-1 min-h-0 overflow-hidden">{renderLayoutPane(id)}</div>
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      </Panel>
+                    </>
+                  )}
                 </Group>
               )
-            return (
-              <Group key={layoutGroupKey} orientation="horizontal" className="flex-1 min-h-0 min-w-0" id="main-layout">
-                {leftPaneId && (
-                  <>
-                    <Panel
-                      id={`panel-${leftPaneId}`}
-                      defaultSize="15"
-                      minSize="15"
-                      maxSize="55"
-                      className="min-h-0 min-w-0"
-                    >
-                      <div className="h-full flex flex-col min-h-0 overflow-hidden">
-                        {leftDockPanels.map((id, idx) => (
-                          <React.Fragment key={id}>
-                            {idx > 0 && <div className="h-px shrink-0 bg-neutral-200 dark:bg-neutral-700" />}
-                            <div className="flex-1 min-h-0 overflow-hidden">{renderLayoutPane(id)}</div>
-                          </React.Fragment>
-                        ))}
-                      </div>
-                    </Panel>
-                    <Separator className="w-1 min-w-1 cursor-col-resize bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
-                  </>
-                )}
-                <Panel id="panel-content-tiled" defaultSize={leftPaneId && rightPaneId ? '70' : leftPaneId || rightPaneId ? '85' : '100'} minSize="20" className="min-h-0 min-w-0">
-                  {contentPane}
-                </Panel>
-                {rightPaneId && (
-                  <>
-                    <Separator className="w-1 min-w-1 cursor-col-resize bg-neutral-300/80 dark:bg-neutral-700 hover:bg-blue-400 dark:hover:bg-blue-600 data-[resize-handle-active]:bg-blue-500" />
-                    <Panel
-                      id={`panel-${rightPaneId}`}
-                      defaultSize="15"
-                      minSize="15"
-                      maxSize="55"
-                      className="min-h-0 min-w-0"
-                    >
-                      <div className="h-full flex flex-col min-h-0 overflow-hidden">
-                        {rightDockPanels.map((id, idx) => (
-                          <React.Fragment key={id}>
-                            {idx > 0 && <div className="h-px shrink-0 bg-neutral-200 dark:bg-neutral-700" />}
-                            <div className="flex-1 min-h-0 overflow-hidden">{renderLayoutPane(id)}</div>
-                          </React.Fragment>
-                        ))}
-                      </div>
-                    </Panel>
-                  </>
-                )}
-              </Group>
-            )
-          })()}
+            })()}
           </div>
         </div>
 
@@ -3650,6 +3668,7 @@ export default function App() {
                       activeTab={activeBottom}
                       content={bottomTabs.length > 0 ? renderDockPanelContent(activeBottom ?? bottomTabs[0]) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
                       dockSide="bottom"
+                      showCloseButtons={false}
                       existingZones={existingZones}
                       draggingPanelId={draggingPanelId}
                       dragOverTarget={dockDropTarget}
@@ -3673,6 +3692,7 @@ export default function App() {
                           activeTab={activeBottomLeft}
                           content={bottomLeftTabs.length > 0 ? renderDockPanelContent(activeBottomLeft) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
                           dockSide="bottom"
+                          showCloseButtons={false}
                           existingZones={existingZones}
                           draggingPanelId={draggingPanelId}
                           dragOverTarget={dockDropTarget}
@@ -3698,6 +3718,7 @@ export default function App() {
                           activeTab={activeBottomRight}
                           content={bottomRightTabs.length > 0 ? renderDockPanelContent(activeBottomRight) : <div className="h-full flex items-center justify-center text-xs text-neutral-500 dark:text-neutral-400">Drop a panel here</div>}
                           dockSide="bottom"
+                          showCloseButtons={false}
                           existingZones={existingZones}
                           draggingPanelId={draggingPanelId}
                           dragOverTarget={dockDropTarget}
@@ -3714,19 +3735,6 @@ export default function App() {
                     )}
                   </Group>
                 )}
-              </div>
-              <div className="shrink-0 flex justify-end px-2 py-1 border-t border-neutral-700">
-                <button
-                  type="button"
-                  className="h-7 w-7 inline-flex items-center justify-center rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700"
-                  onClick={() => setShowTerminalBar(false)}
-                  title="Close bottom dock"
-                  aria-label="Close bottom dock"
-                >
-                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-                    <path d="M2 2L8 8M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  </svg>
-                </button>
               </div>
             </div>
           )
@@ -3986,6 +3994,8 @@ export default function App() {
         openDiagnosticsTarget={openDiagnosticsTarget}
         getModelOptions={getModelOptions}
         getModelOptionsGrouped={getModelOptionsGrouped}
+        showOnlyResponsiveModels={showOnlyResponsiveModels}
+        setShowOnlyResponsiveModels={setShowOnlyResponsiveModels}
       />
 
       <AppModals
@@ -4111,6 +4121,9 @@ export default function App() {
           removeQueuedMessage,
           getModelProvider,
           getModelOptions,
+          modelPingResults,
+          modelPingPending,
+          showOnlyResponsiveModels,
           registerTextarea,
           setPanels,
           autoResizeTextarea,
@@ -4146,4 +4159,3 @@ export default function App() {
     )
   }
 }
-

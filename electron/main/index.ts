@@ -25,6 +25,7 @@ import { OpenRouterClient, type OpenRouterClientEvent } from './openRouterClient
 import { OpenAIClient, type OpenAIClientEvent } from './openaiClient'
 import { initializePluginHost, shutdownPluginHost, setPluginHostWindow, setWorkspaceRootGetter, notifyPluginPanelEvent, notifyPluginPanelTurnComplete, getLoadedPlugins } from './pluginHost'
 import { readOrchestratorSecrets, writeOrchestratorSecrets, writeOrchestratorSettings, type OrchestratorSettingsData } from './orchestratorStorage'
+import { validateLicenseKey } from './licenseKeys'
 import { McpServerManager, type McpServerConfig } from './mcpClient'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
@@ -56,27 +57,27 @@ const EXPLORER_ALWAYS_IGNORED_DIRECTORIES = new Set([
 ])
 const execFileAsync = promisify(execFile)
 
-// Enable crash reporting and Chromium verbose logging before app.ready
-;(function initDebugAndCrashReporting() {
-  try {
-    crashReporter.start({
-      submitURL: '',
-      uploadToServer: false,
-      compress: true,
-    })
-  } catch (err) {
-    console.error('[Barnaby] crashReporter.start failed:', err)
-  }
-  const storageDir = path.join(app.getPath('userData'), APP_STORAGE_DIRNAME)
-  const chromiumLogPath = path.join(storageDir, 'chromium.log')
-  try {
-    app.commandLine.appendSwitch('enable-logging')
-    app.commandLine.appendSwitch('log-file', chromiumLogPath)
-    app.commandLine.appendSwitch('v', '1')
-  } catch (err) {
-    console.error('[Barnaby] Chromium logging setup failed:', err)
-  }
-})()
+  // Enable crash reporting and Chromium verbose logging before app.ready
+  ; (function initDebugAndCrashReporting() {
+    try {
+      crashReporter.start({
+        submitURL: '',
+        uploadToServer: false,
+        compress: true,
+      })
+    } catch (err) {
+      console.error('[Barnaby] crashReporter.start failed:', err)
+    }
+    const storageDir = path.join(app.getPath('userData'), APP_STORAGE_DIRNAME)
+    const chromiumLogPath = path.join(storageDir, 'chromium.log')
+    try {
+      app.commandLine.appendSwitch('enable-logging')
+      app.commandLine.appendSwitch('log-file', chromiumLogPath)
+      app.commandLine.appendSwitch('v', '1')
+    } catch (err) {
+      console.error('[Barnaby] Chromium logging setup failed:', err)
+    }
+  })()
 
 type WorkspaceTreeOptions = {
   includeHidden?: boolean
@@ -127,18 +128,18 @@ type WorkspaceLockToken = {
 
 type WorkspaceLockAcquireResult =
   | {
-      ok: true
-      workspaceRoot: string
-      lockFilePath: string
-    }
+    ok: true
+    workspaceRoot: string
+    lockFilePath: string
+  }
   | {
-      ok: false
-      reason: 'invalid-workspace' | 'in-use' | 'error'
-      message: string
-      workspaceRoot: string
-      lockFilePath: string
-      owner?: Pick<WorkspaceLockToken, 'pid' | 'hostname' | 'acquiredAt' | 'heartbeatAt'> | null
-    }
+    ok: false
+    reason: 'invalid-workspace' | 'in-use' | 'error'
+    message: string
+    workspaceRoot: string
+    lockFilePath: string
+    owner?: Pick<WorkspaceLockToken, 'pid' | 'hostname' | 'acquiredAt' | 'heartbeatAt'> | null
+  }
 
 type ConnectOptions = CodexConnectOptions & {
   provider?: 'codex' | 'claude' | 'gemini' | 'openrouter'
@@ -147,6 +148,49 @@ type ConnectOptions = CodexConnectOptions & {
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 type ContextMenuKind = 'input-selection' | 'chat-selection'
+type ViewMenuDockPanelId =
+  | 'orchestrator'
+  | 'workspace-folder'
+  | 'workspace-settings'
+  | 'application-settings'
+  | 'source-control'
+  | 'terminal'
+  | 'debug-output'
+type ViewMenuDockState = Record<ViewMenuDockPanelId, boolean>
+const DEFAULT_VIEW_MENU_DOCK_STATE: ViewMenuDockState = {
+  orchestrator: false,
+  'workspace-folder': false,
+  'workspace-settings': false,
+  'application-settings': false,
+  'source-control': false,
+  terminal: false,
+  'debug-output': false,
+}
+const VIEW_MENU_DOCK_PANEL_IDS: ViewMenuDockPanelId[] = [
+  'orchestrator',
+  'workspace-folder',
+  'workspace-settings',
+  'application-settings',
+  'source-control',
+  'terminal',
+  'debug-output',
+]
+
+function normalizeViewMenuDockState(raw: Partial<Record<ViewMenuDockPanelId, unknown>> | null | undefined): ViewMenuDockState {
+  return {
+    orchestrator: Boolean(raw?.orchestrator),
+    'workspace-folder': Boolean(raw?.['workspace-folder']),
+    'workspace-settings': Boolean(raw?.['workspace-settings']),
+    'application-settings': Boolean(raw?.['application-settings']),
+    'source-control': Boolean(raw?.['source-control']),
+    terminal: Boolean(raw?.terminal),
+    'debug-output': Boolean(raw?.['debug-output']),
+  }
+}
+
+function viewMenuDockStateEquals(a: ViewMenuDockState, b: ViewMenuDockState) {
+  return VIEW_MENU_DOCK_PANEL_IDS.every((panelId) => a[panelId] === b[panelId])
+}
 
 type ProviderName = 'codex' | 'claude' | 'gemini' | 'openrouter'
 type ProviderConfigForAuth = {
@@ -244,6 +288,7 @@ let splashWin: BrowserWindow | null = null
 let debugLogWindow: BrowserWindow | null = null
 let recentWorkspaces: string[] = []
 let editorMenuEnabled = false
+let viewMenuDockState: ViewMenuDockState = { ...DEFAULT_VIEW_MENU_DOCK_STATE }
 const preload = path.join(__dirname, '../preload/index.mjs')
 const indexHtml = path.join(RENDERER_DIST, 'index.html')
 let startupRevealTimer: ReturnType<typeof setTimeout> | null = null
@@ -390,13 +435,13 @@ function createSplashWindow() {
       .executeJavaScript(
         `(function(){var el=document.getElementById('version');if(el)el.textContent=${JSON.stringify(app.getVersion())};})()`,
       )
-      .catch(() => {})
+      .catch(() => { })
   }
   if (hasSplashHtml) {
     splash.webContents.once('did-finish-load', injectSplashVersion)
     void splash.loadFile(splashHtmlPath).catch((err) => {
       appendRuntimeLog('splash-loadfile-failed', { splashHtmlPath, error: errorMessage(err) }, 'warn')
-      void splash.loadURL(splashFallbackHtmlDataUrl(splashImagePath)).catch(() => {})
+      void splash.loadURL(splashFallbackHtmlDataUrl(splashImagePath)).catch(() => { })
     })
   } else {
     appendRuntimeLog('splash-html-missing-fallback', { splashHtmlPath }, 'warn')
@@ -1006,14 +1051,14 @@ function sanitizePersistedChatHistory(raw: unknown): PersistedChatHistoryEntry[]
       const format = msgRecord.format === 'text' || msgRecord.format === 'markdown' ? msgRecord.format : undefined
       const attachments = Array.isArray(msgRecord.attachments)
         ? msgRecord.attachments
-            .filter((x): x is PersistedChatAttachment => Boolean(x && typeof x === 'object'))
-            .map((x) => ({
-              id: typeof x.id === 'string' && x.id.trim() ? x.id.trim() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-              path: typeof x.path === 'string' ? x.path : '',
-              label: typeof x.label === 'string' && x.label.trim() ? x.label.trim() : 'attachment',
-              mimeType: typeof x.mimeType === 'string' && x.mimeType.trim() ? x.mimeType.trim() : undefined,
-            }))
-            .filter((x) => Boolean(x.path))
+          .filter((x): x is PersistedChatAttachment => Boolean(x && typeof x === 'object'))
+          .map((x) => ({
+            id: typeof x.id === 'string' && x.id.trim() ? x.id.trim() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            path: typeof x.path === 'string' ? x.path : '',
+            label: typeof x.label === 'string' && x.label.trim() ? x.label.trim() : 'attachment',
+            mimeType: typeof x.mimeType === 'string' && x.mimeType.trim() ? x.mimeType.trim() : undefined,
+          }))
+          .filter((x) => Boolean(x.path))
         : undefined
 
       messages.push({
@@ -1557,11 +1602,11 @@ function acquireWorkspaceLock(workspaceRoot: string): WorkspaceLockAcquireResult
         lockFilePath,
         owner: confirmed
           ? {
-              pid: confirmed.pid,
-              hostname: confirmed.hostname,
-              acquiredAt: confirmed.acquiredAt,
-              heartbeatAt: confirmed.heartbeatAt,
-            }
+            pid: confirmed.pid,
+            hostname: confirmed.hostname,
+            acquiredAt: confirmed.acquiredAt,
+            heartbeatAt: confirmed.heartbeatAt,
+          }
           : null,
       }
     }
@@ -1581,11 +1626,11 @@ function acquireWorkspaceLock(workspaceRoot: string): WorkspaceLockAcquireResult
       lockFilePath,
       owner: currentOwner
         ? {
-            pid: currentOwner.pid,
-            hostname: currentOwner.hostname,
-            acquiredAt: currentOwner.acquiredAt,
-            heartbeatAt: currentOwner.heartbeatAt,
-          }
+          pid: currentOwner.pid,
+          hostname: currentOwner.hostname,
+          acquiredAt: currentOwner.acquiredAt,
+          heartbeatAt: currentOwner.heartbeatAt,
+        }
         : null,
     }
   }
@@ -2652,6 +2697,7 @@ async function createWindow() {
     show: false,
     width: startupWidth,
     height: startupHeight,
+    autoHideMenuBar: false,
     webPreferences: {
       preload,
       // Warning: Enable nodeIntegration and disable contextIsolation is not secure in production
@@ -2722,10 +2768,10 @@ app.on('window-all-closed', () => {
   closeSplashWindow()
   clearStartupRevealTimer()
   releaseAllWorkspaceLocks()
-  shutdownPluginHost().catch(() => {})
-  mcpServerManager.stopAll().catch(() => {})
+  shutdownPluginHost().catch(() => { })
+  mcpServerManager.stopAll().catch(() => { })
   for (const client of agentClients.values()) {
-    (client as { close: () => Promise<void> }).close().catch(() => {})
+    (client as { close: () => Promise<void> }).close().catch(() => { })
   }
   agentClients.clear()
   if (process.platform !== 'darwin') app.quit()
@@ -2735,9 +2781,9 @@ app.on('before-quit', () => {
   closeSplashWindow()
   clearStartupRevealTimer()
   releaseAllWorkspaceLocks()
-  shutdownPluginHost().catch(() => {})
+  shutdownPluginHost().catch(() => { })
   for (const client of agentClients.values()) {
-    (client as { close: () => Promise<void> }).close().catch(() => {})
+    (client as { close: () => Promise<void> }).close().catch(() => { })
   }
   agentClients.clear()
 })
@@ -2905,6 +2951,7 @@ ipcMain.handle('agentorchestrator:getLoadedPlugins', async () => {
     displayName: entry.plugin.displayName,
     version: entry.plugin.version,
     active: entry.active,
+    licensed: typeof (entry.plugin as any).isLicensed === 'function' ? (entry.plugin as any).isLicensed() : true,
   }))
 })
 
@@ -2964,7 +3011,15 @@ ipcMain.handle('agentorchestrator:openExternalUrl', async (_evt, rawUrl: string)
 ipcMain.handle('agentorchestrator:getOrchestratorLicenseKeyState', async () => {
   const secrets = readOrchestratorSecrets(getAppStorageDirPath)
   const key = (secrets.licenseKey ?? '').trim()
-  return { hasKey: key.length > 0 }
+  if (!key) return { hasKey: false, valid: false, reason: 'No key entered' }
+  const result = validateLicenseKey(key)
+  return {
+    hasKey: true,
+    valid: result.valid,
+    reason: result.reason,
+    email: result.payload?.email,
+    tier: result.payload?.tier,
+  }
 })
 
 ipcMain.handle('agentorchestrator:setOrchestratorLicenseKey', async (_evt, rawKey: unknown) => {
@@ -2972,7 +3027,9 @@ ipcMain.handle('agentorchestrator:setOrchestratorLicenseKey', async (_evt, rawKe
   const secrets = readOrchestratorSecrets(getAppStorageDirPath)
   secrets.licenseKey = key || undefined
   writeOrchestratorSecrets(getAppStorageDirPath, secrets)
-  return { ok: true, hasKey: key.length > 0 }
+  if (!key) return { ok: true, hasKey: false, valid: false }
+  const result = validateLicenseKey(key)
+  return { ok: true, hasKey: true, valid: result.valid, reason: result.reason, email: result.payload?.email }
 })
 
 ipcMain.handle('agentorchestrator:syncOrchestratorSettings', async (_evt, raw: unknown) => {
@@ -3361,7 +3418,7 @@ ipcMain.handle('agentorchestrator:resetApplicationData', async () => {
   } catch (err) {
     console.error('Failed to reset application data:', err)
   }
-  
+
   app.relaunch()
   app.exit(0)
 })
@@ -3435,20 +3492,20 @@ ipcMain.handle('agentorchestrator:showContextMenu', async (evt, kind: unknown) =
   const template: Electron.MenuItemConstructorOptions[] =
     menuKind === 'input-selection'
       ? [
-          { label: 'Undo', role: 'undo' },
-          { label: 'Redo', role: 'redo' },
-          { type: 'separator' },
-          { label: 'Cut', role: 'cut' },
-          { label: 'Copy', role: 'copy' },
-          { label: 'Paste', role: 'paste' },
-          { type: 'separator' },
-          { label: 'Select All', role: 'selectAll' },
-        ]
+        { label: 'Undo', role: 'undo' },
+        { label: 'Redo', role: 'redo' },
+        { type: 'separator' },
+        { label: 'Cut', role: 'cut' },
+        { label: 'Copy', role: 'copy' },
+        { label: 'Paste', role: 'paste' },
+        { type: 'separator' },
+        { label: 'Select All', role: 'selectAll' },
+      ]
       : [
-          { label: 'Copy', role: 'copy' },
-          { type: 'separator' },
-          { label: 'Select All', role: 'selectAll' },
-        ]
+        { label: 'Copy', role: 'copy' },
+        { type: 'separator' },
+        { label: 'Select All', role: 'selectAll' },
+      ]
 
   const menu = Menu.buildFromTemplate(template)
   const contextWindow =
@@ -3467,7 +3524,15 @@ function sendMenuAction(action: string, payload?: Record<string, unknown>) {
   win?.webContents.send('fireharness:menu', message)
 }
 
+let aboutWindow: BrowserWindow | null = null
+
 function createAboutWindow() {
+  if (aboutWindow) {
+    if (aboutWindow.isMinimized()) aboutWindow.restore()
+    aboutWindow.focus()
+    return
+  }
+
   const publicRoot = process.env.VITE_PUBLIC ?? ''
   const splashImagePath = publicRoot ? path.join(publicRoot, 'splash.png') : ''
   let splashImageUrl = ''
@@ -3580,7 +3645,7 @@ function createAboutWindow() {
 <body>
   <div class="container">
     <div class="splash-container">
-      <img src="${splashImageUrl}" alt="Barnaby Splash" />
+      ${splashImageUrl ? `<img src="${splashImageUrl}" alt="Barnaby Splash" />` : ''}
     </div>
     <h1>${appName}</h1>
     <div class="version">Version ${version}</div>
@@ -3595,7 +3660,7 @@ function createAboutWindow() {
 </body>
 </html>`
 
-  const aboutWin = new BrowserWindow({
+  aboutWindow = new BrowserWindow({
     width: 500,
     height: 540,
     resizable: false,
@@ -3613,19 +3678,24 @@ function createAboutWindow() {
       contextIsolation: true
     }
   })
-  
-  aboutWin.setMenuBarVisibility(false)
-  aboutWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-  
-  aboutWin.webContents.setWindowOpenHandler(({ url }) => {
+
+  aboutWindow.setMenuBarVisibility(false)
+  aboutWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+
+  aboutWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http:') || url.startsWith('https:') || url.startsWith('mailto:')) {
       shell.openExternal(url)
     }
     return { action: 'deny' }
   })
 
-  aboutWin.once('ready-to-show', () => {
-    aboutWin.show()
+  aboutWindow.once('ready-to-show', () => {
+    aboutWindow?.show()
+  })
+
+  aboutWindow.on('closed', () => {
+    aboutWindow = null
+    try { fs.unlinkSync(tmpHtmlPath) } catch { /* ignore */ }
   })
 }
 
@@ -3633,9 +3703,9 @@ function setAppMenu() {
   const recentSubmenu: Electron.MenuItemConstructorOptions[] =
     recentWorkspaces.length > 0
       ? recentWorkspaces.slice(0, 10).map((workspacePath) => ({
-          label: path.basename(workspacePath) || workspacePath,
-          click: () => sendMenuAction('openWorkspace', { path: workspacePath }),
-        }))
+        label: path.basename(workspacePath) || workspacePath,
+        click: () => sendMenuAction('openWorkspace', { path: workspacePath }),
+      }))
       : [{ label: '(none)', enabled: false }]
 
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -3678,18 +3748,19 @@ function setAppMenu() {
         { label: 'Paste', role: 'paste' },
         { label: 'Find', accelerator: 'CmdOrCtrl+F', click: () => sendMenuAction('findInPage') },
         { label: 'Find in Files', accelerator: 'CmdOrCtrl+Shift+F', click: () => sendMenuAction('findInFiles') },
-      ],
-    },
-    {
-      label: 'Settings',
-      submenu: [
-        { label: 'Connectivity', click: () => sendMenuAction('openConnectivity') },
-        { label: 'Models', click: () => sendMenuAction('openModelSetup') },
-        { label: 'Agents', click: () => sendMenuAction('openAgents') },
-        { label: 'Orchestrator', click: () => sendMenuAction('openOrchestrator') },
-        { label: 'MCP Servers', click: () => sendMenuAction('openMcpServers') },
-        { label: 'Diagnostics', click: () => sendMenuAction('openDiagnostics') },
-        { label: 'Preferences', accelerator: 'CmdOrCtrl+,', click: () => sendMenuAction('openPreferences') },
+        { type: 'separator' },
+        {
+          label: 'Settings',
+          submenu: [
+            { label: 'Connectivity', click: () => sendMenuAction('openConnectivity') },
+            { label: 'Models', click: () => sendMenuAction('openModelSetup') },
+            { label: 'Agents', click: () => sendMenuAction('openAgents') },
+            { label: 'Orchestrator', click: () => sendMenuAction('openOrchestrator') },
+            { label: 'MCP Servers', click: () => sendMenuAction('openMcpServers') },
+            { label: 'Diagnostics', click: () => sendMenuAction('openDiagnostics') },
+            { label: 'Preferences', click: () => sendMenuAction('openPreferences') },
+          ],
+        },
       ],
     },
     {

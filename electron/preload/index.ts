@@ -66,18 +66,18 @@ type WorkspaceLockOwner = {
 
 type WorkspaceLockAcquireResult =
   | {
-      ok: true
-      workspaceRoot: string
-      lockFilePath: string
-    }
+    ok: true
+    workspaceRoot: string
+    lockFilePath: string
+  }
   | {
-      ok: false
-      reason: 'invalid-workspace' | 'in-use' | 'error'
-      message: string
-      workspaceRoot: string
-      lockFilePath: string
-      owner?: WorkspaceLockOwner | null
-    }
+    ok: false
+    reason: 'invalid-workspace' | 'in-use' | 'error'
+    message: string
+    workspaceRoot: string
+    lockFilePath: string
+    owner?: WorkspaceLockOwner | null
+  }
 
 type ContextMenuKind = 'input-selection' | 'chat-selection'
 
@@ -453,7 +453,7 @@ const api = {
   },
   getLoadedPlugins() {
     return ipcRenderer.invoke('agentorchestrator:getLoadedPlugins') as Promise<
-      Array<{ pluginId: string; displayName: string; version: string; active: boolean }>
+      Array<{ pluginId: string; displayName: string; version: string; active: boolean; licensed: boolean }>
     >
   },
   onPluginsLoaded(cb: () => void) {

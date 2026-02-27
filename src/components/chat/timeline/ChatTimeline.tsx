@@ -72,7 +72,6 @@ export interface ChatTimelineProps {
   onChatLinkClick: (href: string) => void
   onGrantPermissionAndResend: () => void
   onRecallLastUserMessage: () => void
-  onResendLastUserMessage: () => void
   onBeginQueuedMessageEdit: (index: number) => void
   onInjectQueuedMessage: (index: number) => void
   onRemoveQueuedMessage: (index: number) => void

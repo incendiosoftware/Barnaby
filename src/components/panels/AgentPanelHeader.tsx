@@ -78,9 +78,10 @@ export function AgentPanelHeader({
           title={panelsCount >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'Split panel'}
           aria-label="Split panel"
         >
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-label="Split Panel">
-            <path d="M1 2.25C1 1.56 1.56 1 2.25 1h13.5c.69 0 1.25.56 1.25 1.25v13.5c0 .69-.56 1.25-1.25 1.25H2.25A1.25 1.25 0 0 1 1 15.75V2.25z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            <path d="M9 2V16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          <svg width="22" height="18" viewBox="0 0 22 18" fill="none" aria-label="Split Panel">
+            <rect x="2" y="2.5" width="7" height="13" rx="1.2" stroke="currentColor" strokeWidth="1.5" />
+            <path d="M13 9h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <path d="M17 5v8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </button>
         <button

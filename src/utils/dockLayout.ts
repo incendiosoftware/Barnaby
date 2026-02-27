@@ -69,7 +69,8 @@ export type BottomDockZones = { left: boolean; right: boolean }
 
 /**
  * Migrate panels from single zone to split zones when creating a split.
- * E.g., when creating 'left-top', if 'left' exists with panels, move them to 'left-top'.
+ * E.g., when creating 'left-top', if 'left' exists with panels, move them to 'left-bottom'
+ * so the dropped tab can occupy the requested side.
  */
 export function migratePanelsOnSplit(
   zones: DockLayoutState['zones'],
@@ -80,8 +81,9 @@ export function migratePanelsOnSplit(
   // Left dock: migrate 'left' → 'left-top' or 'left-bottom'
   if (targetZoneId === 'left-top' || targetZoneId === 'left-bottom') {
     if (updatedZones.left && updatedZones.left.length > 0) {
-      // Migrate all panels from 'left' to the target split zone
-      updatedZones[targetZoneId] = [...(updatedZones[targetZoneId] ?? []), ...updatedZones.left]
+      // Move existing tabs to the opposite split side.
+      const destination = targetZoneId === 'left-top' ? 'left-bottom' : 'left-top'
+      updatedZones[destination] = [...(updatedZones[destination] ?? []), ...updatedZones.left]
       delete updatedZones.left
     }
   }
@@ -89,8 +91,9 @@ export function migratePanelsOnSplit(
   // Right dock: migrate 'right' → 'right-top' or 'right-bottom'
   if (targetZoneId === 'right-top' || targetZoneId === 'right-bottom') {
     if (updatedZones.right && updatedZones.right.length > 0) {
-      // Migrate all panels from 'right' to the target split zone
-      updatedZones[targetZoneId] = [...(updatedZones[targetZoneId] ?? []), ...updatedZones.right]
+      // Move existing tabs to the opposite split side.
+      const destination = targetZoneId === 'right-top' ? 'right-bottom' : 'right-top'
+      updatedZones[destination] = [...(updatedZones[destination] ?? []), ...updatedZones.right]
       delete updatedZones.right
     }
   }
@@ -98,8 +101,9 @@ export function migratePanelsOnSplit(
   // Bottom dock: migrate 'bottom' → 'bottom-left' or 'bottom-right'
   if (targetZoneId === 'bottom-left' || targetZoneId === 'bottom-right') {
     if (updatedZones.bottom && updatedZones.bottom.length > 0) {
-      // Migrate all panels from 'bottom' to the target split zone
-      updatedZones[targetZoneId] = [...(updatedZones[targetZoneId] ?? []), ...updatedZones.bottom]
+      // Move existing tabs to the opposite split side.
+      const destination = targetZoneId === 'bottom-left' ? 'bottom-right' : 'bottom-left'
+      updatedZones[destination] = [...(updatedZones[destination] ?? []), ...updatedZones.bottom]
       delete updatedZones.bottom
     }
   }

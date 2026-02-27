@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { EventEmitter } from 'node:events'
 
 /** Ensure npm global bin is in PATH so Electron can find gemini CLI. */
@@ -14,6 +15,69 @@ function getGeminiSpawnEnv(): NodeJS.ProcessEnv {
   }
   env.GEMINI_SANDBOX = 'false'
   return env
+}
+
+/**
+ * Resolve the .js entry point from gemini.cmd's npm shim.
+ * This lets us spawn node directly, bypassing cmd.exe's ~8K command-line limit.
+ */
+function resolveGeminiJsEntryPoint(): string | null {
+  if (process.platform !== 'win32') return null
+  const npmBin = process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : ''
+  if (!npmBin) return null
+
+  const cmdPath = path.join(npmBin, 'gemini.cmd')
+  if (!fs.existsSync(cmdPath)) return null
+
+  try {
+    const cmdContent = fs.readFileSync(cmdPath, 'utf8')
+    const match = cmdContent.match(/%dp0%\\([^\s"]+\.js)/i)
+    if (match) {
+      const jsPath = path.join(npmBin, match[1])
+      if (fs.existsSync(jsPath)) return jsPath
+    }
+  } catch { /* fall through */ }
+  return null
+}
+
+/**
+ * Find 'node' executable on PATH (not process.execPath which is Electron in packaged apps).
+ */
+function findNodeExe(): string | null {
+  const pathDirs = (process.env.PATH ?? '').split(path.delimiter)
+  for (const dir of pathDirs) {
+    const candidate = path.join(dir, process.platform === 'win32' ? 'node.exe' : 'node')
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+/**
+ * Spawn the gemini CLI with proper Windows shim resolution.
+ * On Windows, tries to resolve gemini.cmd → .js entry point and spawn via node.exe directly.
+ * Falls back to cmd.exe /c gemini.
+ */
+function spawnGemini(
+  args: string[],
+  spawnOpts: { cwd: string; stdio: ['pipe', 'pipe', 'pipe'] | ['ignore', 'pipe', 'pipe']; env: NodeJS.ProcessEnv },
+): ChildProcessWithoutNullStreams {
+  if (process.platform !== 'win32') {
+    return spawn('gemini', args, spawnOpts as object) as ChildProcessWithoutNullStreams
+  }
+
+  const jsEntry = resolveGeminiJsEntryPoint()
+  const nodeExe = jsEntry ? findNodeExe() : null
+  if (jsEntry && nodeExe) {
+    return spawn(nodeExe, [jsEntry, ...args], {
+      ...spawnOpts,
+      windowsHide: true,
+    } as object) as ChildProcessWithoutNullStreams
+  }
+
+  return spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
+    ...spawnOpts,
+    windowsHide: true,
+  } as object) as ChildProcessWithoutNullStreams
 }
 
 import { resolveAtFileReferences } from './atFileResolver'
@@ -52,8 +116,10 @@ export class GeminiClient extends EventEmitter {
   private activeProc: ChildProcessWithoutNullStreams | null = null
   /** Track whether a session has been established (for --resume on turns 2+). */
   private hasActiveSession: boolean = false
+  /** Path to the temp policy file containing the stable system prompt. */
+  private policyFilePath: string | null = null
 
-  private static TURN_INACTIVITY_TIMEOUT_MS = 120_000
+  private static TURN_INACTIVITY_TIMEOUT_MS = 180_000
   private turnInactivityTimer: ReturnType<typeof setTimeout> | null = null
 
   private resetTurnInactivityTimer() {
@@ -75,16 +141,12 @@ export class GeminiClient extends EventEmitter {
     }
   }
 
+  /**
+   * Pass model ID through to the CLI as-is.
+   * The Gemini CLI resolves model names internally — no hardcoded map needed.
+   */
   private normalizeModelId(model: string) {
-    const legacyMap: Record<string, string> = {
-      'gemini-1.5-pro': 'pro',
-      'gemini-1.5-flash': 'flash',
-      'gemini-2.0-flash': 'flash',
-      'gemini-3-pro': 'pro',
-      'gemini-pro': 'flash',
-      'gemini-1.0-pro': 'flash',
-    }
-    return legacyMap[model] ?? model
+    return model
   }
 
   private isModelNotFoundError(message: string) {
@@ -146,6 +208,7 @@ export class GeminiClient extends EventEmitter {
     this.emitEvent({ type: 'status', status: 'starting', message: 'Connecting to Gemini CLI...' })
     await this.assertGeminiCliAvailable()
     await this.syncMcpServers()
+    this.writePolicyFile()
     this.history =
       (options.initialHistory?.length ?? 0) > 0
         ? options.initialHistory!.slice(-INITIAL_HISTORY_MAX_MESSAGES)
@@ -184,13 +247,14 @@ export class GeminiClient extends EventEmitter {
   }
 
   private async runTurn(prompt: string, resume: boolean = false): Promise<void> {
-    const startTurn = (modelId: string): Promise<void> =>
+    const startTurn = (modelId: string, useResume: boolean): Promise<void> =>
       new Promise((resolve, reject) => {
-        const args = ['-m', modelId, '--yolo', '--output-format', 'stream-json']
-        if (resume) {
-          // Resume the previous session to avoid re-sending the system prompt.
-          // Gemini CLI caches session context internally when resumed.
+        const args = ['-m', modelId, '--yolo', '--output-format', 'stream-json', '-p', prompt]
+        if (useResume) {
           args.push('--resume')
+        }
+        if (this.policyFilePath && fs.existsSync(this.policyFilePath)) {
+          args.push('--policy', this.policyFilePath)
         }
         if (this.mcpServerNames.length > 0) {
           args.push('--allowed-mcp-server-names', ...this.mcpServerNames)
@@ -200,19 +264,10 @@ export class GeminiClient extends EventEmitter {
           stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
           env: getGeminiSpawnEnv(),
         }
-        const proc =
-          process.platform === 'win32'
-            ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', ...args], {
-              ...spawnOpts,
-              windowsHide: true,
-            } as object)
-            : spawn('gemini', args, spawnOpts)
+        const proc = spawnGemini(args, spawnOpts)
 
         this.activeProc = proc
         this.resetTurnInactivityTimer()
-
-        proc.stdin.write(prompt)
-        proc.stdin.end()
 
         proc.stdout.setEncoding('utf8')
         proc.stderr.setEncoding('utf8')
@@ -393,9 +448,25 @@ export class GeminiClient extends EventEmitter {
       })
 
     try {
-      await startTurn(this.model)
+      await startTurn(this.model, resume)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
+
+      // Auto-reconnect: if --resume failed, retry as a fresh turn
+      if (resume && this.isResumableError(msg)) {
+        this.emitEvent({ type: 'thinking', message: 'Session resume failed — starting fresh turn...' })
+        this.hasActiveSession = false
+        try {
+          await startTurn(this.model, false)
+          return
+        } catch (freshErr: unknown) {
+          const freshMsg = freshErr instanceof Error ? freshErr.message : String(freshErr)
+          this.emitEvent({ type: 'status', status: 'error', message: freshMsg })
+          this.emitEvent({ type: 'assistantCompleted' })
+          return
+        }
+      }
+
       if (this.isModelNotFoundError(msg) && this.model !== 'gemini-2.0-flash') {
         const originalModel = this.model
         this.model = 'gemini-2.0-flash'
@@ -404,8 +475,7 @@ export class GeminiClient extends EventEmitter {
             type: 'thinking',
             message: `Model "${originalModel}" not found — retrying with gemini-2.0-flash...`,
           })
-          await startTurn(this.model)
-          // Retry succeeded — no error shown to the user.
+          await startTurn(this.model, resume)
         } catch (retryErr: unknown) {
           const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr)
           this.emitEvent({ type: 'status', status: 'error', message: retryMsg })
@@ -434,11 +504,44 @@ export class GeminiClient extends EventEmitter {
     await this.interruptActiveTurn()
     this.history = []
     this.hasActiveSession = false
+    this.cleanupPolicyFile()
+  }
+
+  /**
+   * Write the stable system prompt to a temp policy file.
+   * The file is passed via --policy on each spawn, so Gemini treats it as system-level
+   * instructions rather than user message text.
+   */
+  private writePolicyFile() {
+    this.cleanupPolicyFile()
+    const stablePrompt = buildStableSystemPrompt({ interactionMode: this.interactionMode })
+    const tmpDir = os.tmpdir()
+    this.policyFilePath = path.join(tmpDir, `barnaby-gemini-policy-${Date.now()}.md`)
+    fs.writeFileSync(this.policyFilePath, stablePrompt, 'utf8')
+  }
+
+  /** Remove the temp policy file if it exists. */
+  private cleanupPolicyFile() {
+    if (this.policyFilePath) {
+      try { fs.unlinkSync(this.policyFilePath) } catch { /* ignore */ }
+      this.policyFilePath = null
+    }
+  }
+
+  /** Detect errors that indicate a --resume session failure (corrupt/expired). */
+  private isResumableError(message: string): boolean {
+    const lower = message.toLowerCase()
+    return (
+      lower.includes('session') ||
+      lower.includes('resume') ||
+      lower.includes('turn limit') ||
+      lower.includes('session turn limit') ||
+      /exit(ed)? with code 53/i.test(message)
+    )
   }
 
   private buildGeminiPrompt(userMessage: string, interactionMode?: string, gitStatus?: string): string {
     const tree = generateWorkspaceTreeText(this.cwd)
-    const mode = interactionMode ?? this.interactionMode
 
     // Build dynamic context (changes per turn)
     const dynamicCtx = buildDynamicContext({
@@ -450,19 +553,19 @@ export class GeminiClient extends EventEmitter {
     })
 
     // On resumed turns, only send dynamic context + user message.
-    // The stable system prompt is already cached in the Gemini session.
+    // The stable system prompt is injected via --policy file.
     if (this.hasActiveSession) {
       return `[Workspace context]\n${dynamicCtx}\n\n---\n\n${userMessage}`
     }
 
-    // First turn: send full system prompt (stable + dynamic) + truncated history
-    const stablePrompt = buildStableSystemPrompt({ interactionMode: mode })
+    // First turn: send dynamic context + truncated history + user message.
+    // The stable system prompt is injected via the --policy file, NOT here.
     const truncated = truncateHistory(this.history.slice(0, -1)) // exclude the message we're about to send
     const historyHint = truncated.length > 0
       ? '\n\n' + truncated.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}:\n${m.text}`).join('\n\n') + '\n\n'
       : ''
 
-    return `${stablePrompt}\n\n${dynamicCtx}\n\n---\n${historyHint}${userMessage}`
+    return `[Workspace context]\n${dynamicCtx}\n\n---\n${historyHint}${userMessage}`
   }
 
   /**
@@ -541,13 +644,7 @@ export class GeminiClient extends EventEmitter {
         stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
         env: getGeminiSpawnEnv(),
       }
-      const proc =
-        process.platform === 'win32'
-          ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'gemini', '--version'], {
-            ...spawnOpts,
-            windowsHide: true,
-          } as object)
-          : spawn('gemini', ['--version'], spawnOpts)
+      const proc = spawnGemini(['--version'], spawnOpts)
 
       let stderr = ''
       proc.stderr.setEncoding('utf8')

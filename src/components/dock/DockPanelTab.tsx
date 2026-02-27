@@ -13,6 +13,7 @@ export interface DockPanelTabProps {
   isActive: boolean
   onSelect: () => void
   onClose: () => void
+  showCloseButton?: boolean
   onDragStart: (e: React.DragEvent) => void
   onDragEnd: () => void
   isDragging?: boolean
@@ -26,6 +27,7 @@ export function DockPanelTab({
   isActive,
   onSelect,
   onClose,
+  showCloseButton = true,
   onDragStart,
   onDragEnd,
   isDragging,
@@ -51,18 +53,20 @@ export function DockPanelTab({
     >
       {icon && <span className="shrink-0 flex text-neutral-500 dark:text-neutral-400">{icon}</span>}
       <span className="truncate">{label}</span>
-      <button
-        type="button"
-        className="ml-0.5 h-5 w-5 shrink-0 inline-flex items-center justify-center rounded text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 hover:bg-neutral-400/40 dark:hover:bg-neutral-600/50 transition-colors"
-        onClick={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-        title="Close"
-        aria-label="Close"
-      >
-        <CloseIcon size={10} />
-      </button>
+      {showCloseButton && (
+        <button
+          type="button"
+          className="ml-0.5 h-5 w-5 shrink-0 inline-flex items-center justify-center rounded text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 hover:bg-neutral-400/40 dark:hover:bg-neutral-600/50 transition-colors"
+          onClick={(e) => {
+            e.stopPropagation()
+            onClose()
+          }}
+          title="Close"
+          aria-label="Close"
+        >
+          <CloseIcon size={10} />
+        </button>
+      )}
     </div>
   )
 }

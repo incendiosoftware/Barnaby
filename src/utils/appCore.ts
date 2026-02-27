@@ -80,6 +80,16 @@ import {
 import { THEMES } from '../constants/themes'
 import { LEGACY_PRESET_TO_THEME_ID } from '../constants'
 
+export function getModelProvider(modelId: string): ConnectivityProvider {
+  if (modelId === 'gpt-4o' || modelId === 'gpt-4o-mini' || modelId === 'gpt-4-turbo' || modelId.startsWith('o1') || modelId.startsWith('o3')) {
+    return 'codex'
+  }
+  if (modelId.startsWith('claude')) return 'claude'
+  if (modelId.startsWith('gemini')) return 'gemini'
+  if (modelId.includes('/')) return 'openrouter'
+  return 'codex'
+}
+
 export const LIMIT_WARNING_PREFIX = 'Warning (Limits):'
 const INITIAL_HISTORY_MAX_MESSAGES = 24
 
@@ -650,14 +660,14 @@ export function parseHistoryMessages(raw: unknown): ChatMessage[] {
       record.format === 'text' || record.format === 'markdown' ? record.format : undefined
     const attachments = Array.isArray(record.attachments)
       ? record.attachments
-          .filter((x): x is PastedImageAttachment => Boolean(x && typeof x === 'object'))
-          .map((x) => ({
-            id: typeof x.id === 'string' && x.id ? x.id : newId(),
-            path: typeof x.path === 'string' ? x.path : '',
-            label: typeof x.label === 'string' ? x.label : 'attachment',
-            mimeType: typeof x.mimeType === 'string' ? x.mimeType : undefined,
-          }))
-          .filter((x) => Boolean(x.path))
+        .filter((x): x is PastedImageAttachment => Boolean(x && typeof x === 'object'))
+        .map((x) => ({
+          id: typeof x.id === 'string' && x.id ? x.id : newId(),
+          path: typeof x.path === 'string' ? x.path : '',
+          label: typeof x.label === 'string' ? x.label : 'attachment',
+          mimeType: typeof x.mimeType === 'string' ? x.mimeType : undefined,
+        }))
+        .filter((x) => Boolean(x.path))
       : undefined
     next.push({
       id: typeof record.id === 'string' && record.id ? record.id : newId(),
@@ -950,8 +960,8 @@ export function parsePersistedAppState(
     typeof rec.workspaceRoot === 'string' && rec.workspaceRoot.trim() ? rec.workspaceRoot.trim() : null
   const workspaceList = Array.isArray(rec.workspaceList)
     ? rec.workspaceList
-        .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-        .map((x) => x.trim())
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      .map((x) => x.trim())
     : null
   const workspaceSnapshotsByRoot: ParsedAppState['workspaceSnapshotsByRoot'] = {}
   if (rec.workspaceSnapshotsByRoot && typeof rec.workspaceSnapshotsByRoot === 'object') {
@@ -962,19 +972,19 @@ export function parsePersistedAppState(
       const snapshot = snapshotRaw as Partial<WorkspaceUiSnapshot>
       const parsedPanels = Array.isArray(snapshot.panels)
         ? snapshot.panels
-            .map((panel) => parsePersistedAgentPanel(panel, workspacePath, getModelProvider))
-            .filter((panel): panel is AgentPanelState => Boolean(panel))
+          .map((panel) => parsePersistedAgentPanel(panel, workspacePath, getModelProvider))
+          .filter((panel): panel is AgentPanelState => Boolean(panel))
         : []
       const parsedEditors = Array.isArray(snapshot.editorPanels)
         ? snapshot.editorPanels
-            .map((panel) => parsePersistedEditorPanel(panel, workspacePath))
-            .filter((panel): panel is EditorPanelState => Boolean(panel))
+          .map((panel) => parsePersistedEditorPanel(panel, workspacePath))
+          .filter((panel): panel is EditorPanelState => Boolean(panel))
         : []
       workspaceSnapshotsByRoot[workspacePath] = {
         layoutMode:
           snapshot.layoutMode === 'vertical' ||
-          snapshot.layoutMode === 'horizontal' ||
-          snapshot.layoutMode === 'grid'
+            snapshot.layoutMode === 'horizontal' ||
+            snapshot.layoutMode === 'grid'
             ? snapshot.layoutMode
             : 'vertical',
         showWorkspaceWindow: typeof snapshot.showWorkspaceWindow === 'boolean' ? snapshot.showWorkspaceWindow : true,
@@ -985,9 +995,9 @@ export function parsePersistedAppState(
           snapshot.codeWindowTab === 'code' || snapshot.codeWindowTab === 'settings' ? snapshot.codeWindowTab : 'code',
         dockTab:
           snapshot.dockTab === 'orchestrator' ||
-          snapshot.dockTab === 'explorer' ||
-          snapshot.dockTab === 'git' ||
-          snapshot.dockTab === 'settings'
+            snapshot.dockTab === 'explorer' ||
+            snapshot.dockTab === 'git' ||
+            snapshot.dockTab === 'settings'
             ? snapshot.dockTab
             : 'explorer',
         workspaceDockSide:
@@ -1011,30 +1021,30 @@ export function parsePersistedAppState(
         expandedDirectories:
           snapshot.expandedDirectories && typeof snapshot.expandedDirectories === 'object'
             ? (Object.fromEntries(
-                Object.entries(snapshot.expandedDirectories as Record<string, unknown>).filter(
-                  ([k, v]) => typeof k === 'string' && typeof v === 'boolean',
-                ),
-              ) as Record<string, boolean>)
+              Object.entries(snapshot.expandedDirectories as Record<string, unknown>).filter(
+                ([k, v]) => typeof k === 'string' && typeof v === 'boolean',
+              ),
+            ) as Record<string, boolean>)
             : {},
       }
     }
   }
   const panels = Array.isArray(rec.panels)
     ? rec.panels
-        .map((item) => parsePersistedAgentPanel(item, fallbackWorkspaceRoot, getModelProvider))
-        .filter((x): x is AgentPanelState => Boolean(x))
-        .slice(0, MAX_PANELS)
+      .map((item) => parsePersistedAgentPanel(item, fallbackWorkspaceRoot, getModelProvider))
+      .filter((x): x is AgentPanelState => Boolean(x))
+      .slice(0, MAX_PANELS)
     : []
   const editorPanels = Array.isArray(rec.editorPanels)
     ? rec.editorPanels
-        .map((item) => parsePersistedEditorPanel(item, fallbackWorkspaceRoot))
-        .filter((x): x is EditorPanelState => Boolean(x))
+      .map((item) => parsePersistedEditorPanel(item, fallbackWorkspaceRoot))
+      .filter((x): x is EditorPanelState => Boolean(x))
     : []
   const dockTab: ParsedAppState['dockTab'] =
     rec.dockTab === 'orchestrator' ||
-    rec.dockTab === 'explorer' ||
-    rec.dockTab === 'git' ||
-    rec.dockTab === 'settings'
+      rec.dockTab === 'explorer' ||
+      rec.dockTab === 'git' ||
+      rec.dockTab === 'settings'
       ? rec.dockTab
       : null
   const codeWindowTab: ParsedAppState['codeWindowTab'] =
@@ -1066,10 +1076,10 @@ export function parsePersistedAppState(
   const expandedDirectories: ParsedAppState['expandedDirectories'] =
     rec.expandedDirectories && typeof rec.expandedDirectories === 'object'
       ? (Object.fromEntries(
-          Object.entries(rec.expandedDirectories as Record<string, unknown>).filter(
-            ([k, v]) => typeof k === 'string' && typeof v === 'boolean',
-          ),
-        ) as Record<string, boolean>)
+        Object.entries(rec.expandedDirectories as Record<string, unknown>).filter(
+          ([k, v]) => typeof k === 'string' && typeof v === 'boolean',
+        ),
+      ) as Record<string, boolean>)
       : undefined
   return {
     workspaceRoot,
@@ -1342,7 +1352,7 @@ export function describeActivityEntry(evt: unknown): { label: string; detail?: s
           pickString(item?.input as Record<string, unknown>, ['command', 'cmd'])
         const exitCode =
           typeof (params as Record<string, unknown>)?.item === 'object' &&
-          typeof ((params as Record<string, unknown>)?.item as Record<string, unknown>)?.exitCode === 'number'
+            typeof ((params as Record<string, unknown>)?.item as Record<string, unknown>)?.exitCode === 'number'
             ? ((params as Record<string, unknown>)?.item as Record<string, unknown>).exitCode
             : typeof ((params as Record<string, unknown>)?.item as Record<string, unknown>)?.statusCode === 'number'
               ? ((params as Record<string, unknown>)?.item as Record<string, unknown>).statusCode
@@ -1512,14 +1522,17 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: st
   })
 }
 
-export function makeDefaultPanel(id: string, cwd: string, historyId = newId()): AgentPanelState {
+export function makeDefaultPanel(id: string, cwd: string, initialModel?: string, historyId = newId()): AgentPanelState {
+  const model = initialModel ?? DEFAULT_MODEL
+  const provider = getModelProvider(model)
+
   return {
     id,
     historyId,
     title: `Agent ${id.slice(-4)}`,
     cwd,
-    provider: 'codex',  // Default provider - will be updated when model is set
-    model: DEFAULT_MODEL,
+    provider,
+    model: model,
     interactionMode: 'agent',
     permissionMode: 'verify-first',
     sandbox: 'workspace-write',
@@ -1530,7 +1543,7 @@ export function makeDefaultPanel(id: string, cwd: string, historyId = newId()): 
       {
         id: newId(),
         role: 'system',
-        content: `Model: ${DEFAULT_MODEL}`,
+        content: `Model: ${model}`,
         format: 'text',
         createdAt: Date.now(),
       },

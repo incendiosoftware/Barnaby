@@ -34,7 +34,7 @@ export interface PanelLayoutControllerContext {
 export interface PanelLayoutController {
   DND_TYPE_DOCK: string
   DND_TYPE_AGENT: string
-  createAgentPanel: (sourcePanelId?: string) => void
+  createAgentPanel: (opts?: { sourcePanelId?: string; initialModel?: string }) => void
   splitAgentPanel: (sourcePanelId: string) => void
   reorderAgentPanel: (draggedId: string, targetId: string) => void
   handleDragStart: (e: React.DragEvent, type: 'workspace' | 'code' | 'agent' | 'dock', id: string) => void
@@ -53,13 +53,13 @@ export function createPanelLayoutController(ctx: PanelLayoutControllerContext): 
   const DND_TYPE_DOCK = 'application/x-barnaby-dock-panel'
   const DND_TYPE_AGENT = 'application/x-barnaby-agent-panel'
 
-  function createAgentPanel(sourcePanelId?: string) {
+  function createAgentPanel(opts?: { sourcePanelId?: string; initialModel?: string }) {
     if (ctx.panelsRef.current.length >= ctx.MAX_PANELS) return
-    const sourcePanel = sourcePanelId ? ctx.panelsRef.current.find((panel) => panel.id === sourcePanelId) : undefined
+    const sourcePanel = opts?.sourcePanelId ? ctx.panelsRef.current.find((panel) => panel.id === opts.sourcePanelId) : undefined
     const panelWorkspace = sourcePanel?.cwd || ctx.workspaceRoot
     const ws = ctx.workspaceSettingsByPath[panelWorkspace] ?? ctx.workspaceSettingsByPath[ctx.workspaceRoot]
     const id = ctx.newId()
-    const startupModel = sourcePanel?.model ?? ws?.defaultModel ?? ctx.DEFAULT_MODEL
+    const startupModel = opts?.initialModel ?? sourcePanel?.model ?? ws?.defaultModel ?? ctx.DEFAULT_MODEL
     const p = ctx.makeDefaultPanel(id, panelWorkspace)
     p.model = startupModel
     p.provider = ctx.getModelProvider(startupModel)  // Lock provider based on initial model
@@ -82,7 +82,7 @@ export function createPanelLayoutController(ctx: PanelLayoutControllerContext): 
   }
 
   function splitAgentPanel(sourcePanelId: string) {
-    createAgentPanel(sourcePanelId)
+    createAgentPanel({ sourcePanelId })
   }
 
   function reorderAgentPanel(draggedId: string, targetId: string) {

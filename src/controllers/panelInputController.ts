@@ -150,7 +150,7 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
     const isBusy = w.streaming || w.pendingInputs.length > 0
     ctx.setInputDraftEditByPanel((prev) => ({
       ...prev,
-      [winId]: isBusy ? { kind: 'recalled' } : null,
+      [winId]: { kind: 'recalled' },
     }))
     ctx.setPanels((prev) =>
       prev.map((x) =>
@@ -280,13 +280,21 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
           createdAt: Date.now(),
         }
         ctx.lastScrollToUserMessageRef.current = { panelId: winId, messageId: userMessage.id }
+        let baseMessages = x.messages
+        if (draftEdit?.kind === 'recalled') {
+          let lastUserIdx = -1
+          for (let i = x.messages.length - 1; i >= 0; i--) {
+            if (x.messages[i].role === 'user') { lastUserIdx = i; break }
+          }
+          if (lastUserIdx >= 0) baseMessages = x.messages.slice(0, lastUserIdx)
+        }
         const updated: AgentPanelState = {
           ...x,
           input: '',
           attachments: [],
           streaming: true,
           status: 'Preparing message...',
-          messages: [...x.messages, userMessage],
+          messages: [...baseMessages, userMessage],
         }
         snapshotForHistory = updated
         return updated

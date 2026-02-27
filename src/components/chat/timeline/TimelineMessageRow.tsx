@@ -36,7 +36,6 @@ export interface TimelineMessageRowProps {
   isLastAssistantMessage: boolean
   isStreaming: boolean
   canRecallLastUserMessage: boolean
-  canResendLastUserMessage: boolean
   resendingPanelId: string | null
   panelId: string
   activeTheme: StandaloneTheme
@@ -49,7 +48,6 @@ export interface TimelineMessageRowProps {
   onChatLinkClick: (href: string) => void
   onGrantPermissionAndResend: () => void
   onRecallLastUserMessage: () => void
-  onResendLastUserMessage: () => void
 }
 
 export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: TimelineMessageRowProps) {
@@ -77,7 +75,6 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
     isLastAssistantMessage,
     isStreaming,
     canRecallLastUserMessage,
-    canResendLastUserMessage,
     resendingPanelId,
     panelId,
     activeTheme,
@@ -90,7 +87,6 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
     onChatLinkClick,
     onGrantPermissionAndResend,
     onRecallLastUserMessage,
-    onResendLastUserMessage,
   } = props
 
   const codeBlockIndexRef = useRef(0)
@@ -354,20 +350,6 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
         )}
         {isLastUserMessage && (
           <div className="flex justify-end mt-1.5 mb-0.5 mr-0.5 gap-1 opacity-0 pointer-events-none transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
-            {canResendLastUserMessage && (
-              <button
-                type="button"
-                className="h-6 w-6 inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50/70 text-blue-600 hover:bg-blue-100 hover:border-blue-300 dark:border-blue-900/70 dark:bg-blue-950/25 dark:text-blue-300 dark:hover:bg-blue-900/40 dark:hover:border-blue-700"
-                onClick={onResendLastUserMessage}
-                title="Resend this message"
-                aria-label="Resend this message"
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
-                  <path d="M13 8A5 5 0 1 1 8 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                  <path d="M8 1L10.5 3L8 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-            )}
             {canRecallLastUserMessage && (
               <button
                 type="button"

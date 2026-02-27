@@ -10,7 +10,6 @@ import { TimelineThinkingBatchRow } from './TimelineThinkingBatchRow'
 import { TimelineMessageRow } from './TimelineMessageRow'
 import type { ChatRole, MessageFormat } from '../../../types'
 import type { TimelineUnit } from '../../../chat/timelineTypes'
-import { LAST_USER_RECALL_EXPIRY_MS } from '../../../constants'
 import { isPermissionEscalationMessage, LIMIT_WARNING_PREFIX } from '../../../utils/appCore'
 
 export interface TimelineUnitRowProps {
@@ -42,7 +41,6 @@ export interface TimelineUnitRowProps {
   onChatLinkClick: (href: string) => void
   onGrantPermissionAndResend: () => void
   onRecallLastUserMessage: () => void
-  onResendLastUserMessage: () => void
 }
 
 export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: TimelineUnitRowProps) {
@@ -132,12 +130,7 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
   )
   const isLastUserMessage = m.role === 'user' && unit.id === props.lastUserUnitId
   const isLastAssistantMessage = m.role === 'assistant' && unit.id === props.lastAgentTimelineUnitId
-  const lastUserMessageAgeMs = isLastUserMessage
-    ? Math.max(0, props.activityClock - (m.createdAt ?? props.activityClock))
-    : Number.POSITIVE_INFINITY
-  const canRecallLastUserMessage =
-    isLastUserMessage && props.isIdle && lastUserMessageAgeMs <= LAST_USER_RECALL_EXPIRY_MS
-  const canResendLastUserMessage = isLastUserMessage && props.isIdle
+  const canRecallLastUserMessage = isLastUserMessage && props.isIdle
 
   return (
     <TimelineMessageRow
@@ -165,7 +158,6 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
       isLastAssistantMessage={isLastAssistantMessage}
       isStreaming={props.isStreaming}
       canRecallLastUserMessage={canRecallLastUserMessage}
-      canResendLastUserMessage={canResendLastUserMessage}
       resendingPanelId={props.resendingPanelId}
       panelId={props.panelId}
       activeTheme={props.activeTheme as import('../../../types').StandaloneTheme}
@@ -178,7 +170,6 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
       onChatLinkClick={props.onChatLinkClick}
       onGrantPermissionAndResend={props.onGrantPermissionAndResend}
       onRecallLastUserMessage={props.onRecallLastUserMessage}
-      onResendLastUserMessage={props.onResendLastUserMessage}
     />
   )
 })

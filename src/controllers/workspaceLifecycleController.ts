@@ -202,7 +202,7 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
       ctx.setActivePanelId(panel.id)
       return
     }
-    ctx.setLayoutMode(snapshot.layoutMode)
+    ctx.setLayoutMode('vertical')
     ctx.setShowWorkspaceWindow(snapshot.showWorkspaceWindow)
     ctx.setShowGitWindow(snapshot.showGitWindow)
     ctx.setShowSettingsWindow(snapshot.showSettingsWindow)

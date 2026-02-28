@@ -1,4 +1,9 @@
 import { useEffect } from 'react'
+import {
+  classifyContextCompactionNotification,
+  getModelPingKey,
+  withContextCompactionNotice,
+} from '../utils/appCore'
 
 export function useAppRuntimeEvents(ctx: any) {
   const {
@@ -21,6 +26,8 @@ export function useAppRuntimeEvents(ctx: any) {
     panelsRef,
     getModelProvider,
     setProviderVerifiedByName,
+    setModelPingResults,
+    setModelPingPending,
     looksIncomplete,
     autoContinueCountRef,
     MAX_AUTO_CONTINUE,
@@ -52,8 +59,45 @@ export function useAppRuntimeEvents(ctx: any) {
   } = ctx
 
   useEffect(() => {
+    const contextCompactingPanels = new Set<string>()
+
     const unsubEvent = api.onEvent(({ agentWindowId, evt }: any) => {
       if (!agentWindowId) agentWindowId = 'default'
+      if (evt?.type === 'contextCompacting') {
+        appendPanelDebug(agentWindowId, 'event:context', evt.detail ?? 'Compacting context')
+        markPanelActivity(agentWindowId, evt)
+        contextCompactingPanels.add(agentWindowId)
+        setPanels((prev: any[]) =>
+          prev.map((w) =>
+            w.id !== agentWindowId
+              ? w
+              : {
+                  ...w,
+                  status: 'Compacting context...',
+                },
+          ),
+        )
+        return
+      }
+
+      if (evt?.type === 'contextCompacted') {
+        appendPanelDebug(agentWindowId, 'event:context', evt.detail ?? 'Context compacted')
+        markPanelActivity(agentWindowId, evt)
+        contextCompactingPanels.delete(agentWindowId)
+        setPanels((prev: any[]) =>
+          prev.map((w) =>
+            w.id !== agentWindowId
+              ? w
+              : {
+                  ...w,
+                  status: 'Context compacted. Continuing...',
+                  messages: withContextCompactionNotice(w.messages, typeof evt.detail === 'string' ? evt.detail : undefined),
+                },
+          ),
+        )
+        return
+      }
+
       if (evt?.type === 'thinking') {
         appendPanelDebug(agentWindowId, 'event:thinking', evt.message ?? '')
         markPanelActivity(agentWindowId, evt)
@@ -78,6 +122,7 @@ export function useAppRuntimeEvents(ctx: any) {
         appendPanelDebug(agentWindowId, 'event:status', `${evt.status}${evt.message ? ` - ${evt.message}` : ''}`)
         const isRetryableError = evt.status === 'error' && typeof evt.message === 'string' &&
           /status 429|Retrying with backoff|Attempt \d+ failed(?!.*Max attempts)|Rate limited/i.test(evt.message)
+        const holdCompactingStatus = contextCompactingPanels.has(agentWindowId) && evt.status === 'starting'
         let closedAfterStreaming = false
         setPanels((prev: any[]) =>
           prev.map((w) =>
@@ -85,7 +130,11 @@ export function useAppRuntimeEvents(ctx: any) {
               ? w
               : {
                   ...w,
-                  status: isRetryableError ? 'Rate limited — retrying...' : (evt.message ?? evt.status),
+                  status: holdCompactingStatus
+                    ? 'Compacting context...'
+                    : isRetryableError
+                    ? 'Rate limited — retrying...'
+                    : (evt.message ?? evt.status),
                   connected: evt.status === 'ready',
                   streaming: isRetryableError ? w.streaming : (evt.status === 'closed' || evt.status === 'error' ? false : w.streaming),
                   ...(evt.status === 'closed' && !isRetryableError && w.streaming
@@ -114,6 +163,7 @@ export function useAppRuntimeEvents(ctx: any) {
           markPanelTurnComplete(agentWindowId)
         }
         if ((evt.status === 'closed' || evt.status === 'error') && !isRetryableError) {
+          contextCompactingPanels.delete(agentWindowId)
           activePromptStartedAtRef.current.delete(agentWindowId)
           queueMicrotask(() => kickQueuedMessage(agentWindowId))
           if (evt.status === 'closed' && reconnectPanelRef?.current) {
@@ -134,14 +184,38 @@ export function useAppRuntimeEvents(ctx: any) {
 
       if (evt?.type === 'assistantCompleted') {
         appendPanelDebug(agentWindowId, 'event:assistantCompleted', 'Assistant turn completed')
+        contextCompactingPanels.delete(agentWindowId)
         flushWindowDelta(agentWindowId)
+        const now = Date.now()
+        const startedAtForHealth = activePromptStartedAtRef.current.get(agentWindowId)
+        const observedDurationMs =
+          typeof startedAtForHealth === 'number' ? Math.max(0, now - startedAtForHealth) : 0
         const completedPanel = panelsRef.current.find((p: any) => p.id === agentWindowId)
         if (completedPanel) {
           const verifiedProvider = getModelProvider(completedPanel.model)
           setProviderVerifiedByName((prev: Record<string, boolean>) => prev[verifiedProvider] ? prev : { ...prev, [verifiedProvider]: true })
+          const modelId = String(completedPanel.model ?? '').trim()
+          if (modelId) {
+            const modelPingKey = getModelPingKey(verifiedProvider, modelId)
+            setModelPingResults?.((prev: Record<string, { ok: boolean; durationMs: number; error?: string }>) => ({
+              ...prev,
+              [modelPingKey]: { ok: true, durationMs: observedDurationMs },
+            }))
+            setModelPingPending?.((prev: Set<string>) => {
+              if (!prev.has(modelPingKey)) return prev
+              const next = new Set(prev)
+              next.delete(modelPingKey)
+              return next
+            })
+          }
         }
         let snapshotForHistory: any = null
         let shouldKeepPromptTimer = false
+        const isTransientTurnStatus = (status: unknown) => {
+          if (typeof status !== 'string') return false
+          if (status === 'Sending message...' || status === 'Preparing message...') return true
+          return /^Running .+ turn\.\.\.$/i.test(status)
+        }
         setPanels((prev: any[]) =>
           prev.map((w) => {
             if (w.id !== agentWindowId) return w
@@ -149,7 +223,14 @@ export function useAppRuntimeEvents(ctx: any) {
             const lastAssistantIdx = msgs.map((m: any) => m.role).lastIndexOf('assistant')
             const lastAssistant = lastAssistantIdx >= 0 ? msgs[lastAssistantIdx] : null
             if (!lastAssistant) {
-              const updated = { ...w, streaming: false }
+              const updated = {
+                ...w,
+                streaming: false,
+                status:
+                  isTransientTurnStatus(w.status)
+                    ? ''
+                    : w.status,
+              }
               snapshotForHistory = updated
               return updated
             }
@@ -165,7 +246,16 @@ export function useAppRuntimeEvents(ctx: any) {
             } else {
               autoContinueCountRef.current.delete(agentWindowId)
             }
-            const updated = { ...w, streaming: false, pendingInputs, messages: nextMessages }
+            const updated = {
+              ...w,
+              streaming: false,
+              pendingInputs,
+              messages: nextMessages,
+              status:
+                isTransientTurnStatus(w.status)
+                  ? ''
+                  : w.status,
+            }
             snapshotForHistory = updated
             return updated
           }),
@@ -203,6 +293,38 @@ export function useAppRuntimeEvents(ctx: any) {
 
       if (evt?.type === 'rawNotification') {
         const method = String(evt.method ?? '')
+        const compactionPhase = classifyContextCompactionNotification(method, evt.params)
+        if (compactionPhase === 'start') {
+          appendPanelDebug(agentWindowId, 'event:context', method)
+          contextCompactingPanels.add(agentWindowId)
+          setPanels((prev: any[]) =>
+            prev.map((w) =>
+              w.id !== agentWindowId
+                ? w
+                : {
+                    ...w,
+                    status: 'Compacting context...',
+                  },
+            ),
+          )
+          return
+        }
+        if (compactionPhase === 'completed') {
+          appendPanelDebug(agentWindowId, 'event:context', method)
+          contextCompactingPanels.delete(agentWindowId)
+          setPanels((prev: any[]) =>
+            prev.map((w) =>
+              w.id !== agentWindowId
+                ? w
+                : {
+                    ...w,
+                    status: 'Context compacted. Continuing...',
+                    messages: withContextCompactionNotice(w.messages),
+                  },
+            ),
+          )
+          return
+        }
         if (isTurnCompletionRawNotification(method, evt.params)) {
           markPanelTurnComplete(agentWindowId)
         }

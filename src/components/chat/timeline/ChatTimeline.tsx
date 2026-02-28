@@ -75,6 +75,7 @@ export interface ChatTimelineProps {
   onBeginQueuedMessageEdit: (index: number) => void
   onInjectQueuedMessage: (index: number) => void
   onRemoveQueuedMessage: (index: number) => void
+  actionsLocked: boolean
 }
 
 export function ChatTimeline(props: ChatTimelineProps) {
@@ -87,6 +88,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     onBeginQueuedMessageEdit,
     onInjectQueuedMessage,
     onRemoveQueuedMessage,
+    actionsLocked,
   } = props
 
   const rows = useMemo(
@@ -128,10 +130,11 @@ export function ChatTimeline(props: ChatTimelineProps) {
                 <div className="shrink-0 flex items-center gap-0.5">
                   <button
                     type="button"
-                    className="h-6 w-6 inline-flex items-center justify-center rounded border border-blue-300 bg-white/90 text-blue-700 hover:bg-blue-100 hover:border-blue-400 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-900/50 dark:hover:border-blue-600"
-                    title="Edit queued message"
+                    className="h-6 w-6 inline-flex items-center justify-center rounded border border-blue-300 bg-white/90 text-blue-700 hover:bg-blue-100 hover:border-blue-400 disabled:opacity-50 disabled:cursor-not-allowed dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-900/50 dark:hover:border-blue-600"
+                    title={actionsLocked ? 'This chat is read-only. Start a new chat to continue.' : 'Edit queued message'}
                     aria-label="Edit queued message"
                     onClick={() => onBeginQueuedMessageEdit(i)}
+                    disabled={actionsLocked}
                   >
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
                       <path d="M3 11.5L2.8 13.2L4.5 13L12.2 5.3L10.7 3.8L3 11.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
@@ -140,10 +143,11 @@ export function ChatTimeline(props: ChatTimelineProps) {
                   </button>
                   <button
                     type="button"
-                    className="h-6 w-6 inline-flex items-center justify-center rounded border border-amber-400 bg-white/80 text-amber-700 hover:bg-emerald-50 hover:border-emerald-400 hover:text-emerald-700 dark:border-amber-600 dark:bg-amber-900/50 dark:text-amber-200 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300"
-                    title="Inject now - send to agent immediately"
+                    className="h-6 w-6 inline-flex items-center justify-center rounded border border-amber-400 bg-white/80 text-amber-700 hover:bg-emerald-50 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed dark:border-amber-600 dark:bg-amber-900/50 dark:text-amber-200 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300"
+                    title={actionsLocked ? 'This chat is read-only. Start a new chat to continue.' : 'Inject now - send to agent immediately'}
                     aria-label="Inject now"
                     onClick={() => onInjectQueuedMessage(i)}
+                    disabled={actionsLocked}
                   >
                     <svg width="14" height="14" viewBox="0 0 12 12" fill="none">
                       <path d="M6 10V2M2.5 5.5L6 2l3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
@@ -151,10 +155,11 @@ export function ChatTimeline(props: ChatTimelineProps) {
                   </button>
                   <button
                     type="button"
-                    className="h-6 w-6 inline-flex items-center justify-center rounded border border-amber-400 bg-white/80 text-amber-700 hover:bg-red-50 hover:border-red-300 hover:text-red-700 dark:border-amber-600 dark:bg-amber-900/50 dark:text-amber-200 dark:hover:bg-red-950/40 dark:hover:text-red-400"
-                    title="Remove from queue"
+                    className="h-6 w-6 inline-flex items-center justify-center rounded border border-amber-400 bg-white/80 text-amber-700 hover:bg-red-50 hover:border-red-300 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed dark:border-amber-600 dark:bg-amber-900/50 dark:text-amber-200 dark:hover:bg-red-950/40 dark:hover:text-red-400"
+                    title={actionsLocked ? 'This chat is read-only. Start a new chat to continue.' : 'Remove from queue'}
                     aria-label="Remove from queue"
                     onClick={() => onRemoveQueuedMessage(i)}
+                    disabled={actionsLocked}
                   >
                     &times;
                   </button>

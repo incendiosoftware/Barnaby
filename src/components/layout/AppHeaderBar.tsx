@@ -21,6 +21,7 @@ interface AppHeaderBarProps {
   setHistoryDropdownOpen: React.Dispatch<React.SetStateAction<boolean>>
   workspaceScopedHistory: ChatHistoryEntry[]
   openChatFromHistory: (id: string) => void
+  downloadHistoryTranscript: (id: string) => void | Promise<void>
   formatHistoryOptionLabel: (entry: ChatHistoryEntry) => string
   setDeleteHistoryIdPending: React.Dispatch<React.SetStateAction<string | null>>
   createAgentPanel: (opts?: { sourcePanelId?: string; initialModel?: string }) => void
@@ -49,6 +50,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
     setHistoryDropdownOpen,
     workspaceScopedHistory,
     openChatFromHistory,
+    downloadHistoryTranscript,
     formatHistoryOptionLabel,
     setDeleteHistoryIdPending,
     createAgentPanel,
@@ -165,6 +167,20 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
                       </span>
                       <button
                         type="button"
+                        className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50/70 text-blue-700 hover:bg-emerald-100 hover:border-emerald-300 hover:text-emerald-700 dark:border-blue-900/70 dark:bg-blue-950/25 dark:text-blue-300 dark:hover:bg-emerald-950/40 dark:hover:border-emerald-900 dark:hover:text-emerald-300"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void downloadHistoryTranscript(entry.id)
+                        }}
+                        title="Download transcript"
+                        aria-label="Download transcript"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                          <path d="M6 1.8V7.4M6 7.4L3.8 5.2M6 7.4L8.2 5.2M2.2 9.4H9.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
                         className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50/70 text-blue-700 hover:bg-red-100 hover:border-red-300 hover:text-red-700 dark:border-blue-900/70 dark:bg-blue-950/25 dark:text-blue-300 dark:hover:bg-red-950/40 dark:hover:border-red-900 dark:hover:text-red-300"
                         onClick={(e) => {
                           e.stopPropagation()
@@ -198,8 +214,8 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
               </svg>
             </button>
             {newChatDropdownOpen && (
-              <div className="absolute top-full left-0 mt-1 rounded-lg bg-neutral-50 dark:bg-neutral-800 shadow-xl z-50 min-w-[220px] overflow-hidden">
-                <div className="px-3 py-2 text-xs font-semibold text-neutral-500 dark:text-neutral-400 bg-neutral-100 dark:bg-neutral-900 border-b border-neutral-200/50 dark:border-neutral-700/50">
+              <div className="absolute top-full left-0 mt-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl z-50 min-w-[220px] overflow-hidden">
+                <div className="px-3 py-2 text-xs font-semibold text-neutral-500 dark:text-neutral-400 bg-neutral-50 dark:bg-neutral-900 border-b border-neutral-200/70 dark:border-neutral-700">
                   Choose Provider
                 </div>
                 <div className="py-1 flex flex-col">

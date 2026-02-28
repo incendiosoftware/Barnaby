@@ -32,6 +32,7 @@ export type ChatMessage = {
   id: string
   role: ChatRole
   content: string
+  interactionMode?: AgentInteractionMode
   format?: MessageFormat
   attachments?: PastedImageAttachment[]
   createdAt?: number
@@ -92,6 +93,7 @@ export type DockLayoutState = {
 export type AgentPanelState = {
   id: string
   historyId: string
+  historyLocked: boolean
   title: string
   cwd: string
   provider: ModelProvider  // Immutable - locked at panel creation
@@ -258,6 +260,7 @@ export type PersistedEditorPanelState = {
 export type PersistedAgentPanelState = {
   id?: unknown
   historyId?: unknown
+  historyLocked?: unknown
   title?: unknown
   cwd?: unknown
   model?: unknown

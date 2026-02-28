@@ -22,6 +22,14 @@ export type TruncateOptions = {
     tailChars?: number
 }
 
+export type TruncateHistoryResult = {
+    history: HistoryMessage[]
+    droppedMessages: number
+    truncatedAssistantMessages: number
+    truncatedAssistantChars: number
+    didTruncate: boolean
+}
+
 const DEFAULT_MAX_MESSAGES = 6
 const DEFAULT_MAX_ASSISTANT_CHARS = 2000
 const DEFAULT_HEAD_CHARS = 500
@@ -38,6 +46,13 @@ export function truncateHistory(
     history: HistoryMessage[],
     options?: TruncateOptions,
 ): HistoryMessage[] {
+    return truncateHistoryWithMeta(history, options).history
+}
+
+export function truncateHistoryWithMeta(
+    history: HistoryMessage[],
+    options?: TruncateOptions,
+): TruncateHistoryResult {
     const maxMessages = options?.maxMessages ?? DEFAULT_MAX_MESSAGES
     const maxAssistantChars = options?.maxAssistantChars ?? DEFAULT_MAX_ASSISTANT_CHARS
     const headChars = options?.headChars ?? DEFAULT_HEAD_CHARS
@@ -45,11 +60,16 @@ export function truncateHistory(
 
     // Take only the most recent messages
     const recent = history.length > maxMessages ? history.slice(-maxMessages) : [...history]
+    const droppedMessages = Math.max(0, history.length - recent.length)
+    let truncatedAssistantMessages = 0
+    let truncatedAssistantChars = 0
 
-    return recent.map((msg) => {
+    const mapped = recent.map((msg) => {
         if (msg.role !== 'assistant' || msg.text.length <= maxAssistantChars) {
             return msg
         }
+        truncatedAssistantMessages += 1
+        truncatedAssistantChars += Math.max(0, msg.text.length - headChars - tailChars)
         // Truncate long assistant messages: keep head + tail with a marker
         const head = msg.text.slice(0, headChars)
         const tail = msg.text.slice(-tailChars)
@@ -58,4 +78,12 @@ export function truncateHistory(
             text: `${head}\n\n[...truncated ${msg.text.length - headChars - tailChars} chars...]\n\n${tail}`,
         }
     })
+
+    return {
+        history: mapped,
+        droppedMessages,
+        truncatedAssistantMessages,
+        truncatedAssistantChars,
+        didTruncate: droppedMessages > 0 || truncatedAssistantMessages > 0,
+    }
 }

@@ -14,6 +14,7 @@ export interface PanelContentRendererProps {
 
 export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProps) {
   const hasInput = Boolean(w.input.trim()) || w.attachments.length > 0
+  const inputLocked = Boolean(w.historyLocked)
   const isBusy = w.streaming
   const queueCount = w.pendingInputs.length
   const isIdle = !w.streaming && queueCount === 0
@@ -165,11 +166,13 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
           onBeginQueuedMessageEdit={(i) => ctx.beginQueuedMessageEdit(w.id, i)}
           onInjectQueuedMessage={(i) => ctx.injectQueuedMessage(w.id, i)}
           onRemoveQueuedMessage={(i) => ctx.removeQueuedMessage(w.id, i)}
+          actionsLocked={inputLocked}
         />
       </AgentPanelMessageViewport>
 
       <ChatInputSection
         panel={w}
+        inputLocked={inputLocked}
         panelFontSizePx={panelFontSizePx}
         panelLineHeightPx={panelLineHeightPx}
         hasInput={hasInput}
@@ -203,35 +206,58 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         getModelOptions={ctx.getModelOptions}
         textareaRef={(el) => ctx.registerTextarea(w.id, el)}
         onInputChange={(next) => {
+          if (inputLocked) return
           ctx.setPanels((prev: AgentPanelState[]) => prev.map((x) => (x.id === w.id ? { ...x, input: next } : x)))
           queueMicrotask(() => ctx.autoResizeTextarea(w.id))
         }}
         onFocus={() => ctx.setActivePanelId(w.id)}
-        onPasteImage={(file) => void ctx.handlePasteImage(w.id, file)}
+        onPasteImage={(file) => {
+          if (inputLocked) return
+          void ctx.handlePasteImage(w.id, file)
+        }}
         onKeyDown={(e) => {
+          if (inputLocked) return
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
             ctx.sendMessage(w.id)
           }
         }}
         onContextMenu={ctx.onInputPanelContextMenu}
-        onSend={() => ctx.sendMessage(w.id)}
+        onSend={() => {
+          if (inputLocked) return
+          ctx.sendMessage(w.id)
+        }}
         onInterrupt={() => void ctx.api.interrupt(w.id)}
-        onCancelDraftEdit={() => ctx.cancelDraftEdit(w.id)}
-        onRemoveAttachment={(attachmentId) =>
+        onCancelDraftEdit={() => {
+          if (inputLocked) return
+          ctx.cancelDraftEdit(w.id)
+        }}
+        onRemoveAttachment={(attachmentId) => {
+          if (inputLocked) return
           ctx.setPanels((prev: AgentPanelState[]) =>
             prev.map((p) =>
               p.id !== w.id ? p : { ...p, attachments: p.attachments.filter((x) => x.id !== attachmentId) },
             ),
           )
-        }
-        setSettingsPopover={(next) =>
+        }}
+        setSettingsPopover={(next) => {
+          if (inputLocked) return
           ctx.setSettingsPopoverByPanel((prev: Record<string, any>) => ({ ...prev, [w.id]: next }))
-        }
-        onSetInteractionMode={(mode) => ctx.setInteractionMode(w.id, mode)}
-        onSetPanelSandbox={(value) => ctx.setPanelSandbox(w.id, value)}
-        onSetPanelPermission={(value) => ctx.setPanelPermission(w.id, value)}
-        onSandboxLockedClick={() =>
+        }}
+        onSetInteractionMode={(mode) => {
+          if (inputLocked) return
+          ctx.setInteractionMode(w.id, mode)
+        }}
+        onSetPanelSandbox={(value) => {
+          if (inputLocked) return
+          ctx.setPanelSandbox(w.id, value)
+        }}
+        onSetPanelPermission={(value) => {
+          if (inputLocked) return
+          ctx.setPanelPermission(w.id, value)
+        }}
+        onSandboxLockedClick={() => {
+          if (inputLocked) return
           ctx.setPanels((prev: AgentPanelState[]) =>
             prev.map((p) =>
               p.id !== w.id
@@ -239,8 +265,15 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
                 : { ...p, status: 'Sandbox is locked to View. Expand sandbox in Workspace settings.' },
             ),
           )
-        }
-        onSwitchModel={(modelId) => ctx.switchModel(w.id, modelId)}
+        }}
+        onSwitchModel={(modelId) => {
+          if (inputLocked) return
+          ctx.switchModel(w.id, modelId)
+        }}
+        onSummarizeContext={() => {
+          if (inputLocked) return
+          ctx.summarizeSessionContext(w.id)
+        }}
       />
     </AgentPanelShell>
   )

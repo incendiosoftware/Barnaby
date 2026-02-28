@@ -113,6 +113,7 @@ function renderInteractionModeSymbol(mode: AgentInteractionMode) {
 
 export interface ChatInputSectionProps {
   panel: AgentPanelState
+  inputLocked: boolean
   panelFontSizePx: number
   panelLineHeightPx: number
   hasInput: boolean
@@ -160,10 +161,12 @@ export interface ChatInputSectionProps {
   onSetPanelPermission: (value: PermissionMode) => void
   onSandboxLockedClick: () => void
   onSwitchModel: (modelId: string) => void
+  onSummarizeContext: () => void
 }
 
 export function ChatInputSection({
   panel,
+  inputLocked,
   panelFontSizePx,
   panelLineHeightPx,
   hasInput,
@@ -211,7 +214,20 @@ export function ChatInputSection({
   onSetPanelPermission,
   onSandboxLockedClick,
   onSwitchModel,
+  onSummarizeContext,
 }: ChatInputSectionProps) {
+  const lockTitle = 'This chat is read-only. Start a new chat to continue.'
+  const sendButtonDisabled = inputLocked || (!isBusy && !hasInput)
+  const summarizeDisabled = inputLocked || isBusy
+  const interactionModeBadgeClass =
+    interactionMode === 'plan'
+      ? 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/35 dark:text-emerald-200'
+      : interactionMode === 'debug'
+        ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/35 dark:text-amber-200'
+        : interactionMode === 'ask'
+          ? 'border-violet-300 bg-violet-50 text-violet-800 dark:border-violet-800 dark:bg-violet-950/35 dark:text-violet-200'
+          : 'border-blue-300 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950/35 dark:text-blue-200'
+
   return (
     <div className="relative z-10 border-t border-neutral-200/80 dark:border-neutral-800 p-2.5 bg-white dark:bg-neutral-950">
       {panel.attachments.length > 0 && (
@@ -221,9 +237,10 @@ export function ChatInputSection({
               <span className="truncate max-w-[200px]" title={a.path}>{a.label}</span>
               <button
                 type="button"
-                className="rounded px-1 hover:bg-blue-100 dark:hover:bg-blue-900/40"
+                className="rounded px-1 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed dark:hover:bg-blue-900/40"
                 title="Remove attachment"
                 onClick={() => onRemoveAttachment(a.id)}
+                disabled={inputLocked}
               >
                 &times;
               </button>
@@ -240,21 +257,31 @@ export function ChatInputSection({
           </span>
           <button
             type="button"
-            className="rounded border border-blue-300/80 px-1.5 py-0.5 text-[10px] hover:bg-blue-100 dark:border-blue-700 dark:hover:bg-blue-900/50"
+            className="rounded border border-blue-300/80 px-1.5 py-0.5 text-[10px] hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed dark:border-blue-700 dark:hover:bg-blue-900/50"
             onClick={onCancelDraftEdit}
+            disabled={inputLocked}
           >
             Cancel
           </button>
         </div>
       )}
+      <div className="mb-1.5 flex items-center gap-2 text-[11px]">
+        <span className="text-neutral-500 dark:text-neutral-400">Mode</span>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-medium ${interactionModeBadgeClass}`}>
+          {renderInteractionModeSymbol(interactionMode)}
+          {INTERACTION_MODE_META[interactionMode].label}
+        </span>
+      </div>
       <div className="flex items-end gap-2 min-w-0">
         <textarea
           ref={textareaRef}
-          className="flex-1 min-w-0 resize-none rounded-xl bg-white border border-neutral-300 px-3 py-2 text-neutral-900 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 placeholder:text-neutral-500 dark:bg-neutral-800 dark:border-neutral-600 dark:text-neutral-100 dark:placeholder:text-neutral-400 dark:focus:border-blue-700 dark:focus:ring-blue-900/40 font-chat"
+          className="flex-1 min-w-0 resize-none rounded-xl bg-white border border-neutral-300 px-3 py-2 text-neutral-900 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 placeholder:text-neutral-500 disabled:cursor-not-allowed disabled:opacity-70 dark:bg-neutral-800 dark:border-neutral-600 dark:text-neutral-100 dark:placeholder:text-neutral-400 dark:focus:border-blue-700 dark:focus:ring-blue-900/40 font-chat"
           style={{ fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }}
-          placeholder="Message the agent..."
+          placeholder={inputLocked ? 'This chat is read-only. Start a new chat to continue.' : 'Message the agent...'}
           rows={1}
           value={panel.input}
+          disabled={inputLocked}
+          readOnly={inputLocked}
           onFocus={onFocus}
           onChange={(e) => onInputChange(e.target.value)}
           onPaste={(e) => {
@@ -287,6 +314,7 @@ export function ChatInputSection({
                   : 'border-neutral-300 bg-neutral-100 text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-600',
             ].join(' ')}
             onClick={() => {
+              if (inputLocked) return
               if (isBusy) {
                 if (draftEdit?.kind === 'recalled') onSend()
                 else onInterrupt()
@@ -294,8 +322,8 @@ export function ChatInputSection({
                 onSend()
               }
             }}
-            disabled={!isBusy && !hasInput}
-            title={sendTitle}
+            disabled={sendButtonDisabled}
+            title={inputLocked ? lockTitle : sendTitle}
           >
             {isBusy && !hasInput ? (
               <SpinnerIcon size={18} className="animate-spin motion-reduce:animate-none" />
@@ -369,17 +397,33 @@ export function ChatInputSection({
           })()}
         </div>
         <div className="min-w-0 flex flex-wrap items-center justify-end gap-1.5">
+          <button
+            type="button"
+            className="h-7 inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 text-[11px] text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+            title={
+              inputLocked
+                ? lockTitle
+                : isBusy
+                ? 'Wait for the current turn to finish before summarizing context.'
+                : 'Compress this session into a checkpoint summary and reset context.'
+            }
+            onClick={onSummarizeContext}
+            disabled={summarizeDisabled}
+          >
+            Summarize Session
+          </button>
           <div className="relative" data-settings-popover-root="true">
             <button
               type="button"
               className={[
-                'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors',
+                'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                 settingsPopover === 'mode'
                   ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
                   : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
               ].join(' ')}
-              title={`Mode: ${INTERACTION_MODE_META[interactionMode].label}`}
+              title={inputLocked ? lockTitle : `Mode: ${INTERACTION_MODE_META[interactionMode].label}`}
               onClick={() => setSettingsPopover(settingsPopover === 'mode' ? null : 'mode')}
+              disabled={inputLocked}
             >
               {renderInteractionModeSymbol(interactionMode)}
             </button>
@@ -411,13 +455,15 @@ export function ChatInputSection({
             <button
               type="button"
               className={[
-                'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors',
+                'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                 settingsPopover === 'sandbox'
                   ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
                   : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
               ].join(' ')}
               title={
-                sandboxLockedToView
+                inputLocked
+                  ? lockTitle
+                  : sandboxLockedToView
                   ? 'Sandbox: View only (locked by Workspace settings)'
                   : `Sandbox: ${effectiveSandbox}`
               }
@@ -427,6 +473,7 @@ export function ChatInputSection({
                 }
                 setSettingsPopover(settingsPopover === 'sandbox' ? null : 'sandbox')
               }}
+              disabled={inputLocked}
             >
               {renderSandboxSymbol(effectiveSandbox)}
             </button>
@@ -474,13 +521,15 @@ export function ChatInputSection({
                   : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
               ].join(' ')}
               title={
-                permissionDisabledByReadOnlySandbox
+                inputLocked
+                  ? lockTitle
+                  : permissionDisabledByReadOnlySandbox
                   ? 'Permissions disabled while workspace sandbox is Read only'
                   : permissionLockedToVerifyFirst
                     ? 'Permissions: Verify first (locked by Workspace settings)'
                     : `Permissions: ${effectivePermissionMode}`
               }
-              disabled={permissionDisabledByReadOnlySandbox}
+              disabled={inputLocked || permissionDisabledByReadOnlySandbox}
               onClick={() => setSettingsPopover(settingsPopover === 'permission' ? null : 'permission')}
             >
               {renderPermissionSymbol(effectivePermissionMode)}
@@ -570,13 +619,14 @@ export function ChatInputSection({
                   <button
                     type="button"
                     className={[
-                      'h-7 inline-flex items-center gap-1.5 rounded-md border px-1.5 text-[11px] transition-colors',
+                      'h-7 inline-flex items-center gap-1.5 rounded-md border px-1.5 text-[11px] transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                       settingsPopover === 'model'
                         ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
                         : 'border-neutral-200/70 bg-neutral-50/75 text-neutral-700 hover:bg-neutral-100 dark:border-neutral-800 dark:bg-neutral-900/60 dark:text-neutral-200 dark:hover:bg-neutral-800',
                     ].join(' ')}
-                    title={`Model: ${panel.model}`}
+                    title={inputLocked ? lockTitle : `Model: ${panel.model}`}
                     onClick={() => setSettingsPopover(settingsPopover === 'model' ? null : 'model')}
+                    disabled={inputLocked}
                   >
                     {renderModelStatusDot(panel.model)}
                     <span className="max-w-[160px] truncate">{panel.model}</span>

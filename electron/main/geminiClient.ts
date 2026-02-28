@@ -83,7 +83,8 @@ function spawnGemini(
 import { resolveAtFileReferences } from './atFileResolver'
 import { generateWorkspaceTreeText } from './fileTree'
 import { buildStableSystemPrompt, buildDynamicContext } from './systemPrompt'
-import { truncateHistory } from './historyTruncation'
+import { truncateHistoryWithMeta } from './historyTruncation'
+import { logModelPayloadAudit } from './modelPayloadLogger'
 
 export type GeminiClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
@@ -91,6 +92,8 @@ export type GeminiClientEvent =
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
   | { type: 'thinking'; message: string }
+  | { type: 'contextCompacting'; detail?: string }
+  | { type: 'contextCompacted'; detail?: string }
 
 const INITIAL_HISTORY_MAX_MESSAGES = 24
 
@@ -259,6 +262,22 @@ export class GeminiClient extends EventEmitter {
         if (this.mcpServerNames.length > 0) {
           args.push('--allowed-mcp-server-names', ...this.mcpServerNames)
         }
+        const policyBytes =
+          this.policyFilePath && fs.existsSync(this.policyFilePath)
+            ? fs.statSync(this.policyFilePath).size
+            : 0
+        logModelPayloadAudit({
+          provider: 'gemini',
+          endpoint: 'cli:prompt-arg',
+          model: modelId,
+          serializedPayload: prompt,
+          meta: {
+            resume: useResume,
+            promptChars: prompt.length,
+            policyBytes,
+            mcpServerCount: this.mcpServerNames.length,
+          },
+        })
         const spawnOpts = {
           cwd: this.cwd,
           stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
@@ -560,7 +579,22 @@ export class GeminiClient extends EventEmitter {
 
     // First turn: send dynamic context + truncated history + user message.
     // The stable system prompt is injected via the --policy file, NOT here.
-    const truncated = truncateHistory(this.history.slice(0, -1)) // exclude the message we're about to send
+    const truncation = truncateHistoryWithMeta(this.history.slice(0, -1)) // exclude the message we're about to send
+    if (truncation.didTruncate) {
+      this.emitEvent({ type: 'contextCompacting', detail: 'Preparing checkpoint summary...' })
+      const parts: string[] = []
+      if (truncation.droppedMessages > 0) {
+        parts.push(`Removed ${truncation.droppedMessages} older message${truncation.droppedMessages === 1 ? '' : 's'}`)
+      }
+      if (truncation.truncatedAssistantMessages > 0) {
+        parts.push(`Compressed ${truncation.truncatedAssistantMessages} long assistant message${truncation.truncatedAssistantMessages === 1 ? '' : 's'}`)
+      }
+      this.emitEvent({
+        type: 'contextCompacted',
+        detail: parts.length > 0 ? parts.join('; ') : 'Applied history compaction.',
+      })
+    }
+    const truncated = truncation.history
     const historyHint = truncated.length > 0
       ? '\n\n' + truncated.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}:\n${m.text}`).join('\n\n') + '\n\n'
       : ''

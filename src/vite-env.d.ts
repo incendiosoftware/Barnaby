@@ -100,6 +100,12 @@ interface Window {
       count: number
       path: string
     }>
+    saveTranscriptFile(workspaceRoot: string, suggestedFileName: string, content: string): Promise<{
+      ok: boolean
+      canceled?: boolean
+      path?: string
+      error?: string
+    }>
     loadAppState(): Promise<unknown | null>
     saveAppState(state: unknown): Promise<{
       ok: boolean
@@ -110,6 +116,10 @@ interface Window {
       ok: boolean
       themeSource: 'light' | 'dark' | 'system'
       shouldUseDarkColors: boolean
+    }>
+    setWindowWorkspaceTitle(workspaceRoot: string): Promise<{
+      ok: boolean
+      title: string
     }>
     notifyRendererReady(): Promise<{ ok: boolean }>
     getDiagnosticsInfo(): Promise<{
@@ -222,7 +232,7 @@ interface Window {
     showContextMenu(kind: 'input-selection' | 'chat-selection'): Promise<{ ok: boolean }>
     getProviderAuthStatus(config: ProviderConfigForAuth): Promise<ProviderAuthStatus>
     pingProvider(providerId: string): Promise<{ ok: boolean; detail: string; durationMs: number }>
-    pingModel(provider: string, modelId: string): Promise<{ ok: boolean; durationMs: number; error?: string }>
+    pingModel(provider: string, modelId: string, cwd?: string): Promise<{ ok: boolean; durationMs: number; error?: string }>
     startProviderLogin(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }>
     upgradeProviderCli(config: ProviderConfigForAuth): Promise<{ started: boolean; detail: string }>
     setProviderApiKey(providerId: string, apiKey: string): Promise<{ ok: boolean; hasKey: boolean }>

@@ -296,6 +296,7 @@ let mainWindowReadyToShow = false
 let rendererStartupReady = false
 let waitForRendererStartup = false
 let mainWindowRevealed = false
+let currentWindowWorkspaceRoot = ''
 
 const agentClients = new Map<string, AgentClient>()
 const agentClientCwds = new Map<string, string>()
@@ -317,6 +318,19 @@ function isBareElectronHostLaunch() {
 
 function normalizeRelativePath(p: string) {
   return p.replace(/\\/g, '/')
+}
+
+function getWindowWorkspaceLabel(workspaceRoot: string) {
+  const trimmed = workspaceRoot.trim()
+  if (!trimmed) return 'No workspace'
+  const normalized = trimmed.replace(/[\\/]+$/, '')
+  const baseName = path.basename(normalized)
+  return baseName || normalized
+}
+
+function getMainWindowTitle(workspaceRoot: string) {
+  const titleSuffix = VITE_DEV_SERVER_URL ? '(DEV)' : `(V${app.getVersion()})`
+  return `Barnaby ${titleSuffix} - ${getWindowWorkspaceLabel(workspaceRoot)}`
 }
 
 function isDirectory(p: string) {
@@ -1322,6 +1336,48 @@ async function pickWorkspaceOpenPath(workspaceRoot: string) {
   if (result.canceled || result.filePaths.length === 0) return null
   const selectedPath = result.filePaths[0]
   return toWorkspaceRelativePath(root, selectedPath)
+}
+
+function sanitizeFileNameSegment(value: string, fallback = 'conversation-transcript') {
+  const cleaned = String(value ?? '')
+    .trim()
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+  return cleaned || fallback
+}
+
+async function saveTranscriptFile(workspaceRoot: string, suggestedFileName: string, content: string) {
+  const parent = BrowserWindow.getFocusedWindow() ?? win ?? BrowserWindow.getAllWindows()[0] ?? undefined
+  const defaultFileName = `${sanitizeFileNameSegment(suggestedFileName)}.md`
+  let defaultDir = app.getPath('downloads')
+  const trimmedRoot = workspaceRoot.trim()
+  if (trimmedRoot) {
+    try {
+      const resolvedRoot = path.resolve(trimmedRoot)
+      if (fs.existsSync(resolvedRoot) && fs.statSync(resolvedRoot).isDirectory()) {
+        defaultDir = path.join(resolvedRoot, '.barnaby', 'saved-chats')
+      }
+    } catch {
+      // fallback to Downloads
+    }
+  }
+  const defaultPath = path.join(defaultDir, defaultFileName)
+  const result = await dialog.showSaveDialog(parent, {
+    title: 'Save conversation transcript',
+    defaultPath,
+    filters: [
+      { name: 'Markdown', extensions: ['md'] },
+      { name: 'Text', extensions: ['txt'] },
+    ],
+  })
+  if (result.canceled || !result.filePath) {
+    return { ok: false as const, canceled: true as const }
+  }
+  fs.mkdirSync(path.dirname(result.filePath), { recursive: true })
+  fs.writeFileSync(result.filePath, String(content ?? ''), 'utf8')
+  return { ok: true as const, path: result.filePath }
 }
 
 function parseGitStatus(rawStatus: string): GitStatusResult {
@@ -2690,9 +2746,8 @@ async function createWindow() {
   const startupWidth = Math.floor(workAreaWidth / 5)
   const startupHeight = Math.floor(workAreaHeight * 0.9)
 
-  const titleSuffix = VITE_DEV_SERVER_URL ? '(DEV)' : `(V${app.getVersion()})`
   win = new BrowserWindow({
-    title: `Barnaby ${titleSuffix}`,
+    title: getMainWindowTitle(currentWindowWorkspaceRoot),
     icon: path.join(process.env.VITE_PUBLIC, 'node.svg'),
     show: false,
     width: startupWidth,
@@ -2716,7 +2771,7 @@ async function createWindow() {
   }
 
   win.webContents.on('did-finish-load', () => {
-    win?.setTitle(`Barnaby ${titleSuffix}`)
+    win?.setTitle(getMainWindowTitle(currentWindowWorkspaceRoot))
   })
 
   win.once('ready-to-show', () => {
@@ -2917,6 +2972,23 @@ ipcMain.handle('agentorchestrator:saveChatHistory', async (_evt, entries: unknow
   return writePersistedChatHistory(entries)
 })
 
+ipcMain.handle('agentorchestrator:saveTranscriptFile', async (_evt, workspaceRoot: unknown, suggestedFileName: unknown, content: unknown) => {
+  try {
+    const resolvedWorkspaceRoot =
+      typeof workspaceRoot === 'string' && workspaceRoot.trim()
+        ? workspaceRoot.trim()
+        : ''
+    const safeFileName =
+      typeof suggestedFileName === 'string' && suggestedFileName.trim()
+        ? suggestedFileName.trim()
+        : 'conversation-transcript.md'
+    const body = typeof content === 'string' ? content : String(content ?? '')
+    return await saveTranscriptFile(resolvedWorkspaceRoot, safeFileName, body)
+  } catch (err) {
+    return { ok: false as const, error: errorMessage(err) }
+  }
+})
+
 ipcMain.handle('agentorchestrator:loadAppState', async () => {
   return readPersistedAppState()
 })
@@ -2932,6 +3004,15 @@ ipcMain.handle('agentorchestrator:setWindowTheme', async (_evt, requestedTheme: 
       : 'system'
   nativeTheme.themeSource = themeSource
   return { ok: true, themeSource, shouldUseDarkColors: nativeTheme.shouldUseDarkColors }
+})
+
+ipcMain.handle('agentorchestrator:setWindowWorkspaceTitle', async (_evt, workspaceRoot: unknown) => {
+  currentWindowWorkspaceRoot = typeof workspaceRoot === 'string' ? workspaceRoot : ''
+  const title = getMainWindowTitle(currentWindowWorkspaceRoot)
+  if (win && !win.isDestroyed()) {
+    win.setTitle(title)
+  }
+  return { ok: true, title }
 })
 
 ipcMain.handle('agentorchestrator:rendererReady', async () => {

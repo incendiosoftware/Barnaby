@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import readline from 'node:readline'
 import fs from 'node:fs'
 import path from 'node:path'
+import { logModelPayloadAudit } from './modelPayloadLogger'
 
 type JsonRpcId = number
 
@@ -190,10 +191,20 @@ export class CodexAppServerClient extends EventEmitter {
     if (!trimmed) return
 
     // Start a new turn and stream deltas via item notifications.
-    const turnStart = await this.sendRequest('turn/start', {
+    const requestPayload = {
       threadId: this.threadId,
       input: [{ type: 'text', text: trimmed }],
+    }
+    logModelPayloadAudit({
+      provider: 'codex-app-server',
+      endpoint: 'turn/start',
+      serializedPayload: JSON.stringify(requestPayload),
+      meta: {
+        textChars: trimmed.length,
+        imageCount: 0,
+      },
     })
+    const turnStart = await this.sendRequest('turn/start', requestPayload)
     const turnId = (turnStart as any)?.turn?.id
     if (turnId && typeof turnId === 'string') this.activeTurnId = turnId
     this.resetTurnInactivityTimer()
@@ -209,10 +220,20 @@ export class CodexAppServerClient extends EventEmitter {
     if (trimmed) input.push({ type: 'text', text: trimmed })
     for (const path of imagePaths) input.push({ type: 'localImage', path })
 
-    const turnStart = await this.sendRequest('turn/start', {
+    const requestPayload = {
       threadId: this.threadId,
       input,
+    }
+    logModelPayloadAudit({
+      provider: 'codex-app-server',
+      endpoint: 'turn/start',
+      serializedPayload: JSON.stringify(requestPayload),
+      meta: {
+        textChars: trimmed.length,
+        imageCount: imagePaths.length,
+      },
     })
+    const turnStart = await this.sendRequest('turn/start', requestPayload)
     const turnId = (turnStart as any)?.turn?.id
     if (turnId && typeof turnId === 'string') this.activeTurnId = turnId
     this.resetTurnInactivityTimer()

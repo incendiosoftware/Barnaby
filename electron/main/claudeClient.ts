@@ -8,6 +8,7 @@ import { generateWorkspaceTreeText } from './fileTree'
 import { resolveAtFileReferences } from './atFileResolver'
 import { buildStableSystemPrompt, buildDynamicContext } from './systemPrompt'
 import { truncateHistory } from './historyTruncation'
+import { logModelPayloadAudit } from './modelPayloadLogger'
 
 /** Ensure npm global bin is in PATH so Electron can find claude CLI. */
 function getClaudeSpawnEnv(): NodeJS.ProcessEnv {
@@ -477,6 +478,16 @@ export class ClaudeClient extends EventEmitter {
         content: [{ type: 'text', text: messageWithContext }],
       },
     }) + '\n'
+    logModelPayloadAudit({
+      provider: 'claude',
+      endpoint: 'cli:stream-json-stdin',
+      model: this.model,
+      serializedPayload: userMsg,
+      meta: {
+        messageChars: messageWithContext.length,
+        historyCount: this.history.length,
+      },
+    })
 
     try {
       const result = await new Promise<string>((resolve, reject) => {

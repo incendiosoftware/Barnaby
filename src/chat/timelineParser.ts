@@ -117,6 +117,7 @@ export function buildTimelineForPanel(input: BuildTimelineInput): TimelineUnit[]
       kind,
       title: kind === 'thinking' ? 'Thinking' : undefined,
       body: message.content,
+      interactionMode: message.interactionMode,
       markdown: (message.format ?? 'markdown') === 'markdown',
       attachments: message.attachments,
       createdAt: messageCreatedAt,

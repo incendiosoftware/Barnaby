@@ -8,9 +8,12 @@ import type {
 } from '../types'
 import { INTERACTION_MODE_META } from '../constants'
 import {
+  MANUAL_CONTEXT_COMPACTION_NOTICE,
   getRateLimitPercent,
   newId,
+  truncateText,
   withExhaustedRateLimitWarning,
+  withModelBanner,
 } from '../utils/appCore'
 
 export interface PanelInputControllerContext {
@@ -49,12 +52,33 @@ export interface PanelInputController {
   sendMessage: (winId: string) => void
   resendLastUserMessage: (winId: string) => void
   grantPermissionAndResend: (panelId: string) => void
+  summarizeSessionContext: (winId: string) => void
   setInteractionMode: (panelId: string, nextMode: AgentInteractionMode) => void
   setPanelSandbox: (panelId: string, next: SandboxMode) => void
   setPanelPermission: (panelId: string, next: PermissionMode) => void
 }
 
 export function createPanelInputController(ctx: PanelInputControllerContext): PanelInputController {
+  function buildCheckpointSummary(messages: ChatMessage[]): string | null {
+    const conversational = messages
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && (m.content ?? '').trim().length > 0)
+      .map((m) => ({
+        role: m.role,
+        content: truncateText(String(m.content ?? '').replace(/\s+/g, ' ').trim(), 220),
+      }))
+    if (conversational.length === 0) return null
+    const recent = conversational.slice(-10)
+    const omitted = conversational.length - recent.length
+    const lines = recent.map((m) => `- ${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+    return [
+      'Session checkpoint summary (auto-generated):',
+      omitted > 0 ? `- Earlier conversational messages omitted: ${omitted}` : '',
+      ...lines,
+    ]
+      .filter(Boolean)
+      .join('\n')
+  }
+
   function injectQueuedMessage(winId: string, index: number) {
     let textToInject = ''
     let snapshotForHistory: AgentPanelState | null = null
@@ -68,6 +92,7 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
           id: newId(),
           role: 'user',
           content: textToInject,
+          interactionMode: x.interactionMode,
           format: 'text',
           createdAt: Date.now(),
         }
@@ -171,6 +196,16 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
   function sendMessage(winId: string) {
     const w = ctx.panels.find((x) => x.id === winId)
     if (!w) return
+    if (w.historyLocked) {
+      ctx.setPanels((prev) =>
+        prev.map((x) =>
+          x.id !== winId
+            ? x
+            : { ...x, status: 'This chat is read-only. Start a new chat to continue.' },
+        ),
+      )
+      return
+    }
     const draftEdit = ctx.inputDraftEditByPanel[winId] ?? null
     const text = w.input.trim()
     const messageAttachments = w.attachments.map((a) => ({ ...a }))
@@ -275,6 +310,7 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
           id: newId(),
           role: 'user',
           content: text,
+          interactionMode: x.interactionMode,
           format: 'text',
           attachments: messageAttachments.length > 0 ? messageAttachments : undefined,
           createdAt: Date.now(),
@@ -380,16 +416,90 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
     setTimeout(() => resendLastUserMessage(panelId), 0)
   }
 
+  function summarizeSessionContext(winId: string) {
+    const w = ctx.panelsRef.current.find((x) => x.id === winId)
+    if (!w) return
+    if (w.streaming) {
+      ctx.setPanels((prev) =>
+        prev.map((x) =>
+          x.id !== winId
+            ? x
+            : { ...x, status: 'Wait for the current turn to finish before summarizing context.' },
+        ),
+      )
+      return
+    }
+
+    const summary = buildCheckpointSummary(w.messages)
+    if (!summary) {
+      ctx.setPanels((prev) =>
+        prev.map((x) =>
+          x.id !== winId
+            ? x
+            : { ...x, status: 'No conversation content available to summarize yet.' },
+        ),
+      )
+      return
+    }
+
+    const now = Date.now()
+    const checkpointMessages: ChatMessage[] = withModelBanner(
+      [
+        {
+          id: newId(),
+          role: 'assistant',
+          content: summary,
+          format: 'markdown',
+          createdAt: now,
+        },
+        {
+          id: newId(),
+          role: 'system',
+          content: MANUAL_CONTEXT_COMPACTION_NOTICE,
+          format: 'text',
+          createdAt: now + 1,
+        },
+      ],
+      w.model,
+    )
+
+    const updatedPanel: AgentPanelState = {
+      ...w,
+      historyId: newId(),
+      connected: false,
+      streaming: false,
+      pendingInputs: [],
+      messages: checkpointMessages,
+      status: 'Session summarized. Context reset for the next turn.',
+    }
+
+    ctx.setPanels((prev) => prev.map((x) => (x.id !== winId ? x : updatedPanel)))
+    ctx.setInputDraftEditByPanel((prev) => ({ ...prev, [winId]: null }))
+    ctx.upsertPanelToHistory(updatedPanel)
+  }
+
   function setInteractionMode(panelId: string, nextMode: AgentInteractionMode) {
     ctx.setPanels((prev) =>
       prev.map((p) =>
-        p.id === panelId
-          ? {
-              ...p,
-              interactionMode: nextMode,
-              status: `Mode set to ${INTERACTION_MODE_META[nextMode].label}.`,
-            }
-          : p,
+        p.id !== panelId
+          ? p
+          : p.interactionMode === nextMode
+            ? p
+            : {
+                ...p,
+                interactionMode: nextMode,
+                status: `Mode set to ${INTERACTION_MODE_META[nextMode].label}.`,
+                messages: [
+                  ...p.messages,
+                  {
+                    id: newId(),
+                    role: 'system',
+                    content: `Mode switched to ${INTERACTION_MODE_META[nextMode].label}.`,
+                    format: 'text',
+                    createdAt: Date.now(),
+                  },
+                ],
+              },
       ),
     )
   }
@@ -476,6 +586,7 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
     sendMessage,
     resendLastUserMessage,
     grantPermissionAndResend,
+    summarizeSessionContext,
     setInteractionMode,
     setPanelSandbox,
     setPanelPermission,

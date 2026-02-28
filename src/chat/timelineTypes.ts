@@ -8,6 +8,7 @@ export type TimelineMessage = {
   id: string
   role: TimelineMessageRole
   content: string
+  interactionMode?: 'agent' | 'plan' | 'debug' | 'ask'
   format?: 'text' | 'markdown'
   attachments?: Array<{ id: string; path: string; label: string; mimeType?: string }>
   createdAt?: number
@@ -29,6 +30,7 @@ export type TimelineUnit = {
   kind: TimelineUnitKind
   title?: string
   body: string
+  interactionMode?: 'agent' | 'plan' | 'debug' | 'ask'
   markdown: boolean
   attachments?: Array<{ id: string; path: string; label: string; mimeType?: string }>
   activityKind?: string

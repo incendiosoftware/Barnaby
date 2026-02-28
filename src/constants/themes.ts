@@ -38,4 +38,5 @@ export const THEMES: StandaloneTheme[] = BASE_THEMES.map((theme) => ({
   assistantBubbleBgLight: `color-mix(in srgb, ${theme.accentSoft} 34%, white)`,
   assistantBubbleBgDark: `color-mix(in srgb, ${theme.accentSoftDark} 45%, ${theme.dark900})`,
   ...DEFAULT_DIAGNOSTICS_MESSAGE_COLORS,
+  ...(theme.id === 'nord-dark' ? { operationTrace: '#5c6e9d' } : {}),
 }))

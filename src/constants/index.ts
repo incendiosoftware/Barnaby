@@ -114,6 +114,8 @@ export const ONGOING_WORK_LABELS = new Set([
   'Searched workspace',
   'Updated code',
   'Ran command',
+  'Compacting context',
+  'Context compacted',
 ])
 
 export const DEFAULT_DIAGNOSTICS_MESSAGE_COLORS: DiagnosticsMessageColors = {

@@ -7,6 +7,7 @@ import { resolveAtFileReferences } from './atFileResolver'
 import { buildSystemPrompt } from './systemPrompt'
 import { AgentToolRunner, AGENT_MAX_TOOL_ROUNDS } from './agentTools'
 import type { McpServerManager } from './mcpClient'
+import { logModelPayloadAudit } from './modelPayloadLogger'
 
 export type OpenAIClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
@@ -242,20 +243,42 @@ export class OpenAIClient extends EventEmitter {
   ): Promise<{ assistantText: string; toolCalls: OpenAIToolCall[] }> {
     const maxRateLimitRetries = 3
     for (let attempt = 0; attempt <= maxRateLimitRetries; attempt++) {
+      const tools = this.toolRunner.getToolDefinitions()
+      let imageAttachmentCount = 0
+      for (const message of messages) {
+        if (!Array.isArray(message.content)) continue
+        for (const part of message.content) {
+          if (part.type === 'image_url') imageAttachmentCount += 1
+        }
+      }
+      const requestBody = {
+        model: this.model,
+        messages,
+        tools,
+        tool_choice: 'auto',
+        temperature: 0.1,
+        stream: true,
+      }
+      const serializedPayload = JSON.stringify(requestBody)
+      logModelPayloadAudit({
+        provider: 'openai',
+        endpoint: '/chat/completions',
+        model: this.model,
+        serializedPayload,
+        meta: {
+          attempt: attempt + 1,
+          messageCount: messages.length,
+          toolDefinitionCount: Array.isArray(tools) ? tools.length : 0,
+          imageAttachmentCount,
+        },
+      })
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${this.apiKey}`,
         },
-        body: JSON.stringify({
-          model: this.model,
-          messages,
-          tools: this.toolRunner.getToolDefinitions(),
-          tool_choice: 'auto',
-          temperature: 0.1,
-          stream: true,
-        }),
+        body: serializedPayload,
         signal: controller.signal,
       })
 

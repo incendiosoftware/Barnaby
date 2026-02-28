@@ -91,6 +91,10 @@ export function getModelProvider(modelId: string): ConnectivityProvider {
 }
 
 export const LIMIT_WARNING_PREFIX = 'Warning (Limits):'
+export const CONTEXT_COMPACTION_NOTICE_PREFIX = '⚙️ System Notice: The conversation history was getting too long.'
+export const CONTEXT_COMPACTION_NOTICE = `${CONTEXT_COMPACTION_NOTICE_PREFIX} Older messages have been compacted into a summary to save memory.`
+export const MANUAL_CONTEXT_COMPACTION_NOTICE =
+  '⚙️ System Notice: Context was manually compacted. Older messages were replaced by a checkpoint summary.'
 const INITIAL_HISTORY_MAX_MESSAGES = 24
 
 export function isLockedWorkspacePrompt(prompt: string | null): boolean {
@@ -673,6 +677,13 @@ export function parseHistoryMessages(raw: unknown): ChatMessage[] {
       id: typeof record.id === 'string' && record.id ? record.id : newId(),
       role,
       content: typeof record.content === 'string' ? record.content : '',
+      interactionMode:
+        record.interactionMode === 'agent' ||
+        record.interactionMode === 'plan' ||
+        record.interactionMode === 'debug' ||
+        record.interactionMode === 'ask'
+          ? record.interactionMode
+          : undefined,
       format,
       attachments: attachments && attachments.length > 0 ? attachments : undefined,
       createdAt:
@@ -896,10 +907,23 @@ export function parsePersistedAgentPanel(
 
   // Migration: infer provider from model if not present in persisted state
   const provider = getModelProvider ? getModelProvider(model) : 'codex'
+  const status = typeof rec.status === 'string' && rec.status.trim() ? rec.status.trim() : 'Restored from previous session.'
+  const hasHistoricalLockNotice = messages.some(
+    (message) =>
+      message.role === 'system' &&
+      typeof message.content === 'string' &&
+      message.content.includes('loaded from history') &&
+      message.content.includes('read-only'),
+  )
+  const historyLocked =
+    rec.historyLocked === true ||
+    status.toLowerCase().includes('loaded from history') ||
+    hasHistoricalLockNotice
 
   return {
     id,
     historyId: typeof rec.historyId === 'string' && rec.historyId ? rec.historyId : newId(),
+    historyLocked,
     title,
     cwd,
     provider,
@@ -907,7 +931,7 @@ export function parsePersistedAgentPanel(
     interactionMode: parseInteractionMode(rec.interactionMode),
     permissionMode,
     sandbox,
-    status: typeof rec.status === 'string' && rec.status.trim() ? rec.status.trim() : 'Restored from previous session.',
+    status,
     connected: false,
     streaming: false,
     messages,
@@ -1287,6 +1311,20 @@ export function describeActivityEntry(evt: unknown): { label: string; detail?: s
   if (e.type === 'assistantDelta') return null
   if (e.type === 'usageUpdated') return null
   if (e.type === 'planUpdated') return null
+  if (e.type === 'contextCompacting') {
+    return {
+      label: 'Compacting context',
+      detail: typeof e.detail === 'string' ? e.detail : undefined,
+      kind: 'event',
+    }
+  }
+  if (e.type === 'contextCompacted') {
+    return {
+      label: 'Context compacted',
+      detail: typeof e.detail === 'string' ? e.detail : undefined,
+      kind: 'event',
+    }
+  }
   if (e.type === 'status') {
     return {
       label: `Status: ${String(e.status ?? 'unknown')}`,
@@ -1305,6 +1343,13 @@ export function describeActivityEntry(evt: unknown): { label: string; detail?: s
   if (e.type === 'rawNotification' && typeof e.method === 'string') {
     const method = e.method
     const params = e.params
+    const compactionPhase = classifyContextCompactionNotification(method, params)
+    if (compactionPhase === 'start') {
+      return { label: 'Compacting context', kind: 'event' }
+    }
+    if (compactionPhase === 'completed') {
+      return { label: 'Context compacted', kind: 'event' }
+    }
     const methodLower = method.toLowerCase()
     if (method.endsWith('/requestApproval')) {
       return {
@@ -1456,6 +1501,67 @@ export function isUsageLimitMessage(message: string): boolean {
   )
 }
 
+export function classifyContextCompactionNotification(
+  method: string,
+  params: unknown,
+): 'start' | 'completed' | null {
+  const methodLower = method.toLowerCase()
+  const hasStrongSignal =
+    methodLower.includes('checkpoint') ||
+    methodLower.includes('truncat') ||
+    methodLower.includes('compact')
+  const hasWeakSignal =
+    (methodLower.includes('summary') || methodLower.includes('summar')) &&
+    (methodLower.includes('context') || methodLower.includes('history'))
+  if (!hasStrongSignal && !hasWeakSignal) return null
+
+  const p = params as Record<string, unknown> | null | undefined
+  const statusHint =
+    pickString(p, ['status', 'state', 'phase']) ??
+    pickString(p?.checkpoint as Record<string, unknown>, ['status', 'state', 'phase']) ??
+    pickString(p?.context as Record<string, unknown>, ['status', 'state', 'phase']) ??
+    ''
+  const statusLower = statusHint.toLowerCase()
+  const startHint =
+    methodLower.includes('start') ||
+    methodLower.includes('begin') ||
+    methodLower.includes('creating') ||
+    methodLower.includes('building') ||
+    methodLower.includes('generating') ||
+    statusLower.includes('start') ||
+    statusLower.includes('begin') ||
+    statusLower.includes('running') ||
+    statusLower.includes('in_progress') ||
+    statusLower.includes('progress')
+  if (startHint) return 'start'
+
+  const doneHint =
+    methodLower.includes('complete') ||
+    methodLower.includes('completed') ||
+    methodLower.includes('done') ||
+    methodLower.includes('finish') ||
+    methodLower.includes('finished') ||
+    methodLower.includes('injected') ||
+    statusLower.includes('complete') ||
+    statusLower.includes('done') ||
+    statusLower.includes('finished') ||
+    statusLower.includes('success')
+  if (doneHint) return 'completed'
+
+  // If we only know a checkpoint event happened, default to "completed" so the user still gets a notice.
+  return 'completed'
+}
+
+export function withContextCompactionNotice(messages: ChatMessage[], detail?: string): ChatMessage[] {
+  const detailText = typeof detail === 'string' ? detail.trim() : ''
+  const content = detailText ? `${CONTEXT_COMPACTION_NOTICE}\n\n${detailText}` : CONTEXT_COMPACTION_NOTICE
+  const duplicate = messages
+    .slice(-8)
+    .some((m) => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith(CONTEXT_COMPACTION_NOTICE_PREFIX))
+  if (duplicate) return messages
+  return [...messages, { id: newId(), role: 'system', content, format: 'text', createdAt: Date.now() }]
+}
+
 export function withLimitWarningMessage(messages: ChatMessage[], rawMessage: string): ChatMessage[] {
   const trimmed = rawMessage.trim()
   if (!trimmed || !isUsageLimitMessage(trimmed)) return messages
@@ -1529,6 +1635,7 @@ export function makeDefaultPanel(id: string, cwd: string, initialModel?: string,
   return {
     id,
     historyId,
+    historyLocked: false,
     title: `Agent ${id.slice(-4)}`,
     cwd,
     provider,

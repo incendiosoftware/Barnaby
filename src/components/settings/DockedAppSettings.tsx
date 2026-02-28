@@ -63,6 +63,7 @@ export interface DockedAppSettingsProps {
   setAppSettingsView: (v: AppSettingsView) => void
   onClose: () => void
   api: any
+  workspaceRoot: string
 
   modelConfig: ModelConfig
   setModelConfig: React.Dispatch<React.SetStateAction<ModelConfig>>
@@ -165,7 +166,7 @@ export interface DockedAppSettingsProps {
 
 export function DockedAppSettings(props: DockedAppSettingsProps) {
   const {
-    portalTarget, visible, appSettingsView, setAppSettingsView, onClose, api,
+    portalTarget, visible, appSettingsView, setAppSettingsView, onClose, api, workspaceRoot,
     modelConfig, setModelConfig, providerRegistry, setProviderRegistry,
     modelCatalogRefreshPending, setModelCatalogRefreshPending,
     modelCatalogRefreshStatus, setModelCatalogRefreshStatus,
@@ -311,7 +312,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                           const item = queue.shift()!
                           active++
                           const modelPingKey = getModelPingKey(item.provider, item.id)
-                            ; (api.pingModel ? api.pingModel(item.provider, item.id) : Promise.resolve({ ok: true, durationMs: 0 }))
+                            ; (api.pingModel ? api.pingModel(item.provider, item.id, workspaceRoot) : Promise.resolve({ ok: true, durationMs: 0 }))
                               .then((result: any) => {
                                 setModelPingResults((prev: any) => ({ ...prev, [modelPingKey]: result }))
                                 setModelPingPending((prev: Set<string>) => { const next = new Set(prev); next.delete(modelPingKey); return next })

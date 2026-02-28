@@ -840,6 +840,9 @@ export default function App() {
   useEffect(() => {
     void api.saveChatHistory?.(chatHistory).catch(() => { })
   }, [api, chatHistory])
+  useEffect(() => {
+    void api.setWindowWorkspaceTitle?.(workspaceRoot ?? '').catch(() => { })
+  }, [api, workspaceRoot])
 
   // ── Ref syncs ─────────────────────────────────────────────────────
   useEffect(() => { workspaceRootRef.current = workspaceRoot }, [workspaceRoot])
@@ -1007,6 +1010,8 @@ export default function App() {
   const modelsCatalogFetchedRef = useRef(false)
   useEffect(() => {
     if (!api.pingModel || modelsPingedOnStartupRef.current) return
+    const initialPingWorkspaceRoot = workspaceRoot.trim()
+    if (!initialPingWorkspaceRoot) return
     if (modelConfig.interfaces.length === 0) return
     modelsPingedOnStartupRef.current = true
     void (async () => {
@@ -1031,7 +1036,7 @@ export default function App() {
           const item = queue.shift()!
           active++
           const modelPingKey = getModelPingKey(item.provider, item.id)
-          api.pingModel(item.provider, item.id)
+          api.pingModel(item.provider, item.id, initialPingWorkspaceRoot)
             .then((result) => {
               setModelPingResults((prev) => ({ ...prev, [modelPingKey]: result }))
               setModelPingPending((prev) => { const next = new Set(prev); next.delete(modelPingKey); return next })
@@ -1049,7 +1054,7 @@ export default function App() {
       }
       runNext()
     })()
-  }, [api, modelConfig])
+  }, [api, modelConfig, workspaceRoot])
 
   useEffect(() => {
     if (!api.getAvailableModels || modelsCatalogFetchedRef.current) return
@@ -1209,6 +1214,7 @@ export default function App() {
               panels: snapshot.panels.map((panel) => ({
                 id: panel.id,
                 historyId: panel.historyId,
+                historyLocked: panel.historyLocked,
                 title: panel.title,
                 cwd: panel.cwd,
                 model: panel.model,
@@ -1259,6 +1265,7 @@ export default function App() {
         panels: panels.map((panel) => ({
           id: panel.id,
           historyId: panel.historyId,
+          historyLocked: panel.historyLocked,
           title: panel.title,
           cwd: panel.cwd,
           model: panel.model,
@@ -1780,6 +1787,7 @@ export default function App() {
         {
           id: panelId,
           historyId: entry.id,
+          historyLocked: true,
           title: entry.title,
           cwd: entry.workspaceRoot || workspaceRoot,
           provider: getModelProvider(model),
@@ -1802,6 +1810,89 @@ export default function App() {
     setActivePanelId(panelId)
     setHistoryDropdownOpen(false)
     setFocusedEditorId(null)
+  }
+
+  function toSafeTranscriptFileSegment(value: string, fallback = 'conversation'): string {
+    const normalized = String(value ?? '')
+      .trim()
+      .replace(/[^a-z0-9]+/gi, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase()
+      .slice(0, 64)
+    return normalized || fallback
+  }
+
+  function formatTranscriptTime(ts: number | undefined): string {
+    if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
+    const dt = new Date(ts)
+    if (!Number.isFinite(dt.getTime())) return ''
+    return dt.toLocaleString()
+  }
+
+  function buildHistoryTranscript(entry: ChatHistoryEntry): string {
+    const lines: string[] = []
+    const savedAtLabel = formatTranscriptTime(entry.savedAt) || String(entry.savedAt ?? '')
+    const exportedAtLabel = new Date().toLocaleString()
+
+    lines.push('# Barnaby Conversation Transcript')
+    lines.push('')
+    lines.push(`Title: ${entry.title || 'Untitled chat'}`)
+    lines.push(`Saved: ${savedAtLabel}`)
+    lines.push(`Exported: ${exportedAtLabel}`)
+    lines.push(`Workspace: ${entry.workspaceRoot || '(unknown)'}`)
+    lines.push(`Model: ${entry.model || '(unknown)'}`)
+    lines.push(`Permissions: ${entry.permissionMode}`)
+    lines.push(`Sandbox: ${entry.sandbox}`)
+    lines.push('')
+    lines.push('---')
+    lines.push('')
+
+    const messages = stripSyntheticAutoContinueMessages(entry.messages)
+    for (let i = 0; i < messages.length; i++) {
+      const message = messages[i]
+      const roleLabel = message.role === 'assistant' ? 'Assistant' : message.role === 'user' ? 'User' : 'System'
+      const createdAtLabel = formatTranscriptTime(message.createdAt)
+      lines.push(`## ${i + 1}. ${roleLabel}${createdAtLabel ? ` (${createdAtLabel})` : ''}`)
+      lines.push('')
+      const content = String(message.content ?? '').trim()
+      lines.push(content || '(no text)')
+      if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+        lines.push('')
+        lines.push('Attachments:')
+        for (const attachment of message.attachments) {
+          const label = attachment.label || 'attachment'
+          const filePath = attachment.path || '(no path)'
+          lines.push(`- ${label}: ${filePath}`)
+        }
+      }
+      lines.push('')
+    }
+
+    return lines.join('\n')
+  }
+
+  async function downloadHistoryTranscript(historyId: string) {
+    const entry = workspaceScopedHistory.find((x) => x.id === historyId)
+    if (!entry) return
+    if (!api.saveTranscriptFile) {
+      alert('Transcript download is not available in this build.')
+      return
+    }
+
+    const savedAt = new Date(entry.savedAt)
+    const safeSavedAt = Number.isFinite(savedAt.getTime())
+      ? savedAt.toISOString().replace(/[:]/g, '-').replace(/\.\d{3}Z$/, 'Z')
+      : `saved-${Date.now()}`
+    const suggestedFileName = `${toSafeTranscriptFileSegment(entry.title)}-${safeSavedAt}.md`
+    const transcript = buildHistoryTranscript(entry)
+    const result = await api.saveTranscriptFile(entry.workspaceRoot || workspaceRoot, suggestedFileName, transcript)
+    if (result?.ok) {
+      setHistoryDropdownOpen(false)
+      return
+    }
+    if (!result?.canceled) {
+      alert(result?.error ? `Could not save transcript: ${result.error}` : 'Could not save transcript.')
+    }
   }
 
   async function deleteHistoryEntry(
@@ -2522,6 +2613,8 @@ export default function App() {
     panelsRef,
     getModelProvider,
     setProviderVerifiedByName,
+    setModelPingResults,
+    setModelPingPending,
     looksIncomplete,
     autoContinueCountRef,
     MAX_AUTO_CONTINUE,
@@ -3305,6 +3398,7 @@ export default function App() {
           id: newId(),
           role: 'user',
           content: head,
+          interactionMode: x.interactionMode,
           format: 'text',
           createdAt: Date.now(),
         }
@@ -3367,6 +3461,7 @@ export default function App() {
     sendMessage,
     resendLastUserMessage,
     grantPermissionAndResend,
+    summarizeSessionContext,
     setInteractionMode,
     setPanelSandbox,
     setPanelPermission,
@@ -3486,6 +3581,7 @@ export default function App() {
         setHistoryDropdownOpen={setHistoryDropdownOpen}
         workspaceScopedHistory={workspaceScopedHistory}
         openChatFromHistory={openChatFromHistory}
+        downloadHistoryTranscript={downloadHistoryTranscript}
         formatHistoryOptionLabel={formatHistoryOptionLabel}
         setDeleteHistoryIdPending={setDeleteHistoryIdPending}
         createAgentPanel={(opts) => createAgentPanel(opts)}
@@ -3907,6 +4003,7 @@ export default function App() {
         setAppSettingsView={setAppSettingsView}
         onClose={() => { if (showDockedAppSettings) setActiveDockTab('right', 'source-control') }}
         api={api}
+        workspaceRoot={workspaceRoot}
         modelConfig={modelConfig}
         setModelConfig={setModelConfig}
         providerRegistry={providerRegistry}
@@ -4129,6 +4226,7 @@ export default function App() {
           autoResizeTextarea,
           handlePasteImage,
           sendMessage,
+          summarizeSessionContext,
           onInputPanelContextMenu,
           cancelDraftEdit,
           setSettingsPopoverByPanel,

@@ -5,6 +5,7 @@ import { resolveAtFileReferences } from './atFileResolver'
 import { buildSystemPrompt } from './systemPrompt'
 import { AgentToolRunner, AGENT_MAX_TOOL_ROUNDS } from './agentTools'
 import type { McpServerManager } from './mcpClient'
+import { logModelPayloadAudit } from './modelPayloadLogger'
 
 export type OpenRouterClientEvent =
   | { type: 'status'; status: 'starting' | 'ready' | 'error' | 'closed'; message?: string }
@@ -190,6 +191,27 @@ export class OpenRouterClient extends EventEmitter {
   ): Promise<{ assistantText: string; toolCalls: OpenRouterToolCall[] }> {
     const maxRateLimitRetries = 3
     for (let attempt = 0; attempt <= maxRateLimitRetries; attempt++) {
+      const tools = this.toolRunner.getToolDefinitions()
+      const requestBody = {
+        model: this.model,
+        messages,
+        tools,
+        tool_choice: 'auto',
+        temperature: 0.2,
+        stream: true,
+      }
+      const serializedPayload = JSON.stringify(requestBody)
+      logModelPayloadAudit({
+        provider: 'openrouter',
+        endpoint: '/chat/completions',
+        model: this.model,
+        serializedPayload,
+        meta: {
+          attempt: attempt + 1,
+          messageCount: messages.length,
+          toolDefinitionCount: Array.isArray(tools) ? tools.length : 0,
+        },
+      })
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -198,14 +220,7 @@ export class OpenRouterClient extends EventEmitter {
           'HTTP-Referer': 'https://barnaby.build',
           'X-Title': 'Barnaby',
         },
-        body: JSON.stringify({
-          model: this.model,
-          messages,
-          tools: this.toolRunner.getToolDefinitions(),
-          tool_choice: 'auto',
-          temperature: 0.2,
-          stream: true,
-        }),
+        body: serializedPayload,
         signal: controller.signal,
       })
 

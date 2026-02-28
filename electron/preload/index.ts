@@ -5,6 +5,9 @@ export type FireHarnessCodexEvent =
   | { type: 'assistantDelta'; delta: string }
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
+  | { type: 'thinking'; message: string }
+  | { type: 'contextCompacting'; detail?: string }
+  | { type: 'contextCompacted'; detail?: string }
   | { type: 'planUpdated'; plan: unknown }
   | { type: 'rawNotification'; method: string; params?: unknown }
 
@@ -112,6 +115,14 @@ const api = {
       path: string
     }>
   },
+  saveTranscriptFile(workspaceRoot: string, suggestedFileName: string, content: string) {
+    return ipcRenderer.invoke('agentorchestrator:saveTranscriptFile', workspaceRoot, suggestedFileName, content) as Promise<{
+      ok: boolean
+      canceled?: boolean
+      path?: string
+      error?: string
+    }>
+  },
   loadAppState() {
     return ipcRenderer.invoke('agentorchestrator:loadAppState') as Promise<unknown | null>
   },
@@ -127,6 +138,12 @@ const api = {
       ok: boolean
       themeSource: 'light' | 'dark' | 'system'
       shouldUseDarkColors: boolean
+    }>
+  },
+  setWindowWorkspaceTitle(workspaceRoot: string) {
+    return ipcRenderer.invoke('agentorchestrator:setWindowWorkspaceTitle', workspaceRoot) as Promise<{
+      ok: boolean
+      title: string
     }>
   },
   notifyRendererReady() {
@@ -364,8 +381,8 @@ const api = {
   pingProvider(providerId: string) {
     return ipcRenderer.invoke('agentorchestrator:pingProvider', providerId) as Promise<{ ok: boolean; detail: string; durationMs: number }>
   },
-  pingModel(provider: string, modelId: string) {
-    return ipcRenderer.invoke('agentorchestrator:pingModel', provider, modelId) as Promise<{ ok: boolean; durationMs: number; error?: string }>
+  pingModel(provider: string, modelId: string, cwd?: string) {
+    return ipcRenderer.invoke('agentorchestrator:pingModel', provider, modelId, cwd) as Promise<{ ok: boolean; durationMs: number; error?: string }>
   },
   startProviderLogin(config: ProviderConfigForAuth) {
     return ipcRenderer.invoke('agentorchestrator:startProviderLogin', config) as Promise<{ started: boolean; detail: string }>

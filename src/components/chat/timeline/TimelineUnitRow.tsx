@@ -10,7 +10,11 @@ import { TimelineThinkingBatchRow } from './TimelineThinkingBatchRow'
 import { TimelineMessageRow } from './TimelineMessageRow'
 import type { ChatRole, MessageFormat } from '../../../types'
 import type { TimelineUnit } from '../../../chat/timelineTypes'
-import { isPermissionEscalationMessage, LIMIT_WARNING_PREFIX } from '../../../utils/appCore'
+import {
+  CONTEXT_COMPACTION_NOTICE_PREFIX,
+  isPermissionEscalationMessage,
+  LIMIT_WARNING_PREFIX,
+} from '../../../utils/appCore'
 
 export interface TimelineUnitRowProps {
   row: TimelineRow
@@ -41,6 +45,7 @@ export interface TimelineUnitRowProps {
   onChatLinkClick: (href: string) => void
   onGrantPermissionAndResend: () => void
   onRecallLastUserMessage: () => void
+  actionsLocked: boolean
 }
 
 export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: TimelineUnitRowProps) {
@@ -115,9 +120,10 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
 
   const isDebugSystemNote = m.role === 'system' && /^Debug \(/.test(m.content)
   const isLimitSystemWarning = m.role === 'system' && m.content.startsWith(LIMIT_WARNING_PREFIX)
+  const isContextCompactionNotice = m.role === 'system' && m.content.startsWith(CONTEXT_COMPACTION_NOTICE_PREFIX)
   const isApprovalRequiredMessage = m.role === 'system' && isPermissionEscalationMessage(m.content)
   const canShowGrantPermissionButton =
-    isApprovalRequiredMessage && !props.isStreaming && props.permissionMode !== 'proceed-always'
+    isApprovalRequiredMessage && !props.isStreaming && props.permissionMode !== 'proceed-always' && !props.actionsLocked
   const codeUnitPinned = Boolean(props.timelinePinnedCodeByUnitId[unit.id])
   const isCodeLifecycleUnit = unit.kind === 'code'
   const shouldCollapseThinking = unit.kind === 'thinking'
@@ -130,7 +136,7 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
   )
   const isLastUserMessage = m.role === 'user' && unit.id === props.lastUserUnitId
   const isLastAssistantMessage = m.role === 'assistant' && unit.id === props.lastAgentTimelineUnitId
-  const canRecallLastUserMessage = isLastUserMessage && props.isIdle
+  const canRecallLastUserMessage = isLastUserMessage && props.isIdle && !props.actionsLocked
 
   return (
     <TimelineMessageRow
@@ -138,6 +144,7 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
       messageId={m.id}
       role={m.role}
       content={m.content}
+      messageInteractionMode={unit.interactionMode}
       format={m.format}
       attachments={m.attachments}
       createdAt={m.createdAt}
@@ -149,6 +156,7 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
       thinkingSummary={thinkingSummary}
       isDebugSystemNote={isDebugSystemNote}
       isLimitSystemWarning={isLimitSystemWarning}
+      isContextCompactionNotice={isContextCompactionNotice}
       canShowGrantPermissionButton={canShowGrantPermissionButton}
       messageContainerStyle={messageContainerStyle}
       showCompletedDurationOnMessage={showCompletedDurationOnMessage}

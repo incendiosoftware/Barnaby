@@ -249,17 +249,21 @@ export const FONT_SIZE_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 16, label: '16' },
   { value: 17, label: '17' },
   { value: 18, label: '18' },
-  { value: 20, label: '20' },
 ]
 
 export const THINKING_MAX_CHARS = 180
 
 export const DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES = [
-  'npm run build:dist:raw',
-  'npx vite build',
+  'npm run',
+  'npm test',
+  'npm install',
+  'npx',
+  'tsc',
+  'git status',
+  'git diff',
 ]
-export const DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES = ['src/', 'package.json']
-export const DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES = ['src/', 'package.json']
+export const DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES = []
+export const DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES = []
 export const DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES = ['../', '.env']
 export const DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES = ['../', '.env']
 

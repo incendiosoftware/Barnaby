@@ -679,9 +679,9 @@ export function parseHistoryMessages(raw: unknown): ChatMessage[] {
       content: typeof record.content === 'string' ? record.content : '',
       interactionMode:
         record.interactionMode === 'agent' ||
-        record.interactionMode === 'plan' ||
-        record.interactionMode === 'debug' ||
-        record.interactionMode === 'ask'
+          record.interactionMode === 'plan' ||
+          record.interactionMode === 'debug' ||
+          record.interactionMode === 'ask'
           ? record.interactionMode
           : undefined,
       format,
@@ -772,6 +772,7 @@ export function parseApplicationSettings(parsed: Partial<ApplicationSettings> | 
     showResponseDurationAfterPrompt: false,
     editorWordWrap: true,
     customiseStandardThemes: false,
+    enableMessageSizeLog: false,
   }
   if (!parsed || typeof parsed !== 'object') return defaults
   return {
@@ -798,6 +799,7 @@ export function parseApplicationSettings(parsed: Partial<ApplicationSettings> | 
     showResponseDurationAfterPrompt: Boolean(parsed.showResponseDurationAfterPrompt),
     editorWordWrap: typeof parsed.editorWordWrap === 'boolean' ? parsed.editorWordWrap : true,
     customiseStandardThemes: Boolean(parsed.customiseStandardThemes),
+    enableMessageSizeLog: Boolean(parsed.enableMessageSizeLog),
   }
 }
 

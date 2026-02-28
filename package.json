@@ -1,7 +1,7 @@
 {
   "name": "@barnaby.build/barnaby",
   "productName": "Barnaby",
-  "version": "0.0.184",
+  "version": "0.0.186",
   "main": "dist-electron/main/index.js",
   "bin": {
     "barnaby": "bin/barnaby.cjs"
@@ -36,15 +36,15 @@
     "dev": "vite",
     "dev:clean": "node scripts/dev-clean.mjs && npm run dev",
     "build:dist:raw": "tsc && vite build",
-    "build:dist": "npm run bump:version && npm run build:dist:raw",
+    "build:dist": "node scripts/run-with-version-bump.mjs \"npm run build:dist:raw\"",
     "build:portable:raw": "npm run build:dist:raw && electron-builder --win portable",
     "build": "npm run build:portable",
-    "build:portable": "npm run build:dist && electron-builder --win portable",
+    "build:portable": "node scripts/run-with-version-bump.mjs \"npm run build:portable:raw\"",
     "package": "npm run build:portable",
     "deploy": "npm run package",
     "build:release": "npm run build:dist && electron-builder",
     "release:notes": "node scripts/create-release-notes.mjs",
-    "release:prepare": "npm run bump:version && npm run release:notes && npm run build:portable:raw",
+    "release:prepare": "node scripts/run-with-version-bump.mjs \"npm run release:notes && npm run build:portable:raw\"",
     "publish": "gh workflow run release.yml -f releasable=true --ref main",
     "postinstall": "node scripts/shortcut-win.mjs && node scripts/rebuild-native.mjs",
     "publish:npm": "npm run build && npm publish",

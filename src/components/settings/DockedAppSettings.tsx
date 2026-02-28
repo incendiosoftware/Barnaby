@@ -237,8 +237,8 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
             key={view}
             type="button"
             className={`px-3 py-1.5 rounded-md text-xs border ${appSettingsView === view
-                ? 'border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+              ? 'border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
+              : 'border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
               }`}
             onClick={() => setAppSettingsView(view)}
           >
@@ -248,7 +248,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
             {view === 'agents' && 'Agents'}
             {view === 'orchestrator' && 'Orchestrator'}
             {view === 'mcp-servers' && 'MCP Servers'}
-            {view === 'diagnostics' && 'Diagnostics'}
+            {view === 'diagnostics' && 'Runtime Logs'}
           </button>
         ))}
       </div>
@@ -263,8 +263,8 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                 <button
                   type="button"
                   className={`px-2.5 py-1.5 rounded-md border text-xs inline-flex items-center gap-2 ${modelCatalogRefreshPending
-                      ? 'border-blue-400 bg-blue-50 text-blue-800 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
-                      : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700'
+                    ? 'border-blue-400 bg-blue-50 text-blue-800 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
+                    : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700'
                     }`}
                   onClick={async () => {
                     setModelCatalogRefreshPending(true)
@@ -352,8 +352,8 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                 {modelCatalogRefreshStatus && (
                   <span
                     className={`text-xs ${modelCatalogRefreshStatus.kind === 'error'
-                        ? 'text-red-600 dark:text-red-400'
-                        : 'text-emerald-700 dark:text-emerald-400'
+                      ? 'text-red-600 dark:text-red-400'
+                      : 'text-emerald-700 dark:text-emerald-400'
                       }`}
                   >
                     {modelCatalogRefreshStatus.message}
@@ -774,8 +774,8 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                         setThemeEditorStatus(null)
                       }}
                       className={`px-3 py-2 rounded-md border text-left text-sm ${applicationSettings.themeId === t.id
-                          ? 'border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
-                          : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                        ? 'border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950/40 dark:text-blue-100'
+                        : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
                         }`}
                     >
                       <span>{t.name}</span>
@@ -1509,8 +1509,8 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                 <div className="flex items-center gap-1.5">
                   <span
                     className={`inline-block w-2 h-2 rounded-full shrink-0 ${loadedPlugins?.some((p) => p.pluginId === 'orchestrator' && p.active)
-                        ? 'bg-green-500 dark:bg-green-600'
-                        : 'bg-neutral-300 dark:bg-neutral-600'
+                      ? 'bg-green-500 dark:bg-green-600'
+                      : 'bg-neutral-300 dark:bg-neutral-600'
                       }`}
                   />
                   <span className="text-neutral-500 dark:text-neutral-400">
@@ -2004,6 +2004,24 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                   />
                   Inject debug notes into chat timeline
                 </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(applicationSettings.enableMessageSizeLog)}
+                    onChange={(e) =>
+                      setApplicationSettings((prev) => ({
+                        ...prev,
+                        enableMessageSizeLog: e.target.checked,
+                      }))
+                    }
+                  />
+                  Enable message size logging
+                  {applicationSettings.enableMessageSizeLog && (
+                    <button type="button" className="text-xs text-blue-600 hover:underline dark:text-blue-400" onClick={() => openDiagnosticsTarget('runtimeLog', 'runtime log')}>
+                      [View Log]
+                    </button>
+                  )}
+                </label>
               </div>
               <div className="rounded-lg border border-neutral-200 bg-neutral-50/70 p-3 dark:border-neutral-700 dark:bg-neutral-900/50">
                 <div className="text-xs text-neutral-600 dark:text-neutral-400">
@@ -2013,7 +2031,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
             </section>
 
             <section className="space-y-2">
-              <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Diagnostics</div>
+              <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Runtime Logs</div>
               <div className="text-xs text-neutral-600 dark:text-neutral-400">
                 Runtime logs and persisted state are stored in your Barnaby user data folder.
               </div>

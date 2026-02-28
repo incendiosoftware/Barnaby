@@ -21,7 +21,16 @@ function isTruthyEnv(name: string) {
 }
 
 function isModelPayloadLogEnabled() {
-  return isTruthyEnv('BARNABY_MODEL_PAYLOAD_LOG')
+  if (isTruthyEnv('BARNABY_MODEL_PAYLOAD_LOG')) return true
+  try {
+    const p = path.join(app.getPath('userData'), '.storage', 'app-state.json')
+    if (fs.existsSync(p)) {
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf8'))
+      const state = parsed?.state || parsed
+      if (state?.applicationSettings?.enableMessageSizeLog === true) return true
+    }
+  } catch { }
+  return false
 }
 
 function isModelPayloadContentEnabled() {

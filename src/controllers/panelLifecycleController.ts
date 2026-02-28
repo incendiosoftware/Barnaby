@@ -128,11 +128,11 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
         p.id !== winId
           ? p
           : {
-              ...p,
-              connected: false,
-              streaming: false,
-              status: `Reconnecting: ${reason}`,
-            },
+            ...p,
+            connected: false,
+            streaming: false,
+            status: `Reconnecting: ${reason}`,
+          },
       ),
     )
     try {
@@ -153,12 +153,12 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
           p.id !== winId
             ? p
             : {
-                ...p,
-                connected: false,
-                streaming: false,
-                status: 'Reconnect failed',
-                messages: [...p.messages, { id: newId(), role: 'system' as const, content: errMsg, format: 'text' as const, createdAt: Date.now() }],
-              },
+              ...p,
+              connected: false,
+              streaming: false,
+              status: 'Reconnect failed',
+              messages: [...p.messages, { id: newId(), role: 'system' as const, content: errMsg, format: 'text' as const, createdAt: Date.now() }],
+            },
         ),
       )
     } finally {
@@ -204,7 +204,7 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
       if (msg.includes('no activity for 120 seconds')) {
         return 'Claude stopped responding (2 min). Usually network or API delay. Try again.'
       }
-      return 'Claude timed out. Check credits at claude.ai or run `claude --version`. Send another message to retry.'
+      return 'Claude timed out waiting for a response. This can happen with very long prompts or API delays. Send another message to retry.'
     }
 
     if (msg.includes('API key') && (msg.includes('missing') || msg.includes('OpenAI') || msg.includes('OpenRouter'))) {

@@ -232,6 +232,7 @@ export type ApplicationSettings = {
   showResponseDurationAfterPrompt: boolean
   editorWordWrap: boolean
   customiseStandardThemes: boolean
+  enableMessageSizeLog: boolean
 }
 
 export type OrchestratorSettings = {
@@ -456,28 +457,28 @@ export type WorkspaceLockOwner = {
 
 export type WorkspaceLockAcquireResult =
   | {
-      ok: true
-      workspaceRoot: string
-      lockFilePath: string
-    }
+    ok: true
+    workspaceRoot: string
+    lockFilePath: string
+  }
   | {
-      ok: false
-      reason: 'invalid-workspace' | 'in-use' | 'error'
-      message: string
-      workspaceRoot: string
-      lockFilePath: string
-      owner?: WorkspaceLockOwner | null
-    }
+    ok: false
+    reason: 'invalid-workspace' | 'in-use' | 'error'
+    message: string
+    workspaceRoot: string
+    lockFilePath: string
+    owner?: WorkspaceLockOwner | null
+  }
 
 export type WorkspaceApplyFailure =
   | {
-      kind: 'request-error'
-      message: string
-    }
+    kind: 'request-error'
+    message: string
+  }
   | {
-      kind: 'lock-denied'
-      result: WorkspaceLockAcquireResult
-    }
+    kind: 'lock-denied'
+    result: WorkspaceLockAcquireResult
+  }
 
 export type ThemeEditableField =
   | 'accent500'

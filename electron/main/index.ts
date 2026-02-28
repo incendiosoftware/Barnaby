@@ -2748,7 +2748,7 @@ async function createWindow() {
 
   win = new BrowserWindow({
     title: getMainWindowTitle(currentWindowWorkspaceRoot),
-    icon: path.join(process.env.VITE_PUBLIC, 'node.svg'),
+    icon: path.join(process.env.VITE_PUBLIC, process.platform === 'win32' ? 'favicon.ico' : 'appicon.png'),
     show: false,
     width: startupWidth,
     height: startupHeight,

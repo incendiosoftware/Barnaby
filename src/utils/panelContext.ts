@@ -83,7 +83,7 @@ export function getWorkspaceSecurityLimitsForPath(
   workspaceSettingsByPath: Record<string, WorkspaceSettings>,
   workspaceRoot: string,
 ): { sandbox: SandboxMode; permissionMode: PermissionMode } {
-  const ws = workspaceSettingsByPath[path] ?? workspaceSettingsByPath[workspaceRoot]
+  const ws = resolveWorkspaceSettingsForPath(path, workspaceSettingsByPath, workspaceRoot)
   const sandbox: SandboxMode = ws?.sandbox === 'read-only' ? 'read-only' : 'workspace-write'
   const permissionMode: PermissionMode =
     sandbox === 'read-only'
@@ -92,6 +92,41 @@ export function getWorkspaceSecurityLimitsForPath(
         ? 'proceed-always'
         : 'verify-first'
   return { sandbox, permissionMode }
+}
+
+function normalizeWorkspacePath(value: string) {
+  return value.trim().replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+}
+
+function resolveWorkspaceSettingsForPath(
+  path: string,
+  workspaceSettingsByPath: Record<string, WorkspaceSettings>,
+  workspaceRoot: string,
+): WorkspaceSettings | undefined {
+  const direct = workspaceSettingsByPath[path] ?? workspaceSettingsByPath[workspaceRoot]
+  if (direct) return direct
+
+  const normalizedPath = normalizeWorkspacePath(path)
+  const normalizedRoot = normalizeWorkspacePath(workspaceRoot)
+  let bestMatch: WorkspaceSettings | undefined
+  let bestLength = -1
+
+  for (const [rawPath, settings] of Object.entries(workspaceSettingsByPath)) {
+    const normalizedSettingPath = normalizeWorkspacePath(rawPath)
+    if (!normalizedSettingPath) continue
+    if (normalizedSettingPath === normalizedPath || normalizedSettingPath === normalizedRoot) {
+      return settings
+    }
+    if (
+      normalizedPath.startsWith(`${normalizedSettingPath}\\`) &&
+      normalizedSettingPath.length > bestLength
+    ) {
+      bestMatch = settings
+      bestLength = normalizedSettingPath.length
+    }
+  }
+
+  return bestMatch
 }
 
 export function clampPanelSecurityForWorkspace(

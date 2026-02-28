@@ -9,46 +9,20 @@ Barnaby is a desktop AI agent orchestrator for **agentic coordination** — conn
 
 ## Installation
 
-You can run Barnaby without cloning the repository. Choose one of the options below.
+Barnaby is currently available by cloning the repository. Requires **Node.js 20+** (recommended: Node 22 LTS) and **npm**.
 
-### Option 1: Download (recommended for Windows)
-
-[Download Barnaby](https://github.com/incendiosoftware/Barnaby/releases) — portable `.exe` for Windows. No install required. Best for correct Start menu and taskbar integration.
-
-1. Go to [Releases](https://github.com/incendiosoftware/Barnaby/releases)
-2. Download the latest `Barnaby_*_portable.exe`
-3. Run it — no installer, no Node.js needed
-
-### Option 2: npm (requires Node.js 20+)
-
-If you have Node.js installed, you can run Barnaby via npm without cloning:
-
-**Quick run (no install):**
-```bash
-npx '@barnaby.build/barnaby'
+```sh
+git clone https://github.com/incendiosoftware/Barnaby.git
+cd Barnaby
+npm install
+npm run dev
 ```
 
-**Global install:**
-```bash
-npm install -g '@barnaby.build/barnaby'
-barnaby
-```
-
-*PowerShell: use single quotes around the package name (e.g. `'@barnaby.build/barnaby'`). Without quotes, `@` is interpreted as a variable.*
-
-**Windows (npm install):**
-- A Start menu shortcut is created automatically. Search "Barnaby" in Start.
-- For correct taskbar icon: **pin the shortcut** (right‑click → Pin to taskbar), not the running window. Pinning the window shows "Electron" because npm runs the electron binary directly.
-- If the shortcut has no icon: **Edit → Application Settings → Preferences** → **Repair Start menu shortcut**.
-- For the full experience (correct icon everywhere), use the [portable exe](https://github.com/incendiosoftware/Barnaby/releases).
+If the postinstall step reports "Native module rebuild skipped", the terminal may still work via prebuilt binaries. If not, see [Built-in terminal note](#built-in-terminal-note).
 
 ### Orchestrator plugin (optional)
 
-The Orchestrator is an optional add-on for autonomous agent loops. It is **not** bundled with Barnaby.
-
-- **Install:** Edit → Application Settings → Orchestrator → **Install from npm**
-- **Uninstall:** Edit → Application Settings → Orchestrator → **Uninstall**
-- **Manual:** `cd ~/.barnaby/plugins` (or `%USERPROFILE%\.barnaby\plugins` on Windows), then `npm install '@barnaby.build/orchestrator'` or `npm uninstall '@barnaby.build/orchestrator'`
+The Orchestrator is an optional add-on for autonomous agent loops. It is **not** bundled with Barnaby. See [barnaby.build](https://barnaby.build) for details.
 
 ---
 
@@ -97,12 +71,10 @@ The **Orchestrator** is an optional plugin that extends Barnaby beyond single-tu
 - **Goal persistence** — Stores a hierarchy of goals; pauses and resumes on failure or rate limits
 - **Deterministic guardrails** — Intercepts output to verify linting and security rules before committing to the workspace
 
-The Orchestrator is **not** bundled with Barnaby. Install it from Settings (Edit → Application Settings → Orchestrator → Install from npm) if you want autonomous, multi-stage development. See [barnaby.build](https://barnaby.build) for more details.
+The Orchestrator is **not** bundled with Barnaby. See [barnaby.build](https://barnaby.build) for more details.
 
 ## Prerequisites
 
-- **Node.js 20+** (recommended: Node 22 LTS)
-- **npm**
 - **CLI providers** (optional): Codex, Claude, and/or Gemini CLI installed and authenticated
 - **API provider** (optional): OpenRouter API key from https://openrouter.ai/keys
 
@@ -144,37 +116,12 @@ gemini --version
 2. In Barnaby: open connectivity settings, select OpenRouter, enter your API key
 3. Choose a model (e.g. free-tier Llama 3.3 70B) and connect
 
-## Development (from source)
-
-To build and run from the cloned repository:
-
-```sh
-git clone https://github.com/incendiosoftware/Barnaby.git
-cd Barnaby
-npm install
-npm run dev
-```
-
-If the postinstall step reports "Native module rebuild skipped", the terminal may still work via prebuilt binaries. If not, see [Prerequisites](#built-in-terminal-note).
-
-## Build Commands (Standard Nomenclature)
+## Development
 
 | Command | Meaning | Script |
 |---------|---------|--------|
 | **run dev** | Run in dev mode | `npm run dev` |
 | **build** | Build without version bump | `npm run build` |
-| **package** | Build + bump version + create distributable | `npm run package` |
-| **publish** | Release to GitHub with release notes | `npm run publish` |
-
-Flow: dev → build → package → publish
-
-- **build** = portable `.exe` in `release/<version>/` (uses current version)
-- **package** = bump patch version, build, artifact in `release/<new-version>/`
-- **publish** = trigger GitHub Actions to publish the current version (commit & push first)
-
-Other scripts: `build:dist`, `build:portable:raw`, `build:release`, `release:notes`, `release:prepare`
-
-Release notes: `RELEASE_NOTES_<version>.md` (generate with `npm run release:notes`). The release workflow updates the latest release link in this README automatically.
 
 ## Project Structure
 

@@ -1506,16 +1506,31 @@ export function classifyContextCompactionNotification(
   params: unknown,
 ): 'start' | 'completed' | null {
   const methodLower = method.toLowerCase()
+  const p = params as Record<string, unknown> | null | undefined
+  const paramSignalCandidates = [
+    pickString(p, ['type', 'kind', 'name', 'event', 'action']),
+    pickString(p?.item as Record<string, unknown>, ['type', 'kind', 'name', 'event', 'action']),
+    pickString(p?.checkpoint as Record<string, unknown>, ['type', 'kind', 'name', 'event', 'action']),
+    pickString(p?.context as Record<string, unknown>, ['type', 'kind', 'name', 'event', 'action']),
+  ]
+  const paramSignals = paramSignalCandidates
+    .filter((x): x is string => Boolean(x && x.trim()))
+    .map((x) => x.toLowerCase())
+    .join(' ')
   const hasStrongSignal =
     methodLower.includes('checkpoint') ||
     methodLower.includes('truncat') ||
-    methodLower.includes('compact')
+    methodLower.includes('compact') ||
+    paramSignals.includes('checkpoint') ||
+    paramSignals.includes('truncat') ||
+    paramSignals.includes('compact')
   const hasWeakSignal =
-    (methodLower.includes('summary') || methodLower.includes('summar')) &&
-    (methodLower.includes('context') || methodLower.includes('history'))
+    ((methodLower.includes('summary') || methodLower.includes('summar')) &&
+      (methodLower.includes('context') || methodLower.includes('history'))) ||
+    ((paramSignals.includes('summary') || paramSignals.includes('summar')) &&
+      (paramSignals.includes('context') || paramSignals.includes('history')))
   if (!hasStrongSignal && !hasWeakSignal) return null
 
-  const p = params as Record<string, unknown> | null | undefined
   const statusHint =
     pickString(p, ['status', 'state', 'phase']) ??
     pickString(p?.checkpoint as Record<string, unknown>, ['status', 'state', 'phase']) ??
@@ -1528,6 +1543,11 @@ export function classifyContextCompactionNotification(
     methodLower.includes('creating') ||
     methodLower.includes('building') ||
     methodLower.includes('generating') ||
+    paramSignals.includes('start') ||
+    paramSignals.includes('begin') ||
+    paramSignals.includes('creating') ||
+    paramSignals.includes('building') ||
+    paramSignals.includes('generating') ||
     statusLower.includes('start') ||
     statusLower.includes('begin') ||
     statusLower.includes('running') ||
@@ -1542,6 +1562,12 @@ export function classifyContextCompactionNotification(
     methodLower.includes('finish') ||
     methodLower.includes('finished') ||
     methodLower.includes('injected') ||
+    paramSignals.includes('complete') ||
+    paramSignals.includes('completed') ||
+    paramSignals.includes('done') ||
+    paramSignals.includes('finish') ||
+    paramSignals.includes('finished') ||
+    paramSignals.includes('injected') ||
     statusLower.includes('complete') ||
     statusLower.includes('done') ||
     statusLower.includes('finished') ||

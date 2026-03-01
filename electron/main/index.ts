@@ -147,6 +147,21 @@ type ConnectOptions = CodexConnectOptions & {
   interactionMode?: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
+
+type WorkspaceConfigSettingsPayload = {
+  path?: string
+  defaultModel?: string
+  permissionMode?: 'verify-first' | 'proceed-always'
+  sandbox?: 'read-only' | 'workspace-write'
+  workspaceContext?: string
+  showWorkspaceContextInPrompt?: boolean
+  systemPrompt?: string
+  allowedCommandPrefixes?: string[]
+  allowedAutoReadPrefixes?: string[]
+  allowedAutoWritePrefixes?: string[]
+  deniedAutoReadPrefixes?: string[]
+  deniedAutoWritePrefixes?: string[]
+}
 type ContextMenuKind = 'input-selection' | 'chat-selection'
 type ViewMenuDockPanelId =
   | 'orchestrator'
@@ -297,6 +312,7 @@ let rendererStartupReady = false
 let waitForRendererStartup = false
 let mainWindowRevealed = false
 let currentWindowWorkspaceRoot = ''
+let pendingStartupWorkspaceRoot = ''
 
 const agentClients = new Map<string, AgentClient>()
 const agentClientCwds = new Map<string, string>()
@@ -314,6 +330,50 @@ function isBareElectronHostLaunch() {
   const candidateArgs = process.argv.slice(1).filter(Boolean)
   const hasAppTarget = candidateArgs.some((arg) => !arg.startsWith('-'))
   return !hasAppTarget
+}
+
+function readStartupWorkspaceRoot(argv: string[]): string {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = String(argv[i] ?? '')
+    if (!arg) continue
+    if (arg.startsWith('--workspace-root=')) {
+      const raw = arg.slice('--workspace-root='.length).trim()
+      return raw ? path.resolve(raw) : ''
+    }
+    if (arg === '--workspace-root') {
+      const next = String(argv[i + 1] ?? '').trim()
+      return next ? path.resolve(next) : ''
+    }
+  }
+  return ''
+}
+
+function relaunchArgsForNewWorkspace(workspaceRoot: string): string[] {
+  const cleaned = process.argv.filter((arg) => {
+    const value = String(arg ?? '')
+    if (!value) return false
+    return !(value === '--workspace-root' || value.startsWith('--workspace-root='))
+  })
+  const baseArgs = process.defaultApp ? cleaned.slice(1) : cleaned.slice(1)
+  return [...baseArgs, '--workspace-root', workspaceRoot]
+}
+
+function openWorkspaceInNewBarnabyInstance(workspaceRoot: string): { ok: boolean; error?: string } {
+  const resolvedRoot = path.resolve(workspaceRoot)
+  if (!isDirectory(resolvedRoot)) return { ok: false, error: 'Workspace folder does not exist.' }
+  const args = relaunchArgsForNewWorkspace(resolvedRoot)
+  try {
+    const child = spawn(process.execPath, args, {
+      cwd: resolvedRoot,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    child.unref()
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) }
+  }
 }
 
 function normalizeRelativePath(p: string) {
@@ -1890,6 +1950,63 @@ async function getProviderAuthStatus(config: ProviderConfigForAuth): Promise<Pro
   const isCodexStyle = config.id === 'codex'
   const isClaudeStyle = config.id === 'claude'
 
+  if (config.id === 'gemini') {
+    try {
+      const geminiAuthStatusResult = await runCliCommand(executable, ['auth', 'status'], CLI_AUTH_CHECK_TIMEOUT_MS)
+      const geminiAuthStatusOut = `${geminiAuthStatusResult.stdout ?? ''}\n${geminiAuthStatusResult.stderr ?? ''}`.trim()
+      const authStatusMatch = geminiAuthStatusOut.match(/logged in as ([^\s]+)/i)
+      const authenticated = Boolean(authStatusMatch)
+      const detail = authenticated ? `Logged in as ${authStatusMatch![1]}.` : 'Not logged in.'
+
+      return {
+        provider: config.id,
+        installed: true,
+        authenticated,
+        detail,
+        checkedAt: Date.now(),
+      }
+    } catch (geminiAuthStatusErr) {
+      const msg = errorMessage(geminiAuthStatusErr)
+      if (/command "auth" not found/i.test(msg)) {
+        // Fallback to `gemini list models` if `gemini auth status` is not available
+        try {
+          const geminiModelsResult = await runCliCommand(executable, ['list', 'models', '--json'], CLI_MODELS_QUERY_TIMEOUT_MS)
+          // If `list models --json` succeeds, it means we are authenticated.
+          // No need to parse JSON, just check for success.
+          return {
+            provider: config.id,
+            installed: true,
+            authenticated: true,
+            detail: 'Logged in.',
+            checkedAt: Date.now(),
+          }
+        } catch (geminiModelsErr) {
+          const modelsErrMsg = errorMessage(geminiModelsErr)
+          const isTimeout = /timed out/i.test(modelsErrMsg)
+          const installed = isTimeout ? true : await isCliInstalled(executable)
+          const authenticated = /authentication failed/i.test(modelsErrMsg) || modelsErrMsg.includes('exit code 41') ? false : !isTimeout
+          const detail = authenticated ? 'Logged in (inferred from `list models`).' : 'Login required.'
+          return {
+            provider: config.id,
+            installed,
+            authenticated,
+            detail: modelsErrMsg || detail,
+            checkedAt: Date.now(),
+          }
+        }
+      }
+      const isTimeout = /timed out/i.test(msg)
+      const installed = isTimeout ? true : await isCliInstalled(executable)
+      return {
+        provider: config.id,
+        installed,
+        authenticated: false,
+        detail: msg || (installed ? 'Login required.' : `${config.id} CLI not found.`),
+        checkedAt: Date.now(),
+      }
+    }
+  }
+
   try {
     const result = await runCliCommand(executable, authArgs)
     const out = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim()
@@ -2637,6 +2754,9 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
       permissionMode: options.permissionMode,
       sandbox: options.sandbox,
       interactionMode: options.interactionMode,
+      workspaceContext: options.workspaceContext,
+      showWorkspaceContextInPrompt: options.showWorkspaceContextInPrompt,
+      systemPrompt: options.systemPrompt,
       initialHistory: options.initialHistory,
       mcpConfigPath: mcpServerManager.getConfigPath(),
     }) as { threadId: string }
@@ -2654,6 +2774,9 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
       permissionMode: options.permissionMode,
       sandbox: options.sandbox,
       interactionMode: options.interactionMode,
+      workspaceContext: options.workspaceContext,
+      showWorkspaceContextInPrompt: options.showWorkspaceContextInPrompt,
+      systemPrompt: options.systemPrompt,
       initialHistory: options.initialHistory,
       mcpConfigPath: mcpServerManager.getConfigPath(),
     }) as { threadId: string }
@@ -2675,6 +2798,9 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
       permissionMode: options.permissionMode,
       sandbox: options.sandbox,
       interactionMode: options.interactionMode,
+      workspaceContext: options.workspaceContext,
+      showWorkspaceContextInPrompt: options.showWorkspaceContextInPrompt,
+      systemPrompt: options.systemPrompt,
       initialHistory: options.initialHistory,
       mcpServerManager,
     }) as { threadId: string }
@@ -2699,6 +2825,9 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
         permissionMode: options.permissionMode,
         sandbox: options.sandbox,
         interactionMode: options.interactionMode,
+        workspaceContext: options.workspaceContext,
+        showWorkspaceContextInPrompt: options.showWorkspaceContextInPrompt,
+        systemPrompt: options.systemPrompt,
         allowedCommandPrefixes: options.allowedCommandPrefixes,
         initialHistory: options.initialHistory,
         mcpServerManager,
@@ -2794,6 +2923,7 @@ app.whenReady().then(async () => {
     app.quit()
     return
   }
+  pendingStartupWorkspaceRoot = readStartupWorkspaceRoot(process.argv)
   registerRuntimeDiagnosticsLogging()
   appendRuntimeLog('app-start', { version: app.getVersion(), platform: process.platform, electron: process.versions.electron })
   migrateLegacyLocalStorageIfNeeded()
@@ -3018,6 +3148,13 @@ ipcMain.handle('agentorchestrator:setWindowWorkspaceTitle', async (_evt, workspa
 ipcMain.handle('agentorchestrator:rendererReady', async () => {
   rendererStartupReady = true
   maybeRevealMainWindow()
+  if (pendingStartupWorkspaceRoot) {
+    const target = pendingStartupWorkspaceRoot
+    pendingStartupWorkspaceRoot = ''
+    setTimeout(() => {
+      sendMenuAction('openWorkspace', { path: target })
+    }, 50)
+  }
   return { ok: true }
 })
 
@@ -3306,11 +3443,60 @@ ipcMain.handle('agentorchestrator:terminalDestroy', () => {
   }
 })
 
-ipcMain.handle('agentorchestrator:writeWorkspaceConfig', async (_evt, folderPath: string) => {
-  const configPath = path.join(folderPath, WORKSPACE_CONFIG_FILENAME)
-  const config = { version: 1, agentorchestrator: true }
+function normalizeWorkspaceConfigPrefixes(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of raw) {
+    if (typeof value !== 'string') continue
+    const trimmed = value.trim()
+    if (!trimmed) continue
+    const key = trimmed.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(trimmed)
+  }
+  return result.slice(0, 64)
+}
+
+function sanitizeWorkspaceConfigSettings(folderPath: string, raw: unknown): WorkspaceConfigSettingsPayload {
+  const source = (raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}) ?? {}
+  return {
+    path: typeof source.path === 'string' && source.path.trim() ? source.path.trim() : folderPath,
+    defaultModel: typeof source.defaultModel === 'string' ? source.defaultModel.trim() : '',
+    permissionMode: source.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first',
+    sandbox: source.sandbox === 'read-only' ? 'read-only' : 'workspace-write',
+    workspaceContext: typeof source.workspaceContext === 'string' ? source.workspaceContext.trim() : '',
+    showWorkspaceContextInPrompt: source.showWorkspaceContextInPrompt === true,
+    systemPrompt: typeof source.systemPrompt === 'string' ? source.systemPrompt.trim() : '',
+    allowedCommandPrefixes: normalizeWorkspaceConfigPrefixes(source.allowedCommandPrefixes),
+    allowedAutoReadPrefixes: normalizeWorkspaceConfigPrefixes(source.allowedAutoReadPrefixes),
+    allowedAutoWritePrefixes: normalizeWorkspaceConfigPrefixes(source.allowedAutoWritePrefixes),
+    deniedAutoReadPrefixes: normalizeWorkspaceConfigPrefixes(source.deniedAutoReadPrefixes),
+    deniedAutoWritePrefixes: normalizeWorkspaceConfigPrefixes(source.deniedAutoWritePrefixes),
+  }
+}
+
+ipcMain.handle('agentorchestrator:writeWorkspaceConfig', async (_evt, folderPath: string, settings?: unknown) => {
+  const trimmedFolder = typeof folderPath === 'string' ? folderPath.trim() : ''
+  if (!trimmedFolder) throw new Error('Workspace folder path is required.')
+  const resolvedFolder = path.resolve(trimmedFolder)
+  if (!isDirectory(resolvedFolder)) throw new Error('Workspace folder does not exist.')
+
+  const configPath = path.join(resolvedFolder, WORKSPACE_CONFIG_FILENAME)
+  const workspaceSettings = sanitizeWorkspaceConfigSettings(resolvedFolder, settings)
+  const config = {
+    version: 2,
+    app: 'Barnaby',
+    agentorchestrator: true,
+    workspace: workspaceSettings,
+  }
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
   return true
+})
+
+ipcMain.handle('agentorchestrator:openWorkspaceInNewWindow', async (_evt, workspaceRoot: string) => {
+  return openWorkspaceInNewBarnabyInstance(workspaceRoot)
 })
 
 ipcMain.handle('agentorchestrator:claimWorkspace', async (_evt, workspaceRoot: string) => {
@@ -3814,6 +4000,8 @@ function setAppMenu() {
         { type: 'separator' },
         { label: 'Close', accelerator: 'CmdOrCtrl+W', click: () => sendMenuAction('closeFocused') },
         { label: 'Close Workspace', click: () => sendMenuAction('closeWorkspace') },
+        { type: 'separator' },
+        { label: 'Manage Workspaces', click: () => sendMenuAction('manageWorkspaces') },
         { label: 'Exit', role: 'quit' },
       ],
     },
@@ -3852,6 +4040,10 @@ function setAppMenu() {
             { label: 'Tile Vertical (V)', click: () => sendMenuAction('layoutVertical') },
             { label: 'Tile Horizontal (H)', click: () => sendMenuAction('layoutHorizontal') },
             { label: 'Tile / Grid', click: () => sendMenuAction('layoutGrid') },
+            { type: 'separator' },
+            { label: 'Reset Layout', click: () => sendMenuAction('layoutReset') },
+            { label: 'Flip Layout', click: () => sendMenuAction('layoutFlip') },
+            { label: 'Orchestrator Layout', click: () => sendMenuAction('layoutOrchestrator') },
           ],
         },
         { type: 'separator' },

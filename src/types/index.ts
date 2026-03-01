@@ -23,6 +23,7 @@ export type StandaloneTheme = {
   reasoningUpdates: string
   operationTrace: string
   thinkingProgress: string
+  errorStatus: string
 }
 
 export type ChatRole = 'user' | 'assistant' | 'system'
@@ -121,6 +122,9 @@ export type WorkspaceSettings = {
   defaultModel: string
   permissionMode: PermissionMode
   sandbox: SandboxMode
+  workspaceContext: string
+  showWorkspaceContextInPrompt: boolean
+  systemPrompt: string
   allowedCommandPrefixes: string[]
   allowedAutoReadPrefixes: string[]
   allowedAutoWritePrefixes: string[]
@@ -211,6 +215,7 @@ export type DiagnosticsMessageColors = {
   reasoningUpdates: string
   operationTrace: string
   thinkingProgress: string
+  errorStatus: string
 }
 
 export type ApplicationSettings = {
@@ -496,6 +501,7 @@ export type ThemeEditableField =
   | 'reasoningUpdates'
   | 'operationTrace'
   | 'thinkingProgress'
+  | 'errorStatus'
 
 export type ThemeOverrideValues = Partial<Record<ThemeEditableField, string>>
 export type ThemeOverrides = Record<string, ThemeOverrideValues>

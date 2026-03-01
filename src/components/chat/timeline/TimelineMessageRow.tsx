@@ -16,7 +16,6 @@ export interface TimelineMessageRowProps {
   messageId: string
   role: ChatRole
   content: string
-  messageInteractionMode?: AgentInteractionMode
   format: MessageFormat
   attachments: PastedImageAttachment[] | undefined
   createdAt: number | undefined
@@ -58,7 +57,6 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
     messageId,
     role,
     content,
-    messageInteractionMode,
     format,
     attachments,
     isCodeLifecycleUnit,
@@ -177,19 +175,20 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
   const assistantMessageContainerStyle =
     role === 'assistant' && !shouldCollapseThinking
       ? {
-          backgroundColor:
-            activeTheme.mode === 'dark'
-              ? 'var(--theme-assistant-bubble-bg-dark, color-mix(in srgb, var(--theme-accent-soft-dark) 45%, var(--theme-dark-900)))'
-              : 'var(--theme-assistant-bubble-bg-light, color-mix(in srgb, var(--theme-accent-soft) 34%, white))',
-          borderColor:
-            activeTheme.mode === 'dark'
-              ? 'color-mix(in srgb, var(--theme-accent-500) 24%, var(--theme-dark-900))'
-              : 'color-mix(in srgb, var(--theme-accent-500) 18%, white)',
-        }
+        backgroundColor:
+          activeTheme.mode === 'dark'
+            ? 'var(--theme-assistant-bubble-bg-dark, color-mix(in srgb, var(--theme-accent-soft-dark) 45%, var(--theme-dark-900)))'
+            : 'var(--theme-assistant-bubble-bg-light, color-mix(in srgb, var(--theme-accent-soft) 34%, white))',
+        borderColor:
+          activeTheme.mode === 'dark'
+            ? 'color-mix(in srgb, var(--theme-accent-500) 24%, var(--theme-dark-900))'
+            : 'color-mix(in srgb, var(--theme-accent-500) 18%, white)',
+      }
       : undefined
-  const mergedMessageContainerStyle = {
+  const mergedMessageContainerStyle: React.CSSProperties = {
     ...(assistantMessageContainerStyle ?? {}),
     ...(messageContainerStyle ?? {}),
+    ...(isDebugSystemNote ? { backgroundColor: activeTheme.errorStatus } : {}),
   }
 
   const containerClasses = [
@@ -197,46 +196,30 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
     shouldCollapseThinking
       ? 'py-1'
       : [
-          'rounded-2xl px-3.5 py-2.5 border shadow-sm',
-          role === 'user'
-            ? 'bg-blue-50/90 border-blue-200 text-blue-950 dark:bg-blue-950/40 dark:border-blue-900 dark:text-blue-100'
-            : 'border-neutral-200/90 text-neutral-900 dark:border-neutral-800 dark:text-neutral-100',
-          role === 'system'
-            ? 'bg-neutral-50 border-neutral-200 text-neutral-700 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-300'
-            : '',
-          isLimitSystemWarning
-            ? 'bg-amber-50/95 border-amber-300 text-amber-900 dark:bg-amber-950/35 dark:border-amber-800 dark:text-amber-200'
-            : '',
-          isContextCompactionNotice
-            ? 'bg-cyan-50/95 border-cyan-300 text-cyan-900 dark:bg-cyan-950/35 dark:border-cyan-800 dark:text-cyan-200'
-            : '',
-          isDebugSystemNote
-            ? 'bg-red-50/90 border-red-200 text-red-900 dark:bg-red-950/35 dark:border-red-900 dark:text-red-200'
-            : '',
-        ].join(' '),
+        'rounded-2xl px-3.5 py-2.5 border shadow-sm',
+        role === 'user'
+          ? 'bg-blue-50/90 border-blue-200 text-blue-950 dark:bg-blue-950/40 dark:border-blue-900 dark:text-blue-100'
+          : 'border-neutral-200/90 text-neutral-900 dark:border-neutral-800 dark:text-neutral-100',
+        role === 'system'
+          ? 'bg-neutral-50 border-neutral-200 text-neutral-700 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-300'
+          : '',
+        isLimitSystemWarning
+          ? 'bg-amber-50/95 border-amber-300 text-amber-900 dark:bg-amber-950/35 dark:border-amber-800 dark:text-amber-200'
+          : '',
+        isContextCompactionNotice
+          ? 'bg-cyan-50/95 border-cyan-300 text-cyan-900 dark:bg-cyan-950/35 dark:border-cyan-800 dark:text-cyan-200'
+          : '',
+        isDebugSystemNote
+          ? 'border-red-200 text-red-900 dark:border-red-900 dark:text-red-200'
+          : '',
+      ].join(' '),
   ]
     .filter(Boolean)
     .join(' ')
 
-  const userModeBadgeClass =
-    messageInteractionMode === 'plan'
-      ? 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/35 dark:text-emerald-200'
-      : messageInteractionMode === 'debug'
-        ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/35 dark:text-amber-200'
-        : messageInteractionMode === 'ask'
-          ? 'border-violet-300 bg-violet-50 text-violet-800 dark:border-violet-800 dark:bg-violet-950/35 dark:text-violet-200'
-          : 'border-blue-300 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950/35 dark:text-blue-200'
-
   return (
     <div key={messageId} data-unit-id={unit.id} className="w-full">
       <div className={containerClasses} style={mergedMessageContainerStyle}>
-        {role === 'user' && messageInteractionMode && (
-          <div className="mb-1 flex justify-end">
-            <span className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${userModeBadgeClass}`}>
-              {INTERACTION_MODE_META[messageInteractionMode].label}
-            </span>
-          </div>
-        )}
         {role === 'user' && isLastUserMessage && resendingPanelId === panelId && (
           <div className="absolute inset-0 rounded-2xl animate-pulse bg-blue-200/30 dark:bg-blue-400/10 pointer-events-none" />
         )}
@@ -291,15 +274,14 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
                 </div>
               ) : (
                 <div
-                  className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] ${
-                    isDebugSystemNote
-                      ? 'italic'
-                      : isLimitSystemWarning
+                  className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] ${isDebugSystemNote
+                    ? 'italic'
+                    : isLimitSystemWarning
                       ? 'font-semibold text-amber-900 dark:text-amber-200'
                       : isContextCompactionNotice
-                      ? 'font-semibold text-cyan-900 dark:text-cyan-200'
-                      : 'text-neutral-700 dark:text-neutral-300'
-                  }`}
+                        ? 'font-semibold text-cyan-900 dark:text-cyan-200'
+                        : 'text-neutral-700 dark:text-neutral-300'
+                    }`}
                   style={isDebugSystemNote ? { color: debugNoteColor } : undefined}
                 >
                   {content}
@@ -382,7 +364,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
             {canRecallLastUserMessage && (
               <button
                 type="button"
-                className="h-6 w-6 inline-flex items-center justify-center rounded-md border border-blue-200 bg-white/80 text-blue-700 hover:bg-blue-100 hover:border-blue-300 dark:border-blue-900/70 dark:bg-blue-950/25 dark:text-blue-200 dark:hover:bg-blue-900/40 dark:hover:border-blue-700"
+                className="h-6 w-6 inline-flex items-center justify-center rounded-md bg-white/80 text-blue-700 hover:bg-blue-100 dark:bg-blue-950/25 dark:text-blue-200 dark:hover:bg-blue-900/40"
                 onClick={onRecallLastUserMessage}
                 title="Recall this message for quick correction"
                 aria-label="Recall this message for editing"

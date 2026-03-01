@@ -144,7 +144,6 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
       messageId={m.id}
       role={m.role}
       content={m.content}
-      messageInteractionMode={unit.interactionMode}
       format={m.format}
       attachments={m.attachments}
       createdAt={m.createdAt}

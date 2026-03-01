@@ -8,10 +8,11 @@
       "Shell(cmd)",
       "Shell(cmd.exe)",
       "Shell(npx)",
+      "Shell(tsc)",
+      "Shell(git)",
       "Read(src/**)",
       "Read(package.json**)",
-      "Write(src/**)",
-      "Write(package.json**)"
+      "Write(**)"
     ],
     "deny": [
       "Read(../**)",

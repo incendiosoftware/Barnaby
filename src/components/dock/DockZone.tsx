@@ -88,6 +88,9 @@ export function DockZone({
   )
 
   const isTarget = dragOverTarget?.zoneId === zoneId
+  const headerClassName = dockSide === 'bottom'
+    ? 'flex items-center gap-1 px-1.5 py-1 shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-900/80'
+    : 'flex items-center gap-1 px-1.5 py-1 shrink-0 bg-neutral-200/70 dark:bg-neutral-800/70'
 
   return (
     <div
@@ -97,7 +100,7 @@ export function DockZone({
       onDragLeave={handleDragLeave}
       onDrop={onDrop}
     >
-      <div className="flex items-center gap-1 px-1.5 py-1 shrink-0 bg-neutral-200/70 dark:bg-neutral-800/70">
+      <div className={headerClassName}>
         {tabs.map((panelId) => (
           <DockPanelTab
             key={panelId}

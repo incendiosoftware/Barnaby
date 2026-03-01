@@ -78,10 +78,10 @@ export function WorkspaceTile({
             type="button"
             title="Agent Orchestrator"
             aria-label="Agent Orchestrator"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium ${
               dockTab === 'orchestrator'
-                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                ? 'bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                : 'bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
             }`}
             onClick={() => onDockTabChange('orchestrator')}
           >
@@ -91,10 +91,10 @@ export function WorkspaceTile({
             type="button"
             title="Workspace Folder"
             aria-label="Workspace Folder"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium ${
               dockTab === 'explorer'
-                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                ? 'bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                : 'bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
             }`}
             onClick={() => onDockTabChange('explorer')}
           >
@@ -104,10 +104,10 @@ export function WorkspaceTile({
             type="button"
             title="Git"
             aria-label="Git"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium ${
               dockTab === 'git'
-                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                ? 'bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                : 'bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
             }`}
             onClick={() => onDockTabChange('git')}
           >
@@ -117,10 +117,10 @@ export function WorkspaceTile({
             type="button"
             title="Workspace settings"
             aria-label="Workspace settings"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium ${
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium ${
               dockTab === 'settings'
-                ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+                ? 'bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
+                : 'bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
             }`}
             onClick={onWorkspaceSettingsTab}
           >
@@ -131,7 +131,7 @@ export function WorkspaceTile({
           type="button"
           title={`Dock workspace window to ${workspaceDockSide === 'right' ? 'left' : 'right'}`}
           aria-label={`Dock workspace window to ${workspaceDockSide === 'right' ? 'left' : 'right'}`}
-          className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
+          className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
           onClick={onDockSideToggle}
         >
           <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -145,7 +145,7 @@ export function WorkspaceTile({
           type="button"
           title="Close workspace window"
           aria-label="Close workspace window"
-          className="h-8 w-8 inline-flex items-center justify-center rounded-md text-xs border font-medium border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
+          className="h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
           onClick={onClose}
         >
           <CloseIcon size={12} />

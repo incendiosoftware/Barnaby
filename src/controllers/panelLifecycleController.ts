@@ -91,6 +91,9 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
     const allowedAutoWritePrefixes = ws?.allowedAutoWritePrefixes ?? []
     const deniedAutoReadPrefixes = ws?.deniedAutoReadPrefixes ?? []
     const deniedAutoWritePrefixes = ws?.deniedAutoWritePrefixes ?? []
+    const workspaceContext = ws?.workspaceContext ?? ''
+    const showWorkspaceContextInPrompt = ws?.showWorkspaceContextInPrompt === true
+    const systemPrompt = ws?.systemPrompt ?? ''
 
     await withTimeout(
       ctx.api.connect(winId, {
@@ -105,6 +108,9 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
         allowedAutoWritePrefixes,
         deniedAutoReadPrefixes,
         deniedAutoWritePrefixes,
+        workspaceContext,
+        showWorkspaceContextInPrompt,
+        systemPrompt,
         provider,
         modelConfig: mi?.config,
         initialHistory,
@@ -204,7 +210,7 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
       if (msg.includes('no activity for 120 seconds')) {
         return 'Claude stopped responding (2 min). Usually network or API delay. Try again.'
       }
-      return 'Claude timed out waiting for a response. This can happen with very long prompts or API delays. Send another message to retry.'
+      return 'Claude timed out waiting for a response. This can happen with very long prompts or API delays. Retrying..'
     }
 
     if (msg.includes('API key') && (msg.includes('missing') || msg.includes('OpenAI') || msg.includes('OpenRouter'))) {

@@ -22,6 +22,9 @@ export interface WorkspaceSettingsPaneProps {
   onDefaultModelChange: (value: string) => void
   onSandboxChange: (value: SandboxMode) => void
   onPermissionModeChange: (value: PermissionMode) => void
+  onWorkspaceContextChange: (value: string) => void
+  onShowWorkspaceContextInPromptChange: (value: boolean) => void
+  onSystemPromptChange: (value: string) => void
   onTextDraftChange: (field: keyof WorkspaceSettingsTextDraft, value: string) => void
   onClose?: () => void
 }
@@ -36,6 +39,9 @@ export function WorkspaceSettingsPane({
   onDefaultModelChange,
   onSandboxChange,
   onPermissionModeChange,
+  onWorkspaceContextChange,
+  onShowWorkspaceContextInPromptChange,
+  onSystemPromptChange,
   onTextDraftChange,
   onClose,
 }: WorkspaceSettingsPaneProps) {
@@ -95,6 +101,32 @@ export function WorkspaceSettingsPane({
             </select>
           </div>
           <div className="space-y-1.5">
+            <label className="text-neutral-600 dark:text-neutral-300">Workspace context</label>
+            <textarea
+              className={`w-full max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} text-xs`}
+              value={workspaceForm.workspaceContext}
+              onChange={(e) => onWorkspaceContextChange(e.target.value)}
+              placeholder="Describe this workspace and its purpose."
+            />
+            <label className="inline-flex items-center gap-2 text-neutral-600 dark:text-neutral-300">
+              <input
+                type="checkbox"
+                checked={workspaceForm.showWorkspaceContextInPrompt}
+                onChange={(e) => onShowWorkspaceContextInPromptChange(e.target.checked)}
+              />
+              Show workspace context in prompt.
+            </label>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-neutral-600 dark:text-neutral-300">System prompt</label>
+            <textarea
+              className={`w-full max-w-full min-h-[96px] resize-y ${UI_INPUT_CLASS} text-xs`}
+              value={workspaceForm.systemPrompt}
+              onChange={(e) => onSystemPromptChange(e.target.value)}
+              placeholder="Additional system instructions for agents in this workspace."
+            />
+          </div>
+          <div className="space-y-1.5">
             <label className="text-neutral-600 dark:text-neutral-300">Sandbox</label>
             <select
               className={`w-full ${UI_SELECT_CLASS}`}
@@ -126,10 +158,10 @@ export function WorkspaceSettingsPane({
               <div className="space-y-1.5">
                 <label className="text-neutral-600 dark:text-neutral-300">Allowed command prefixes</label>
                 <textarea
-                  className={`w-full min-h-[96px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                  className={`w-full max-w-full min-h-[96px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
                   value={workspaceFormTextDraft.allowedCommandPrefixes}
                   onChange={(e) => onTextDraftChange('allowedCommandPrefixes', e.target.value)}
-                  placeholder={'npm run build:dist:raw\nnpx vite build'}
+                  placeholder={'npm run\nnpm test\ntsc\ngit status'}
                 />
                 <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
                   One prefix per line. Leave blank to allow all commands in Proceed always mode.
@@ -138,25 +170,25 @@ export function WorkspaceSettingsPane({
               <div className="space-y-1.5">
                 <label className="text-neutral-600 dark:text-neutral-300">Allowed auto-read paths</label>
                 <textarea
-                  className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                  className={`w-full max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
                   value={workspaceFormTextDraft.allowedAutoReadPrefixes}
                   onChange={(e) => onTextDraftChange('allowedAutoReadPrefixes', e.target.value)}
-                  placeholder={'src/\npackage.json'}
+                  placeholder={'(Leave blank to allow reading any file)'}
                 />
               </div>
               <div className="space-y-1.5">
                 <label className="text-neutral-600 dark:text-neutral-300">Allowed auto-write paths</label>
                 <textarea
-                  className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                  className={`w-full max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
                   value={workspaceFormTextDraft.allowedAutoWritePrefixes}
                   onChange={(e) => onTextDraftChange('allowedAutoWritePrefixes', e.target.value)}
-                  placeholder={'src/\npackage.json'}
+                  placeholder={'(Leave blank to allow editing any file)'}
                 />
               </div>
               <div className="space-y-1.5">
                 <label className="text-neutral-600 dark:text-neutral-300">Denied auto-read paths</label>
                 <textarea
-                  className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                  className={`w-full max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
                   value={workspaceFormTextDraft.deniedAutoReadPrefixes}
                   onChange={(e) => onTextDraftChange('deniedAutoReadPrefixes', e.target.value)}
                   placeholder={'../\n.env'}
@@ -165,7 +197,7 @@ export function WorkspaceSettingsPane({
               <div className="space-y-1.5">
                 <label className="text-neutral-600 dark:text-neutral-300">Denied auto-write paths</label>
                 <textarea
-                  className={`w-full min-h-[64px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                  className={`w-full max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
                   value={workspaceFormTextDraft.deniedAutoWritePrefixes}
                   onChange={(e) => onTextDraftChange('deniedAutoWritePrefixes', e.target.value)}
                   placeholder={'../\n.env'}

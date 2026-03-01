@@ -228,8 +228,13 @@ export function ChatInputSection({
           ? 'border-violet-300 bg-violet-50 text-violet-800 dark:border-violet-800 dark:bg-violet-950/35 dark:text-violet-200'
           : 'border-blue-300 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950/35 dark:text-blue-200'
 
+  const isReadOnly = inputLocked
+  const containerClass = isReadOnly
+    ? "relative z-10 border-t border-neutral-200/80 p-2.5 bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-800"
+    : "relative z-10 border-t border-neutral-200/80 dark:border-neutral-800 p-2.5 bg-white dark:bg-neutral-950"
+
   return (
-    <div className="relative z-10 border-t border-neutral-200/80 dark:border-neutral-800 p-2.5 bg-white dark:bg-neutral-950">
+    <div className={containerClass}>
       {panel.attachments.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1.5">
           {panel.attachments.map((a) => (
@@ -275,7 +280,12 @@ export function ChatInputSection({
       <div className="flex items-end gap-2 min-w-0">
         <textarea
           ref={textareaRef}
-          className="flex-1 min-w-0 resize-none rounded-xl bg-white border border-neutral-300 px-3 py-2 text-neutral-900 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 placeholder:text-neutral-500 disabled:cursor-not-allowed disabled:opacity-70 dark:bg-neutral-800 dark:border-neutral-600 dark:text-neutral-100 dark:placeholder:text-neutral-400 dark:focus:border-blue-700 dark:focus:ring-blue-900/40 font-chat"
+          className={[
+            "flex-1 min-w-0 resize-none rounded-xl border px-3 py-2 shadow-sm outline-none font-chat",
+            isReadOnly
+              ? "bg-transparent border-transparent text-neutral-600 cursor-not-allowed dark:text-neutral-400 placeholder:text-neutral-500 dark:placeholder:text-neutral-400"
+              : "bg-white border-neutral-300 text-neutral-900 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 placeholder:text-neutral-500 dark:bg-neutral-800 dark:border-neutral-600 dark:text-neutral-100 dark:placeholder:text-neutral-400 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
+          ].join(' ')}
           style={{ fontSize: `${panelFontSizePx}px`, lineHeight: `${panelLineHeightPx}px` }}
           placeholder={inputLocked ? 'This chat is read-only. Start a new chat to continue.' : 'Message the agent...'}
           rows={1}
@@ -304,14 +314,14 @@ export function ChatInputSection({
           )}
           <button
             className={[
-              'h-8 w-8 inline-flex items-center justify-center rounded-full border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+              'h-8 w-8 inline-flex items-center justify-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
               isBusy
                 ? hasInput
-                  ? 'border-neutral-400 bg-neutral-200 text-neutral-700 hover:bg-neutral-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-600'
-                  : 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/60'
+                  ? 'bg-neutral-200 text-neutral-700 hover:bg-neutral-300 dark:bg-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-600'
+                  : 'bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/60'
                 : hasInput
-                  ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
-                  : 'border-neutral-300 bg-neutral-100 text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-600',
+                  ? 'bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
+                  : 'bg-neutral-100 text-neutral-400 dark:bg-neutral-900 dark:text-neutral-600',
             ].join(' ')}
             onClick={() => {
               if (inputLocked) return
@@ -404,8 +414,8 @@ export function ChatInputSection({
               inputLocked
                 ? lockTitle
                 : isBusy
-                ? 'Wait for the current turn to finish before summarizing context.'
-                : 'Compress this session into a checkpoint summary and reset context.'
+                  ? 'Wait for the current turn to finish before summarizing context.'
+                  : 'Compress this session into a checkpoint summary and reset context.'
             }
             onClick={onSummarizeContext}
             disabled={summarizeDisabled}
@@ -416,10 +426,10 @@ export function ChatInputSection({
             <button
               type="button"
               className={[
-                'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                'h-7 w-7 inline-flex items-center justify-center rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                 settingsPopover === 'mode'
-                  ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
-                  : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
+                  : 'bg-transparent text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700',
               ].join(' ')}
               title={inputLocked ? lockTitle : `Mode: ${INTERACTION_MODE_META[interactionMode].label}`}
               onClick={() => setSettingsPopover(settingsPopover === 'mode' ? null : 'mode')}
@@ -455,17 +465,17 @@ export function ChatInputSection({
             <button
               type="button"
               className={[
-                'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                'h-7 w-7 inline-flex items-center justify-center rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                 settingsPopover === 'sandbox'
-                  ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
-                  : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
+                  : 'bg-transparent text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700',
               ].join(' ')}
               title={
                 inputLocked
                   ? lockTitle
                   : sandboxLockedToView
-                  ? 'Sandbox: View only (locked by Workspace settings)'
-                  : `Sandbox: ${effectiveSandbox}`
+                    ? 'Sandbox: View only (locked by Workspace settings)'
+                    : `Sandbox: ${effectiveSandbox}`
               }
               onClick={() => {
                 if (sandboxLockedToView) {
@@ -515,19 +525,19 @@ export function ChatInputSection({
             <button
               type="button"
               className={[
-                'h-7 w-7 inline-flex items-center justify-center rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                'h-7 w-7 inline-flex items-center justify-center rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                 settingsPopover === 'permission'
-                  ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
-                  : 'border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700',
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
+                  : 'bg-transparent text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700',
               ].join(' ')}
               title={
                 inputLocked
                   ? lockTitle
                   : permissionDisabledByReadOnlySandbox
-                  ? 'Permissions disabled while workspace sandbox is Read only'
-                  : permissionLockedToVerifyFirst
-                    ? 'Permissions: Verify first (locked by Workspace settings)'
-                    : `Permissions: ${effectivePermissionMode}`
+                    ? 'Permissions disabled while workspace sandbox is Read only'
+                    : permissionLockedToVerifyFirst
+                      ? 'Permissions: Verify first (locked by Workspace settings)'
+                      : `Permissions: ${effectivePermissionMode}`
               }
               disabled={inputLocked || permissionDisabledByReadOnlySandbox}
               onClick={() => setSettingsPopover(settingsPopover === 'permission' ? null : 'permission')}

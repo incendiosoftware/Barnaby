@@ -50,7 +50,7 @@ export function ExplorerPane({
   onClose,
 }: ExplorerPaneProps) {
   function renderExplorerNode(node: WorkspaceTreeNode, depth = 0): React.ReactNode {
-    const rowPadding = 8 + depth * 10
+    const rowPadding = 8 + depth * 12
     if (node.type === 'file') {
       const selected = selectedWorkspaceFile === node.relativePath
       return (
@@ -59,12 +59,11 @@ export function ExplorerPane({
           type="button"
           role="treeitem"
           aria-selected={selected}
-          className={`w-full appearance-none text-left py-1 pr-2 rounded-md text-xs font-mono flex items-center gap-2 truncate border border-transparent bg-transparent hover:bg-transparent active:bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-blue-400/60 ${
-            selected
-              ? 'border-blue-300 text-blue-800 dark:border-blue-800 dark:text-blue-100'
-              : 'text-neutral-700 hover:border-neutral-300 dark:text-neutral-300 dark:hover:border-neutral-700'
-          }`}
-          style={{ paddingLeft: `${rowPadding}px` }}
+          className={`w-full appearance-none border-0 bg-transparent text-left flex items-center gap-1.5 truncate select-none focus:outline-none ${selected
+            ? 'bg-blue-600 text-white dark:bg-blue-600 dark:text-white'
+            : 'text-neutral-800 hover:bg-neutral-200/50 dark:text-neutral-300 dark:hover:bg-neutral-800/50'
+            }`}
+          style={{ paddingLeft: `${rowPadding + 16}px`, height: '22px', fontSize: '13px' }}
           onClick={() => onSelectFile(node.relativePath)}
           onDoubleClick={() => onOpenFile(node.relativePath)}
           onContextMenu={(e) => {
@@ -74,8 +73,10 @@ export function ExplorerPane({
           }}
           title={node.relativePath}
         >
-          <span className="text-neutral-400 dark:text-neutral-500">•</span>
-          <span className="truncate">{node.name}</span>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="opacity-70 shrink-0">
+            <path d="M13.85 4.44l-3.28-3.3a.5.5 0 00-.35-.14H3.5A1.5 1.5 0 002 2.5v11A1.5 1.5 0 003.5 15h9a1.5 1.5 0 001.5-1.5V4.79a.5.5 0 00-.15-.35zM10.5 2.21L12.79 4.5H10.5V2.21zM13 13.5a.5.5 0 01-.5.5h-9a.5.5 0 01-.5-.5v-11a.5.5 0 01.5-.5h6.5v3.5A.5.5 0 0010.5 6H13v7.5z" />
+          </svg>
+          <span className="truncate leading-none mb-[1px]">{node.name}</span>
         </button>
       )
     }
@@ -87,16 +88,18 @@ export function ExplorerPane({
           type="button"
           role="treeitem"
           aria-expanded={expanded}
-          className="w-full appearance-none text-left py-1 pr-2 rounded-md text-xs font-mono flex items-center gap-2 truncate border border-transparent bg-transparent hover:bg-transparent active:bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-blue-400/60 text-neutral-700 hover:border-neutral-300 dark:text-neutral-200 dark:hover:border-neutral-700"
-          style={{ paddingLeft: `${rowPadding}px` }}
+          className="w-full appearance-none border-0 bg-transparent text-left flex items-center gap-1.5 truncate select-none focus:outline-none text-neutral-800 hover:bg-neutral-200/50 dark:text-neutral-300 dark:hover:bg-neutral-800/50"
+          style={{ paddingLeft: `${rowPadding}px`, height: '22px', fontSize: '13px' }}
           onClick={() => onToggleDirectory(node.relativePath)}
           title={node.relativePath}
         >
-          <span className="w-3 text-neutral-500 dark:text-neutral-400">{expanded ? '▾' : '▸'}</span>
-          <span className="truncate">{node.name}</span>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className={`opacity-70 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}>
+            <path d="M5.5 3.5v9l5-4.5-5-4.5z" fillRule="evenodd" clipRule="evenodd" />
+          </svg>
+          <span className="truncate leading-none mb-[1px]">{node.name}</span>
         </button>
         {expanded && (
-          <div role="group" className="ml-3 border-l border-neutral-200/70 dark:border-neutral-800/80 pl-1">
+          <div role="group">
             {node.children?.map((child) => renderExplorerNode(child, depth + 1))}
           </div>
         )}
@@ -117,7 +120,9 @@ export function ExplorerPane({
               title="Close"
               aria-label="Close"
             >
-              <CloseIcon size={12} />
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
             </button>
           )}
         </div>

@@ -15,10 +15,14 @@ export type SystemPromptOptions = {
   sandbox: string
   interactionMode?: string
   gitStatus?: string
+  workspaceContext?: string
+  showWorkspaceContextInPrompt?: boolean
+  additionalSystemPrompt?: string
 }
 
 export type StablePromptOptions = {
   interactionMode?: string
+  additionalSystemPrompt?: string
 }
 
 export type DynamicContextOptions = {
@@ -27,6 +31,8 @@ export type DynamicContextOptions = {
   permissionMode: string
   sandbox: string
   gitStatus?: string
+  workspaceContext?: string
+  showWorkspaceContextInPrompt?: boolean
 }
 
 const MODE_INSTRUCTIONS: Record<string, string> = {
@@ -49,6 +55,7 @@ function getModeInstruction(mode?: string): string {
  */
 export function buildStableSystemPrompt(options: StablePromptOptions): string {
   const modeInstruction = getModeInstruction(options.interactionMode)
+  const additionalSystemPrompt = typeof options.additionalSystemPrompt === 'string' ? options.additionalSystemPrompt.trim() : ''
 
   const parts: string[] = []
 
@@ -71,18 +78,11 @@ export function buildStableSystemPrompt(options: StablePromptOptions): string {
   parts.push('- When editing, show only the changed section with enough context to locate it.')
   parts.push('- Do not generate binary data or extremely long hashes.')
 
-  parts.push('')
-  parts.push('## Tool usage')
-  parts.push('- Read files before editing them.')
-  parts.push('- Use search_workspace to find symbols rather than guessing file locations.')
-  parts.push('- Use shell commands for build/test/install tasks instead of returning checklists.')
-  parts.push('- IMPORTANT: Prefer search_workspace and list_workspace_tree over shell commands like rg, grep, or find. The built-in tools already exclude node_modules, dist, build, and other noise directories.')
-  parts.push('- Start searches in the most likely directory or file first. Avoid full-repo scans unless a targeted search returned no results.')
-  parts.push('- When searching, use specific terms (function names, class names, unique strings) rather than broad patterns.')
-
-  parts.push('')
-  parts.push('## Current mode')
-  parts.push(modeInstruction)
+  if (additionalSystemPrompt) {
+    parts.push('')
+    parts.push('## Additional system prompt')
+    parts.push(additionalSystemPrompt)
+  }
 
   return parts.join('\n')
 }
@@ -93,6 +93,8 @@ export function buildStableSystemPrompt(options: StablePromptOptions): string {
  */
 export function buildDynamicContext(options: DynamicContextOptions): string {
   const { workspaceTree, cwd, permissionMode, sandbox, gitStatus } = options
+  const workspaceContext = typeof options.workspaceContext === 'string' ? options.workspaceContext.trim() : ''
+  const showWorkspaceContextInPrompt = options.showWorkspaceContextInPrompt === true
 
   const parts: string[] = []
 
@@ -100,6 +102,9 @@ export function buildDynamicContext(options: DynamicContextOptions): string {
   parts.push(`- Workspace root: ${cwd}`)
   parts.push(`- Permission mode: ${permissionMode}`)
   parts.push(`- Sandbox: ${sandbox}`)
+  if (showWorkspaceContextInPrompt && workspaceContext) {
+    parts.push(`- Workspace notes: ${workspaceContext}`)
+  }
 
   if (gitStatus && gitStatus.trim()) {
     parts.push('')
@@ -120,13 +125,18 @@ export function buildDynamicContext(options: DynamicContextOptions): string {
  */
 export function buildSystemPromptParts(options: SystemPromptOptions): { stable: string; dynamic: string } {
   return {
-    stable: buildStableSystemPrompt({ interactionMode: options.interactionMode }),
+    stable: buildStableSystemPrompt({
+      interactionMode: options.interactionMode,
+      additionalSystemPrompt: options.additionalSystemPrompt,
+    }),
     dynamic: buildDynamicContext({
       workspaceTree: options.workspaceTree,
       cwd: options.cwd,
       permissionMode: options.permissionMode,
       sandbox: options.sandbox,
       gitStatus: options.gitStatus,
+      workspaceContext: options.workspaceContext,
+      showWorkspaceContextInPrompt: options.showWorkspaceContextInPrompt,
     }),
   }
 }

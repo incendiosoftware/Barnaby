@@ -69,9 +69,9 @@ export function AgentPanelHeader({
       <div className="flex items-center gap-1 shrink-0 cursor-default">
         <button
           className={[
-            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-            'border-neutral-300 bg-white text-neutral-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700',
-            'dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-blue-950/50 dark:hover:text-blue-300 dark:hover:border-blue-900/60',
+            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+            'bg-white text-neutral-700 hover:bg-neutral-100 hover:text-neutral-900',
+            'dark:bg-transparent dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200',
           ].join(' ')}
           onClick={onSplit}
           disabled={panelsCount >= MAX_PANELS}
@@ -86,16 +86,15 @@ export function AgentPanelHeader({
         </button>
         <button
           className={[
-            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border transition-colors',
-            'border-neutral-300 bg-white text-neutral-700 hover:border-red-200 hover:bg-red-50 hover:text-red-700',
-            'dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-red-950/50 dark:hover:text-red-300 dark:hover:border-red-900/60',
+            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md transition-colors',
+            'bg-white text-neutral-700 hover:bg-red-50 hover:text-red-700',
+            'dark:bg-transparent dark:text-neutral-400 dark:hover:bg-red-900/50 dark:hover:text-red-300',
           ].join(' ')}
           onClick={onClose}
           title="Close"
         >
-          <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-            <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-            <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
         </button>
       </div>

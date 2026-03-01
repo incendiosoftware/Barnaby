@@ -39,6 +39,8 @@ import {
   normalizeWorkspacePathForCompare,
 } from '../../utils/appCore'
 
+const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
+
 export interface AppModalsProps {
   api: any
 
@@ -109,6 +111,8 @@ export interface AppModalsProps {
 
   showWorkspaceModal: boolean
   setShowWorkspaceModal: React.Dispatch<React.SetStateAction<boolean>>
+  showManageWorkspacesModal: boolean
+  setShowManageWorkspacesModal: React.Dispatch<React.SetStateAction<boolean>>
   workspaceModalMode: string
   workspaceForm: any
   setWorkspaceForm: React.Dispatch<React.SetStateAction<any>>
@@ -153,11 +157,51 @@ export function AppModals(props: AppModalsProps) {
     openWorkspacePicker, closeWorkspacePicker,
     requestWorkspaceSwitch, confirmWorkspaceSwitch,
     showWorkspaceModal, setShowWorkspaceModal,
+    showManageWorkspacesModal, setShowManageWorkspacesModal,
     workspaceModalMode, workspaceForm, setWorkspaceForm,
     workspaceFormTextDraft, workspaceSettings,
     browseForWorkspaceIntoForm, sandboxModeDescription,
     modelConfig, getModelOptions,
   } = props
+
+  const buildDefaultWorkspaceSettings = (selected: string): WorkspaceSettingsType => ({
+    path: selected,
+    defaultModel: DEFAULT_MODEL,
+    permissionMode: 'verify-first',
+    sandbox: 'workspace-write',
+    workspaceContext: '',
+    showWorkspaceContextInPrompt: false,
+    systemPrompt: '',
+    allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+    allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
+    allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
+    deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+    deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
+  })
+
+  const workspaceManagerRows = workspaceList.map((workspacePath) => ({
+    workspacePath,
+    configPath: `${workspacePath}\\${WORKSPACE_CONFIG_FILENAME}`,
+    settings:
+      (workspaceSettingsByPath[workspacePath] as WorkspaceSettingsType | undefined) ??
+      buildDefaultWorkspaceSettings(workspacePath),
+    isCurrent:
+      normalizeWorkspacePathForCompare(workspacePath) === normalizeWorkspacePathForCompare(workspaceRoot),
+  }))
+
+  const [returnToManageWorkspacesOnClose, setReturnToManageWorkspacesOnClose] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!showWorkspaceModal) setReturnToManageWorkspacesOnClose(false)
+  }, [showWorkspaceModal])
+
+  function closeWorkspaceSettingsModal() {
+    setShowWorkspaceModal(false)
+    if (returnToManageWorkspacesOnClose) {
+      setShowManageWorkspacesModal(true)
+      setReturnToManageWorkspacesOnClose(false)
+    }
+  }
 
   return (
     <>
@@ -174,9 +218,8 @@ export function AppModals(props: AppModalsProps) {
                 }}
                 title="Close"
               >
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-                  <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
               </button>
             </div>
@@ -296,9 +339,8 @@ export function AppModals(props: AppModalsProps) {
                 }}
                 title="Skip setup"
               >
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-                  <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
               </button>
             </div>
@@ -342,12 +384,12 @@ export function AppModals(props: AppModalsProps) {
                     const statusText = !providerEnabled
                       ? 'Disabled'
                       : !status
-                      ? 'Unknown'
-                      : !status.installed
-                        ? 'Not installed'
-                        : status.authenticated
-                          ? (providerVerifiedByName[providerId] ? 'Connected' : 'Authenticated')
-                          : 'Setup required'
+                        ? 'Unknown'
+                        : !status.installed
+                          ? 'Not installed'
+                          : status.authenticated
+                            ? (providerVerifiedByName[providerId] ? 'Connected' : 'Authenticated')
+                            : 'Setup required'
                     const rawStatusDetail = status?.detail?.trim() ?? ''
                     const statusDetail = !providerEnabled
                       ? 'Provider disabled.'
@@ -358,21 +400,20 @@ export function AppModals(props: AppModalsProps) {
                       <div key={providerId} className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-2">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2 font-medium text-sm text-neutral-800 dark:text-neutral-200">
-                            <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${
-                              !providerEnabled ? 'bg-neutral-400 dark:bg-neutral-500'
-                              : !status ? 'bg-neutral-400 dark:bg-neutral-500'
-                              : !status.installed ? 'bg-red-500'
-                              : status.authenticated
-                                ? (providerVerifiedByName[providerId] ? 'bg-emerald-500' : 'bg-amber-500')
-                                : 'bg-amber-500'
-                            }`} title={
-                              !providerEnabled ? 'Disabled'
-                              : !status ? 'Checking...'
-                              : !status.installed ? (status.detail ?? 'CLI not found')
-                              : status.authenticated
-                                ? (providerVerifiedByName[providerId] ? (status.detail ?? 'Connected') : 'Authenticated. Waiting for first response to verify.')
-                                : (status.detail ?? 'Login required')
-                            } />
+                            <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${!providerEnabled ? 'bg-neutral-400 dark:bg-neutral-500'
+                                : !status ? 'bg-neutral-400 dark:bg-neutral-500'
+                                  : !status.installed ? 'bg-red-500'
+                                    : status.authenticated
+                                      ? (providerVerifiedByName[providerId] ? 'bg-emerald-500' : 'bg-amber-500')
+                                      : 'bg-amber-500'
+                              }`} title={
+                                !providerEnabled ? 'Disabled'
+                                  : !status ? 'Checking...'
+                                    : !status.installed ? (status.detail ?? 'CLI not found')
+                                      : status.authenticated
+                                        ? (providerVerifiedByName[providerId] ? (status.detail ?? 'Connected') : 'Authenticated. Waiting for first response to verify.')
+                                        : (status.detail ?? 'Login required')
+                              } />
                             {providerId === 'openrouter' ? 'OpenRouter (Free Models)' : config.displayName}
                           </div>
                           <div className="flex items-center gap-1.5">
@@ -433,19 +474,19 @@ export function AppModals(props: AppModalsProps) {
                           </button>
                           {config.type === 'cli' &&
                             ((config as ProviderConfigCli).upgradeCommand || (config as ProviderConfigCli).upgradePackage) && (
-                            <button
-                              className={UI_BUTTON_SECONDARY_CLASS}
-                              disabled={loading}
-                              onClick={() => void startProviderUpgradeFlow(config)}
-                              title={
-                                (config as ProviderConfigCli).upgradePackage
-                                  ? `Clean reinstall: npm uninstall -g ${(config as ProviderConfigCli).upgradePackage}; npm install -g ${(config as ProviderConfigCli).upgradePackage}@latest`
-                                  : (config as ProviderConfigCli).upgradeCommand
-                              }
-                            >
-                              {status?.installed ? 'Upgrade CLI' : 'Install CLI'}
-                            </button>
-                          )}
+                              <button
+                                className={UI_BUTTON_SECONDARY_CLASS}
+                                disabled={loading}
+                                onClick={() => void startProviderUpgradeFlow(config)}
+                                title={
+                                  (config as ProviderConfigCli).upgradePackage
+                                    ? `Clean reinstall: npm uninstall -g ${(config as ProviderConfigCli).upgradePackage}; npm install -g ${(config as ProviderConfigCli).upgradePackage}@latest`
+                                    : (config as ProviderConfigCli).upgradeCommand
+                                }
+                              >
+                                {status?.installed ? 'Upgrade CLI' : 'Install CLI'}
+                              </button>
+                            )}
                           {PROVIDER_SUBSCRIPTION_URLS[providerId] && (
                             <button
                               className={UI_BUTTON_SECONDARY_CLASS}
@@ -538,9 +579,8 @@ export function AppModals(props: AppModalsProps) {
                 }}
                 title="Close"
               >
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-                  <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
               </button>
             </div>
@@ -647,9 +687,8 @@ export function AppModals(props: AppModalsProps) {
                   onClick={closeWorkspacePicker}
                   title="Close"
                 >
-                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-                    <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                    <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                   </svg>
                 </button>
               )}
@@ -700,11 +739,10 @@ export function AppModals(props: AppModalsProps) {
                       <button
                         key={p}
                         type="button"
-                        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-sm font-mono border ${
-                          isCurrent
+                        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-sm font-mono border ${isCurrent
                             ? 'border-blue-300 bg-blue-50 text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-100'
                             : 'border-neutral-300 bg-neutral-50 text-neutral-900 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900/70 dark:text-neutral-100 dark:hover:bg-neutral-800/80'
-                        } ${workspacePickerOpening ? 'disabled:opacity-70 disabled:cursor-not-allowed' : ''}`}
+                          } ${workspacePickerOpening ? 'disabled:opacity-70 disabled:cursor-not-allowed' : ''}`}
                         onClick={() => {
                           requestWorkspaceSwitch(p, 'picker')
                         }}
@@ -725,25 +763,16 @@ export function AppModals(props: AppModalsProps) {
                   if (workspacePickerOpening) return
                   const selected = await api.openFolderDialog?.()
                   if (!selected) return
+                  const nextSettings = buildDefaultWorkspaceSettings(selected)
                   setWorkspaceList((prev) => (prev.includes(selected) ? prev : [selected, ...prev]))
                   setWorkspaceSettingsByPath((prev: any) => ({
                     ...prev,
-                    [selected]: {
-                      path: selected,
-                      defaultModel: DEFAULT_MODEL,
-                      permissionMode: 'verify-first',
-                      sandbox: 'workspace-write',
-                      allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
-                      allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
-                      allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
-                      deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
-                      deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
-                    },
+                    [selected]: nextSettings,
                   }))
                   requestWorkspaceSwitch(selected, 'picker')
                   try {
-                    await api.writeWorkspaceConfig?.(selected)
-                  } catch {}
+                    await api.writeWorkspaceConfig?.(selected, nextSettings)
+                  } catch { }
                 }}
                 disabled={Boolean(workspacePickerOpening)}
               >
@@ -763,12 +792,11 @@ export function AppModals(props: AppModalsProps) {
               </div>
               <button
                 className={UI_CLOSE_ICON_BUTTON_CLASS}
-                onClick={() => setShowWorkspaceModal(false)}
+                onClick={closeWorkspaceSettingsModal}
                 title="Close"
               >
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-                  <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
               </button>
             </div>
@@ -787,7 +815,7 @@ export function AppModals(props: AppModalsProps) {
                 />
                 <button
                   type="button"
-                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md bg-white text-neutral-700 hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                   onClick={browseForWorkspaceIntoForm}
                   title="Browse for workspace folder"
                   aria-label="Browse for workspace folder"
@@ -816,6 +844,49 @@ export function AppModals(props: AppModalsProps) {
                     )
                   })}
                 </select>
+              </div>
+              <div className="grid grid-cols-[140px_1fr] items-start gap-2">
+                <span className="text-neutral-600 dark:text-neutral-300 pt-1">Workspace context</span>
+                <div className="space-y-2">
+                  <textarea
+                    className={`w-full max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} text-xs`}
+                    value={workspaceForm.workspaceContext ?? ''}
+                    onChange={(e) =>
+                      workspaceSettings.updateWorkspaceModalForm((prev: any) => ({
+                        ...prev,
+                        workspaceContext: e.target.value,
+                      }))
+                    }
+                    placeholder="Describe this workspace and its purpose."
+                  />
+                  <label className="inline-flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
+                    <input
+                      type="checkbox"
+                      checked={workspaceForm.showWorkspaceContextInPrompt === true}
+                      onChange={(e) =>
+                        workspaceSettings.updateWorkspaceModalForm((prev: any) => ({
+                          ...prev,
+                          showWorkspaceContextInPrompt: e.target.checked,
+                        }))
+                      }
+                    />
+                    Show workspace context in prompt.
+                  </label>
+                </div>
+              </div>
+              <div className="grid grid-cols-[140px_1fr] items-start gap-2">
+                <span className="text-neutral-600 dark:text-neutral-300 pt-1">System prompt</span>
+                <textarea
+                  className={`w-full max-w-full min-h-[96px] resize-y ${UI_INPUT_CLASS} text-xs`}
+                  value={workspaceForm.systemPrompt ?? ''}
+                  onChange={(e) =>
+                    workspaceSettings.updateWorkspaceModalForm((prev: any) => ({
+                      ...prev,
+                      systemPrompt: e.target.value,
+                    }))
+                  }
+                  placeholder="Additional system prompt text sent with workspace context."
+                />
               </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <span className="text-neutral-600 dark:text-neutral-300">Sandbox</span>
@@ -866,7 +937,7 @@ export function AppModals(props: AppModalsProps) {
                   <span className="text-neutral-600 dark:text-neutral-300 pt-1">Allowed prefixes</span>
                   <div className="space-y-1">
                     <textarea
-                      className={`w-full min-h-[96px] ${UI_INPUT_CLASS} font-mono text-xs`}
+                      className={`w-full max-w-full min-h-[96px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
                       value={workspaceFormTextDraft.allowedCommandPrefixes}
                       onChange={(e) => workspaceSettings.updateWorkspaceModalTextDraft('allowedCommandPrefixes', e.target.value)}
                       placeholder={'npm run build:dist:raw\nnpx vite build'}
@@ -889,9 +960,16 @@ export function AppModals(props: AppModalsProps) {
                 {workspaceModalMode === 'edit' && workspaceList.includes(workspaceForm.path) && (
                   <button
                     className="px-3 py-1.5 text-sm rounded border border-red-300 bg-white text-red-600 hover:bg-red-50 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400 dark:hover:bg-red-900/30"
-                    onClick={() => {
+                    onClick={async () => {
                       if (confirm(`Delete workspace "${workspaceForm.path}"?`)) {
-                        void workspaceSettings.deleteWorkspace(workspaceForm.path)
+                        const deletingActiveWorkspace =
+                          normalizeWorkspacePathForCompare(workspaceForm.path) ===
+                          normalizeWorkspacePathForCompare(workspaceRoot)
+                        await workspaceSettings.deleteWorkspace(workspaceForm.path)
+                        if (returnToManageWorkspacesOnClose && !deletingActiveWorkspace) {
+                          setShowManageWorkspacesModal(true)
+                        }
+                        setReturnToManageWorkspacesOnClose(false)
                       }
                     }}
                   >
@@ -903,11 +981,152 @@ export function AppModals(props: AppModalsProps) {
                 <span className="text-[11px] text-neutral-500 dark:text-neutral-400">Changes save automatically.</span>
                 <button
                   className="px-3 py-1.5 text-sm rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                  onClick={() => setShowWorkspaceModal(false)}
+                  onClick={closeWorkspaceSettingsModal}
                 >
                   Close
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showManageWorkspacesModal && (
+        <div className={MODAL_BACKDROP_CLASS}>
+          <div className={`w-full max-w-4xl ${MODAL_CARD_CLASS}`}>
+            <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+              <div className="font-medium">Manage Workspaces</div>
+              <button
+                className={UI_CLOSE_ICON_BUTTON_CLASS}
+                onClick={() => setShowManageWorkspacesModal(false)}
+                title="Close"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4 space-y-3 text-sm">
+              <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                Barnaby keeps a workspace list and stores each config at <span className="font-mono">{WORKSPACE_CONFIG_FILENAME}</span>.
+              </div>
+              {workspaceManagerRows.length === 0 ? (
+                <div className="rounded border border-dashed border-neutral-300 dark:border-neutral-700 px-3 py-4 text-center text-neutral-500 dark:text-neutral-400">
+                  No workspaces yet.
+                </div>
+              ) : (
+                <div className="max-h-[52vh] overflow-auto space-y-2">
+                  {workspaceManagerRows.map(({ workspacePath, configPath, settings, isCurrent }) => (
+                    <div
+                      key={workspacePath}
+                      className={`rounded border px-3 py-2 ${
+                        isCurrent
+                          ? 'border-blue-300 bg-blue-50 dark:border-blue-900/60 dark:bg-blue-950/40'
+                          : 'border-neutral-300 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900/70'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-mono text-xs text-neutral-900 dark:text-neutral-100 break-all">{workspacePath}</div>
+                          <div className="mt-1 font-mono text-[11px] text-neutral-500 dark:text-neutral-400 break-all">
+                            {configPath}
+                          </div>
+                          {settings.workspaceContext ? (
+                            <div className="mt-1 text-[11px] text-neutral-600 dark:text-neutral-300 line-clamp-2">
+                              {settings.workspaceContext}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            className="h-8 w-8 inline-flex items-center justify-center rounded bg-white text-neutral-700 hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                            title="Open in a new Barnaby window"
+                            aria-label="Open in a new Barnaby window"
+                            onClick={async () => {
+                              const result = await api.openWorkspaceInNewWindow?.(workspacePath)
+                              if (result?.ok) {
+                                setShowManageWorkspacesModal(false)
+                                return
+                              }
+                              if (result && !result.ok && result.error) {
+                                alert(`Could not open a new Barnaby window:\n${result.error}`)
+                              }
+                              requestWorkspaceSwitch(workspacePath, 'menu')
+                              setShowManageWorkspacesModal(false)
+                            }}
+                          >
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                              <path d="M9.5 2.5H13.5V6.5" stroke="currentColor" strokeWidth="1.1" />
+                              <path d="M8 8L13.5 2.5" stroke="currentColor" strokeWidth="1.1" />
+                              <rect x="2.5" y="5.5" width="8" height="8" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            className="h-8 w-8 inline-flex items-center justify-center rounded bg-white text-neutral-700 hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                            title="Edit workspace settings"
+                            aria-label="Edit workspace settings"
+                            onClick={() => {
+                              setReturnToManageWorkspacesOnClose(true)
+                              workspaceSettings.openWorkspaceSettingsForPath?.(workspacePath)
+                              setShowManageWorkspacesModal(false)
+                            }}
+                          >
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                              <path d="M3 11.5V13H4.5L11.2 6.3L9.7 4.8L3 11.5Z" stroke="currentColor" strokeWidth="1.1" />
+                              <path d="M8.9 5.6L10.4 7.1" stroke="currentColor" strokeWidth="1.1" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            className="h-8 w-8 inline-flex items-center justify-center rounded bg-white text-red-600 hover:bg-red-50 dark:bg-red-950/30 dark:text-red-400 dark:hover:bg-red-900/30"
+                            title="Delete workspace"
+                            aria-label="Delete workspace"
+                            onClick={() => {
+                              if (!confirm(`Delete workspace "${workspacePath}"?`)) return
+                              void workspaceSettings.deleteWorkspace(workspacePath)
+                            }}
+                          >
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                              <path d="M3.5 4.5H12.5" stroke="currentColor" strokeWidth="1.1" />
+                              <path d="M5.2 4.5V3.5H10.8V4.5" stroke="currentColor" strokeWidth="1.1" />
+                              <path d="M5 4.5V12.2C5 12.6 5.4 13 5.8 13H10.2C10.6 13 11 12.6 11 12.2V4.5" stroke="currentColor" strokeWidth="1.1" />
+                              <path d="M6.7 6.2V11.2M9.3 6.2V11.2" stroke="currentColor" strokeWidth="1.1" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                className={UI_BUTTON_SECONDARY_CLASS}
+                onClick={async () => {
+                  const selected = await api.openFolderDialog?.()
+                  if (!selected) return
+                  const nextSettings = buildDefaultWorkspaceSettings(selected)
+                  setWorkspaceList((prev) => (prev.includes(selected) ? prev : [selected, ...prev]))
+                  setWorkspaceSettingsByPath((prev: any) => ({ ...prev, [selected]: nextSettings }))
+                  try {
+                    await api.writeWorkspaceConfig?.(selected, nextSettings)
+                  } catch {
+                    // best effort only
+                  }
+                }}
+              >
+                Add Workspace...
+              </button>
+              <button
+                className={UI_BUTTON_PRIMARY_CLASS}
+                onClick={() => setShowManageWorkspacesModal(false)}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

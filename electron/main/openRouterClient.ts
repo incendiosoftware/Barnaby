@@ -22,6 +22,9 @@ export type OpenRouterConnectOptions = {
   permissionMode?: 'verify-first' | 'proceed-always'
   sandbox?: 'read-only' | 'workspace-write'
   interactionMode?: string
+  workspaceContext?: string
+  showWorkspaceContextInPrompt?: boolean
+  systemPrompt?: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
   mcpServerManager?: McpServerManager
 }
@@ -53,6 +56,9 @@ export class OpenRouterClient extends EventEmitter {
   private permissionMode: 'verify-first' | 'proceed-always' = 'verify-first'
   private sandbox: 'read-only' | 'workspace-write' = 'workspace-write'
   private interactionMode = 'agent'
+  private workspaceContext = ''
+  private showWorkspaceContextInPrompt = false
+  private systemPrompt = ''
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
   private activeController: AbortController | null = null
   private toolRunner!: AgentToolRunner
@@ -69,6 +75,9 @@ export class OpenRouterClient extends EventEmitter {
     this.permissionMode = options.permissionMode ?? 'verify-first'
     this.sandbox = options.sandbox ?? 'workspace-write'
     this.interactionMode = options.interactionMode ?? 'agent'
+    this.workspaceContext = typeof options.workspaceContext === 'string' ? options.workspaceContext.trim() : ''
+    this.showWorkspaceContextInPrompt = options.showWorkspaceContextInPrompt === true
+    this.systemPrompt = typeof options.systemPrompt === 'string' ? options.systemPrompt.trim() : ''
     this.history =
       (options.initialHistory?.length ?? 0) > 0
         ? options.initialHistory!.slice(-INITIAL_HISTORY_MAX_MESSAGES)
@@ -101,6 +110,9 @@ export class OpenRouterClient extends EventEmitter {
       sandbox: this.sandbox,
       interactionMode: mode,
       gitStatus: options?.gitStatus,
+      workspaceContext: this.workspaceContext,
+      showWorkspaceContextInPrompt: this.showWorkspaceContextInPrompt,
+      additionalSystemPrompt: this.systemPrompt,
     })
     const recent = this.history.slice(-12)
     const messages: OpenRouterMessage[] = [

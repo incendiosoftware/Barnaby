@@ -45,6 +45,9 @@ export type CodexConnectOptions = {
   allowedAutoWritePrefixes?: string[]
   deniedAutoReadPrefixes?: string[]
   deniedAutoWritePrefixes?: string[]
+  workspaceContext?: string
+  showWorkspaceContextInPrompt?: boolean
+  systemPrompt?: string
 }
 
 export class CodexAppServerClient extends EventEmitter {
@@ -62,6 +65,9 @@ export class CodexAppServerClient extends EventEmitter {
   private allowedAutoWritePrefixes: string[] = []
   private deniedAutoReadPrefixes: string[] = []
   private deniedAutoWritePrefixes: string[] = []
+  private workspaceContext = ''
+  private showWorkspaceContextInPrompt = false
+  private systemPrompt = ''
   private lastStderr = ''
 
   private static TURN_INACTIVITY_TIMEOUT_MS = 120_000
@@ -112,6 +118,9 @@ export class CodexAppServerClient extends EventEmitter {
     this.allowedAutoWritePrefixes = this.normalizeAllowedCommandPrefixes(options.allowedAutoWritePrefixes)
     this.deniedAutoReadPrefixes = this.normalizeAllowedCommandPrefixes(options.deniedAutoReadPrefixes)
     this.deniedAutoWritePrefixes = this.normalizeAllowedCommandPrefixes(options.deniedAutoWritePrefixes)
+    this.workspaceContext = typeof options.workspaceContext === 'string' ? options.workspaceContext.trim() : ''
+    this.showWorkspaceContextInPrompt = options.showWorkspaceContextInPrompt === true
+    this.systemPrompt = typeof options.systemPrompt === 'string' ? options.systemPrompt.trim() : ''
 
     if (this.proc) await this.close()
 
@@ -189,18 +198,19 @@ export class CodexAppServerClient extends EventEmitter {
     if (!this.threadId) throw new Error('Not connected (no threadId).')
     const trimmed = text.trim()
     if (!trimmed) return
+    const inputText = this.withWorkspaceContext(trimmed)
 
     // Start a new turn and stream deltas via item notifications.
     const requestPayload = {
       threadId: this.threadId,
-      input: [{ type: 'text', text: trimmed }],
+      input: [{ type: 'text', text: inputText }],
     }
     logModelPayloadAudit({
       provider: 'codex-app-server',
       endpoint: 'turn/start',
       serializedPayload: JSON.stringify(requestPayload),
       meta: {
-        textChars: trimmed.length,
+        textChars: inputText.length,
         imageCount: 0,
       },
     })
@@ -215,9 +225,10 @@ export class CodexAppServerClient extends EventEmitter {
     const trimmed = text.trim()
     const imagePaths = (localImagePaths ?? []).filter((p) => typeof p === 'string' && p.trim())
     if (!trimmed && imagePaths.length === 0) return
+    const inputText = trimmed ? this.withWorkspaceContext(trimmed) : ''
 
     const input: Array<{ type: 'text'; text: string } | { type: 'localImage'; path: string }> = []
-    if (trimmed) input.push({ type: 'text', text: trimmed })
+    if (inputText) input.push({ type: 'text', text: inputText })
     for (const path of imagePaths) input.push({ type: 'localImage', path })
 
     const requestPayload = {
@@ -229,7 +240,7 @@ export class CodexAppServerClient extends EventEmitter {
       endpoint: 'turn/start',
       serializedPayload: JSON.stringify(requestPayload),
       meta: {
-        textChars: trimmed.length,
+        textChars: inputText.length,
         imageCount: imagePaths.length,
       },
     })
@@ -639,6 +650,16 @@ export class CodexAppServerClient extends EventEmitter {
     }
     
     return false
+  }
+
+  private withWorkspaceContext(text: string): string {
+    const context = this.showWorkspaceContextInPrompt ? this.workspaceContext : ''
+    const prompt = this.systemPrompt
+    if (!context && !prompt) return text
+    const parts: string[] = []
+    if (context) parts.push(`Workspace context:\n${context}`)
+    if (prompt) parts.push(`Additional system prompt:\n${prompt}`)
+    return `[Workspace metadata]\n${parts.join('\n\n')}\n\n---\n\n${text}`
   }
 
   private normalizeAllowedCommandPrefixes(raw: unknown): string[] {

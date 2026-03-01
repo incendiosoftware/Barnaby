@@ -28,6 +28,9 @@ function normalizeWorkspaceSettingsForm(form: WorkspaceSettings): WorkspaceSetti
     defaultModel: form.defaultModel.trim() || DEFAULT_MODEL,
     permissionMode,
     sandbox,
+    workspaceContext: typeof form.workspaceContext === 'string' ? form.workspaceContext.trim() : '',
+    showWorkspaceContextInPrompt: form.showWorkspaceContextInPrompt === true,
+    systemPrompt: typeof form.systemPrompt === 'string' ? form.systemPrompt.trim() : '',
     allowedCommandPrefixes: normalizeAllowedCommandPrefixes(form.allowedCommandPrefixes),
     allowedAutoReadPrefixes: normalizeAllowedCommandPrefixes(form.allowedAutoReadPrefixes),
     allowedAutoWritePrefixes: normalizeAllowedCommandPrefixes(form.allowedAutoWritePrefixes),
@@ -44,6 +47,9 @@ function workspaceFormsEqual(a: WorkspaceSettings, b: WorkspaceSettings): boolea
     left.defaultModel === right.defaultModel &&
     left.permissionMode === right.permissionMode &&
     left.sandbox === right.sandbox &&
+    left.workspaceContext === right.workspaceContext &&
+    left.showWorkspaceContextInPrompt === right.showWorkspaceContextInPrompt &&
+    left.systemPrompt === right.systemPrompt &&
     left.allowedCommandPrefixes.join('\n') === right.allowedCommandPrefixes.join('\n') &&
     left.allowedAutoReadPrefixes.join('\n') === right.allowedAutoReadPrefixes.join('\n') &&
     left.allowedAutoWritePrefixes.join('\n') === right.allowedAutoWritePrefixes.join('\n') &&
@@ -53,7 +59,7 @@ function workspaceFormsEqual(a: WorkspaceSettings, b: WorkspaceSettings): boolea
 }
 
 export interface WorkspaceSettingsApi {
-  writeWorkspaceConfig?: (path: string) => Promise<unknown>
+  writeWorkspaceConfig?: (path: string, settings?: WorkspaceSettings) => Promise<unknown>
   releaseWorkspace?: (path: string) => Promise<unknown>
 }
 
@@ -78,9 +84,10 @@ export interface WorkspaceSettingsControllerContext {
 }
 
 export interface WorkspaceSettingsController {
-  buildWorkspaceForm: (mode: 'new' | 'edit') => WorkspaceSettings
+  buildWorkspaceForm: (mode: 'new' | 'edit', targetPath?: string) => WorkspaceSettings
   normalizeWorkspaceSettingsForm: (form: WorkspaceSettings) => WorkspaceSettings
   openWorkspaceSettings: (mode: 'new' | 'edit') => void
+  openWorkspaceSettingsForPath: (targetPath: string) => void
   openWorkspaceSettingsTab: () => void
   persistWorkspaceSettings: (
     next: WorkspaceSettings,
@@ -119,14 +126,19 @@ export function createWorkspaceSettingsController(
     applyWorkspaceSnapshot,
   } = ctx
 
-  function buildWorkspaceForm(mode: 'new' | 'edit'): WorkspaceSettings {
+  function buildWorkspaceForm(mode: 'new' | 'edit', targetPath?: string): WorkspaceSettings {
+    const resolvedPath = typeof targetPath === 'string' && targetPath.trim() ? targetPath.trim() : workspaceRoot
     const current =
+      workspaceSettingsByPath[resolvedPath] ??
       workspaceSettingsByPath[workspaceRoot] ??
       ({
-        path: workspaceRoot,
+        path: resolvedPath || workspaceRoot,
         defaultModel: DEFAULT_MODEL,
         permissionMode: 'verify-first',
         sandbox: 'workspace-write',
+        workspaceContext: '',
+        showWorkspaceContextInPrompt: false,
+        systemPrompt: '',
         allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
         allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
         allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
@@ -142,10 +154,13 @@ export function createWorkspaceSettingsController(
 
     if (mode === 'new') {
       return {
-        path: workspaceRoot,
+        path: resolvedPath || workspaceRoot,
         defaultModel: current.defaultModel ?? DEFAULT_MODEL,
         permissionMode: current.permissionMode ?? 'verify-first',
         sandbox: current.sandbox ?? 'workspace-write',
+        workspaceContext: current.workspaceContext ?? '',
+        showWorkspaceContextInPrompt: current.showWorkspaceContextInPrompt === true,
+        systemPrompt: current.systemPrompt ?? '',
         allowedCommandPrefixes: cmdPrefixes,
         allowedAutoReadPrefixes: readPrefixes,
         allowedAutoWritePrefixes: writePrefixes,
@@ -155,10 +170,13 @@ export function createWorkspaceSettingsController(
     }
 
     return {
-      path: current.path || workspaceRoot,
+      path: current.path || resolvedPath || workspaceRoot,
       defaultModel: current.defaultModel ?? DEFAULT_MODEL,
       permissionMode: current.permissionMode ?? 'verify-first',
       sandbox: current.sandbox ?? 'workspace-write',
+      workspaceContext: current.workspaceContext ?? '',
+      showWorkspaceContextInPrompt: current.showWorkspaceContextInPrompt === true,
+      systemPrompt: current.systemPrompt ?? '',
       allowedCommandPrefixes: cmdPrefixes,
       allowedAutoReadPrefixes: readPrefixes,
       allowedAutoWritePrefixes: writePrefixes,
@@ -189,7 +207,7 @@ export function createWorkspaceSettingsController(
     }
 
     try {
-      await api.writeWorkspaceConfig?.(next.path)
+      await api.writeWorkspaceConfig?.(next.path, next)
     } catch {
       // best-effort only
     }
@@ -251,6 +269,14 @@ export function createWorkspaceSettingsController(
     setShowWorkspaceModal(true)
   }
 
+  function openWorkspaceSettingsForPath(targetPath: string) {
+    setWorkspaceModalMode('edit')
+    const nextForm = buildWorkspaceForm('edit', targetPath)
+    setWorkspaceForm(nextForm)
+    setWorkspaceFormTextDraft(workspaceSettingsToTextDraft(nextForm))
+    setShowWorkspaceModal(true)
+  }
+
   function openWorkspaceSettingsTab() {
     const nextForm = buildWorkspaceForm('edit')
     setWorkspaceForm(nextForm)
@@ -298,6 +324,7 @@ export function createWorkspaceSettingsController(
     buildWorkspaceForm,
     normalizeWorkspaceSettingsForm,
     openWorkspaceSettings,
+    openWorkspaceSettingsForPath,
     openWorkspaceSettingsTab,
     persistWorkspaceSettings,
     updateDockedWorkspaceForm,

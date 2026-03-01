@@ -8,6 +8,8 @@ function makeWorkspaceSettings(path: string, permissionMode: 'verify-first' | 'p
     defaultModel: 'gpt-5.3-codex',
     permissionMode,
     sandbox: 'workspace-write',
+    workspaceContext: '',
+    systemPrompt: '',
     allowedCommandPrefixes: [],
     allowedAutoReadPrefixes: [],
     allowedAutoWritePrefixes: [],

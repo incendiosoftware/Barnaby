@@ -24,6 +24,9 @@ export type CodexConnectOptions = {
   allowedAutoWritePrefixes?: string[]
   deniedAutoReadPrefixes?: string[]
   deniedAutoWritePrefixes?: string[]
+  workspaceContext?: string
+  showWorkspaceContextInPrompt?: boolean
+  systemPrompt?: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
@@ -272,8 +275,14 @@ const api = {
     ipcRenderer.on('agentorchestrator:terminalExit', listener)
     return () => ipcRenderer.off('agentorchestrator:terminalExit', listener)
   },
-  writeWorkspaceConfig(folderPath: string) {
-    return ipcRenderer.invoke('agentorchestrator:writeWorkspaceConfig', folderPath) as Promise<boolean>
+  writeWorkspaceConfig(folderPath: string, settings?: unknown) {
+    return ipcRenderer.invoke('agentorchestrator:writeWorkspaceConfig', folderPath, settings) as Promise<boolean>
+  },
+  openWorkspaceInNewWindow(workspaceRoot: string) {
+    return ipcRenderer.invoke('agentorchestrator:openWorkspaceInNewWindow', workspaceRoot) as Promise<{
+      ok: boolean
+      error?: string
+    }>
   },
   claimWorkspace(workspaceRoot: string) {
     return ipcRenderer.invoke('agentorchestrator:claimWorkspace', workspaceRoot) as Promise<WorkspaceLockAcquireResult>

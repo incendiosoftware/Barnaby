@@ -1,5 +1,5 @@
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { buildTimelineForPanel } from './chat/timelineParser'
 import type { TimelineUnit } from './chat/timelineTypes'
@@ -325,6 +325,7 @@ export default function App() {
     getInitialWorkspaceSettings(getInitialWorkspaceList()),
   )
   const [showWorkspaceModal, setShowWorkspaceModal] = useState(false)
+  const [showManageWorkspacesModal, setShowManageWorkspacesModal] = useState(false)
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false)
   const [workspacePickerPrompt, setWorkspacePickerPrompt] = useState<string | null>(null)
   const [workspacePickerError, setWorkspacePickerError] = useState<string | null>(null)
@@ -340,6 +341,9 @@ export default function App() {
     defaultModel: DEFAULT_MODEL,
     permissionMode: 'verify-first',
     sandbox: 'workspace-write',
+    workspaceContext: '',
+    showWorkspaceContextInPrompt: false,
+    systemPrompt: '',
     allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
     allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
     allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
@@ -352,6 +356,9 @@ export default function App() {
       defaultModel: DEFAULT_MODEL,
       permissionMode: 'verify-first',
       sandbox: 'workspace-write',
+      workspaceContext: '',
+      showWorkspaceContextInPrompt: false,
+      systemPrompt: '',
       allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
       allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
       allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
@@ -551,6 +558,7 @@ export default function App() {
   const activeWorkspaceLockRef = useRef('')
   const appStateHydratedRef = useRef(false)
   const appStateSaveTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
+  const flushAppStateSaveRef = useRef<(() => void) | null>(null)
   const workspaceSnapshotsRef = useRef<Record<string, WorkspaceUiSnapshot>>({})
   const startupReadyNotifiedRef = useRef(false)
   const historyDropdownRef = useRef<HTMLDivElement>(null)
@@ -1183,10 +1191,7 @@ export default function App() {
   useEffect(() => {
     if (!appStateHydratedRef.current) return
     if (!api.saveAppState) return
-    if (appStateSaveTimerRef.current !== null) {
-      globalThis.clearTimeout(appStateSaveTimerRef.current)
-    }
-    appStateSaveTimerRef.current = globalThis.setTimeout(() => {
+    function runAppStateSave() {
       const snapshotsForPersist: Record<string, WorkspaceUiSnapshot> = { ...workspaceSnapshotsRef.current }
       const currentWorkspace = workspaceRootRef.current?.trim()
       if (currentWorkspace) {
@@ -1296,11 +1301,22 @@ export default function App() {
         applicationSettings,
         themeOverrides,
       }
-      void api.saveAppState(payload).catch(() => { })
-      appStateSaveTimerRef.current = null
-    }, APP_STATE_AUTOSAVE_MS)
-
+      void api.saveAppState(payload).catch(() => {})
+    }
+    function flushAppStateSave() {
+      if (appStateSaveTimerRef.current !== null) {
+        globalThis.clearTimeout(appStateSaveTimerRef.current)
+        appStateSaveTimerRef.current = null
+      }
+      runAppStateSave()
+    }
+    flushAppStateSaveRef.current = flushAppStateSave
+    if (appStateSaveTimerRef.current !== null) {
+      globalThis.clearTimeout(appStateSaveTimerRef.current)
+    }
+    appStateSaveTimerRef.current = globalThis.setTimeout(runAppStateSave, APP_STATE_AUTOSAVE_MS)
     return () => {
+      flushAppStateSaveRef.current = null
       if (appStateSaveTimerRef.current !== null) {
         globalThis.clearTimeout(appStateSaveTimerRef.current)
         appStateSaveTimerRef.current = null
@@ -1517,6 +1533,30 @@ export default function App() {
     }
   }
 
+  const requestImmediateAppStateSave = useCallback(() => {
+    globalThis.setTimeout(() => flushAppStateSaveRef.current?.(), 0)
+  }, [])
+
+  function upsertPanelToHistory(panel: AgentPanelState) {
+    const sanitizedMessages = stripSyntheticAutoContinueMessages(panel.messages)
+    const hasConversation = sanitizedMessages.some((m) => m.role === 'user' || m.role === 'assistant')
+    if (!hasConversation) return
+    const entryId = panel.historyId || newId()
+    const title = getConversationPrecis(panel) || panel.title || 'Untitled chat'
+    const entry: ChatHistoryEntry = {
+      id: entryId,
+      title,
+      savedAt: Date.now(),
+      workspaceRoot: panel.cwd || workspaceRoot,
+      model: panel.model || DEFAULT_MODEL,
+      permissionMode: panel.permissionMode,
+      sandbox: panel.sandbox,
+      fontScale: panel.fontScale,
+      messages: cloneChatMessages(sanitizedMessages),
+    }
+    setChatHistory((prev) => [entry, ...prev.filter((item) => item.id !== entryId)].slice(0, MAX_CHAT_HISTORY_ENTRIES))
+  }
+
   const workspaceLifecycle = useMemo(
     () =>
       createWorkspaceLifecycleController({
@@ -1576,6 +1616,8 @@ export default function App() {
         setActivePanelId,
         setSelectedHistoryId,
         setPendingWorkspaceSwitch,
+        upsertPanelToHistory,
+        requestImmediateAppStateSave,
       }),
     [
       api,
@@ -1598,6 +1640,8 @@ export default function App() {
       resolvedProviderConfigs,
       pendingWorkspaceSwitch,
       refreshProviderAuthStatusForWorkspace,
+      upsertPanelToHistory,
+      requestImmediateAppStateSave,
     ],
   )
   const {
@@ -1732,26 +1776,6 @@ export default function App() {
     },
     [api],
   )
-
-  function upsertPanelToHistory(panel: AgentPanelState) {
-    const sanitizedMessages = stripSyntheticAutoContinueMessages(panel.messages)
-    const hasConversation = sanitizedMessages.some((m) => m.role === 'user' || m.role === 'assistant')
-    if (!hasConversation) return
-    const entryId = panel.historyId || newId()
-    const title = getConversationPrecis(panel) || panel.title || 'Untitled chat'
-    const entry: ChatHistoryEntry = {
-      id: entryId,
-      title,
-      savedAt: Date.now(),
-      workspaceRoot: panel.cwd || workspaceRoot,
-      model: panel.model || DEFAULT_MODEL,
-      permissionMode: panel.permissionMode,
-      sandbox: panel.sandbox,
-      fontScale: panel.fontScale,
-      messages: cloneChatMessages(sanitizedMessages),
-    }
-    setChatHistory((prev) => [entry, ...prev.filter((item) => item.id !== entryId)].slice(0, MAX_CHAT_HISTORY_ENTRIES))
-  }
 
   function openChatFromHistory(historyId: string) {
     const entry = workspaceScopedHistory.find((x) => x.id === historyId)
@@ -2632,14 +2656,54 @@ export default function App() {
     openFileFromMenu,
     requestWorkspaceSwitch,
     closeWorkspacePicker,
+    openManageWorkspaces: () => setShowManageWorkspacesModal(true),
     closeFocusedFromMenu,
     findInPageFromMenu,
     findInFilesFromMenu,
     openAppSettingsInRightDock,
     focusedEditorIdRef,
     saveEditorPanel,
-    saveEditorPanelAs,
-    setLayoutMode,
+    setLayoutMode: (mode: string) => {
+      if (mode === 'reset') {
+        setWorkspaceDockSide('left')
+        setGitDockSide('right')
+        setSettingsDockSide('right')
+        setShowWorkspaceWindow(true)
+        setShowSettingsWindow(false)
+        setShowGitWindow(false)
+        setShowTerminalBar(false)
+        setDockTab('explorer')
+        setLayoutMode('vertical')
+      } else if (mode === 'flip') {
+        // Flip sidebars
+        setWorkspaceDockSide((prev: WorkspaceDockSide) => (prev === 'left' ? 'right' : 'left'))
+        setGitDockSide((prev: WorkspaceDockSide) => (prev === 'left' ? 'right' : 'left'))
+        setSettingsDockSide((prev: WorkspaceDockSide) => (prev === 'left' ? 'right' : 'left'))
+      } else if (mode === 'orchestrator') {
+        // Close all docking panels except orchestrator
+        setWorkspaceDockSide('left')
+        setShowWorkspaceWindow(true)
+        setDockTab('orchestrator')
+        setShowSettingsWindow(false)
+        setShowGitWindow(false)
+        setShowTerminalBar(false)
+        setDockLayout((prev) => {
+          const layout = normalizeDockLayout(prev)
+          const z = { ...layout.zones }
+          // Empty all left zones, then put only orchestrator in left-top
+          z['left'] = []
+          z['left-top'] = ['orchestrator']
+          z['left-bottom'] = []
+          return {
+            ...layout,
+            zones: z,
+            activeTab: { ...layout.activeTab, 'left-top': 'orchestrator' },
+          }
+        })
+      } else {
+        setLayoutMode(mode as LayoutMode)
+      }
+    },
     setShowWorkspaceWindow,
     setShowSettingsWindow,
     setShowCodeWindow: setShowSettingsWindow, // alias for runtime events
@@ -2731,6 +2795,15 @@ export default function App() {
             }
             onPermissionModeChange={(value) =>
               workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, permissionMode: value }))
+            }
+            onWorkspaceContextChange={(value) =>
+              workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, workspaceContext: value }))
+            }
+            onShowWorkspaceContextInPromptChange={(value) =>
+              workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, showWorkspaceContextInPrompt: value }))
+            }
+            onSystemPromptChange={(value) =>
+              workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, systemPrompt: value }))
             }
             onTextDraftChange={workspaceSettings.updateDockedWorkspaceTextDraft}
           />
@@ -3155,6 +3228,15 @@ export default function App() {
                 onPermissionModeChange={(value) =>
                   workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, permissionMode: value }))
                 }
+                onWorkspaceContextChange={(value) =>
+                  workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, workspaceContext: value }))
+                }
+                onShowWorkspaceContextInPromptChange={(value) =>
+                  workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, showWorkspaceContextInPrompt: value }))
+                }
+                onSystemPromptChange={(value) =>
+                  workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, systemPrompt: value }))
+                }
                 onTextDraftChange={workspaceSettings.updateDockedWorkspaceTextDraft}
               />
             )
@@ -3528,9 +3610,9 @@ export default function App() {
     : 0
   const gitContextFileCountLabel = `${gitContextSelectedCount} ${gitContextSelectedCount === 1 ? 'file' : 'files'}`
   const headerDockToggleButtonClass = (isActive: boolean) =>
-    `h-9 w-9 inline-flex items-center justify-center rounded-lg border shrink-0 ${isActive
-      ? 'shadow-inner bg-neutral-200 border-neutral-400 text-neutral-800 dark:bg-neutral-700 dark:border-neutral-600 dark:text-neutral-100'
-      : 'border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
+    `h-9 w-9 inline-flex items-center justify-center rounded-lg shrink-0 ${isActive
+      ? 'shadow-inner bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100'
+      : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'
     }`
   const workspaceDockButtonOnLeft = true
   const toolsDockButtonsOnLeft = false
@@ -3576,6 +3658,7 @@ export default function App() {
         UI_INPUT_CLASS={UI_INPUT_CLASS}
         UI_ICON_BUTTON_CLASS={UI_ICON_BUTTON_CLASS}
         openWorkspaceSettings={workspaceSettings.openWorkspaceSettings}
+        openManageWorkspaces={() => setShowManageWorkspacesModal(true)}
         historyDropdownRef={historyDropdownRef}
         historyDropdownOpen={historyDropdownOpen}
         setHistoryDropdownOpen={setHistoryDropdownOpen}
@@ -3957,9 +4040,8 @@ export default function App() {
                 onClick={() => setShowThemeModal(false)}
                 title="Close"
               >
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-                  <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
               </button>
             </div>
@@ -4156,6 +4238,8 @@ export default function App() {
         confirmWorkspaceSwitch={confirmWorkspaceSwitch}
         showWorkspaceModal={showWorkspaceModal}
         setShowWorkspaceModal={setShowWorkspaceModal}
+        showManageWorkspacesModal={showManageWorkspacesModal}
+        setShowManageWorkspacesModal={setShowManageWorkspacesModal}
         workspaceModalMode={workspaceModalMode}
         workspaceForm={workspaceForm}
         setWorkspaceForm={setWorkspaceForm}

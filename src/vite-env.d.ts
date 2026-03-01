@@ -81,6 +81,9 @@ interface Window {
         allowedAutoWritePrefixes?: string[]
         deniedAutoReadPrefixes?: string[]
         deniedAutoWritePrefixes?: string[]
+        workspaceContext?: string
+        showWorkspaceContextInPrompt?: boolean
+        systemPrompt?: string
         provider?: 'codex' | 'claude' | 'gemini' | 'openrouter'
         modelConfig?: Record<string, string>
         initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
@@ -178,7 +181,8 @@ interface Window {
     terminalDestroy(): Promise<void>
     onTerminalData(cb: (data: string) => void): () => void
     onTerminalExit(cb: () => void): () => void
-    writeWorkspaceConfig(folderPath: string): Promise<boolean>
+    writeWorkspaceConfig(folderPath: string, settings?: unknown): Promise<boolean>
+    openWorkspaceInNewWindow(workspaceRoot: string): Promise<{ ok: boolean; error?: string }>
     claimWorkspace(workspaceRoot: string): Promise<WorkspaceLockAcquireResult>
     releaseWorkspace(workspaceRoot: string): Promise<boolean>
     savePastedImage(dataUrl: string, mimeType?: string): Promise<{

@@ -45,6 +45,7 @@ export function useAppRuntimeEvents(ctx: any) {
     openFileFromMenu,
     requestWorkspaceSwitch,
     closeWorkspacePicker,
+    openManageWorkspaces,
     closeFocusedFromMenu,
     findInPageFromMenu,
     findInFilesFromMenu,
@@ -72,9 +73,9 @@ export function useAppRuntimeEvents(ctx: any) {
             w.id !== agentWindowId
               ? w
               : {
-                  ...w,
-                  status: 'Compacting context...',
-                },
+                ...w,
+                status: 'Compacting context...',
+              },
           ),
         )
         return
@@ -89,10 +90,10 @@ export function useAppRuntimeEvents(ctx: any) {
             w.id !== agentWindowId
               ? w
               : {
-                  ...w,
-                  status: 'Context compacted. Continuing...',
-                  messages: withContextCompactionNotice(w.messages, typeof evt.detail === 'string' ? evt.detail : undefined),
-                },
+                ...w,
+                status: 'Context compacted. Continuing...',
+                messages: withContextCompactionNotice(w.messages, typeof evt.detail === 'string' ? evt.detail : undefined),
+              },
           ),
         )
         return
@@ -129,32 +130,32 @@ export function useAppRuntimeEvents(ctx: any) {
             w.id !== agentWindowId
               ? w
               : {
-                  ...w,
-                  status: holdCompactingStatus
-                    ? 'Compacting context...'
-                    : isRetryableError
+                ...w,
+                status: holdCompactingStatus
+                  ? 'Compacting context...'
+                  : isRetryableError
                     ? 'Rate limited — retrying...'
                     : (evt.message ?? evt.status),
-                  connected: evt.status === 'ready',
-                  streaming: isRetryableError ? w.streaming : (evt.status === 'closed' || evt.status === 'error' ? false : w.streaming),
-                  ...(evt.status === 'closed' && !isRetryableError && w.streaming
+                connected: evt.status === 'ready',
+                streaming: isRetryableError ? w.streaming : (evt.status === 'closed' || evt.status === 'error' ? false : w.streaming),
+                ...(evt.status === 'closed' && !isRetryableError && w.streaming
+                  ? (() => {
+                    closedAfterStreaming = true
+                    return {}
+                  })()
+                  : {}),
+                messages:
+                  evt.status === 'error' && typeof evt.message === 'string' && !isRetryableError
                     ? (() => {
-                        closedAfterStreaming = true
-                        return {}
-                      })()
-                    : {}),
-                  messages:
-                    evt.status === 'error' && typeof evt.message === 'string' && !isRetryableError
-                      ? (() => {
-                          const withLimit = withLimitWarningMessage(w.messages, evt.message)
-                          const generic = `Provider error: ${evt.message.trim()}`
-                          const hasGeneric = withLimit.slice(-8).some((m: any) => m.role === 'system' && m.content === generic)
-                          return hasGeneric
-                            ? withLimit
-                            : [...withLimit, { id: newId(), role: 'system' as const, content: generic, format: 'text' as const, createdAt: Date.now() }]
-                        })()
-                      : w.messages,
-                },
+                      const withLimit = withLimitWarningMessage(w.messages, evt.message)
+                      const generic = `Provider error: ${evt.message.trim()}`
+                      const hasGeneric = withLimit.slice(-8).some((m: any) => m.role === 'system' && m.content === generic)
+                      return hasGeneric
+                        ? withLimit
+                        : [...withLimit, { id: newId(), role: 'system' as const, content: generic, format: 'text' as const, createdAt: Date.now() }]
+                    })()
+                    : w.messages,
+              },
           ),
         )
         if (evt.status === 'error' && !isRetryableError) {
@@ -278,13 +279,13 @@ export function useAppRuntimeEvents(ctx: any) {
           prev.map((w) =>
             w.id === agentWindowId
               ? {
-                  ...w,
-                  usage: evt.usage,
-                  messages:
-                    getModelProvider(w.model) === 'codex'
-                      ? withExhaustedRateLimitWarning(w.messages, evt.usage)
-                      : w.messages,
-                }
+                ...w,
+                usage: evt.usage,
+                messages:
+                  getModelProvider(w.model) === 'codex'
+                    ? withExhaustedRateLimitWarning(w.messages, evt.usage)
+                    : w.messages,
+              }
               : w,
           ),
         )
@@ -302,9 +303,9 @@ export function useAppRuntimeEvents(ctx: any) {
               w.id !== agentWindowId
                 ? w
                 : {
-                    ...w,
-                    status: 'Compacting context...',
-                  },
+                  ...w,
+                  status: 'Compacting context...',
+                },
             ),
           )
           return
@@ -317,10 +318,10 @@ export function useAppRuntimeEvents(ctx: any) {
               w.id !== agentWindowId
                 ? w
                 : {
-                    ...w,
-                    status: 'Context compacted. Continuing...',
-                    messages: withContextCompactionNotice(w.messages),
-                  },
+                  ...w,
+                  status: 'Context compacted. Continuing...',
+                  messages: withContextCompactionNotice(w.messages),
+                },
             ),
           )
           return
@@ -337,9 +338,9 @@ export function useAppRuntimeEvents(ctx: any) {
             w.id !== agentWindowId
               ? w
               : {
-                  ...w,
-                  messages: [...w.messages, { id: newId(), role: 'system', content: note, format: 'text', createdAt: Date.now() }],
-                },
+                ...w,
+                messages: [...w.messages, { id: newId(), role: 'system', content: note, format: 'text', createdAt: Date.now() }],
+              },
           ),
         )
       }
@@ -379,6 +380,10 @@ export function useAppRuntimeEvents(ctx: any) {
       if (action === 'closeWorkspace') {
         if (workspaceList.length <= 1) return
         void workspaceSettings.deleteWorkspace(workspaceRoot)
+        return
+      }
+      if (action === 'manageWorkspaces') {
+        openManageWorkspaces?.()
         return
       }
       if (action === 'findInPage') {
@@ -441,6 +446,9 @@ export function useAppRuntimeEvents(ctx: any) {
       if (action === 'layoutVertical') ctx.setLayoutMode('vertical')
       if (action === 'layoutHorizontal') ctx.setLayoutMode('horizontal')
       if (action === 'layoutGrid') ctx.setLayoutMode('grid')
+      if (action === 'layoutReset') ctx.setLayoutMode('reset')
+      if (action === 'layoutFlip') ctx.setLayoutMode('flip')
+      if (action === 'layoutOrchestrator') ctx.setLayoutMode('orchestrator')
       if (action === 'toggleWorkspaceWindow') setShowWorkspaceWindow((prev: boolean) => !prev)
       if (action === 'toggleCodeWindow') setShowCodeWindow((prev: boolean) => !prev)
       if (action === 'zoomIn') {

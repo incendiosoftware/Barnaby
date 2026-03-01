@@ -225,9 +225,8 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
           onClick={() => closeAppSettings()}
           title="Close"
         >
-          <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
-            <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-            <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
         </button>
       </div>
@@ -517,7 +516,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                               Visible
                             </label>
                             <button
-                              className="h-7 w-7 inline-flex items-center justify-center rounded border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                              className="h-7 w-7 inline-flex items-center justify-center rounded bg-white text-neutral-700 hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                               title="Edit model"
                               aria-label={`Edit ${m.id}`}
                               onClick={() => {
@@ -534,7 +533,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                               </svg>
                             </button>
                             <button
-                              className="h-7 w-7 inline-flex items-center justify-center rounded border border-red-200 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+                              className="h-7 w-7 inline-flex items-center justify-center rounded text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950"
                               title="Remove model"
                               aria-label={`Remove ${m.id}`}
                               onClick={() => {

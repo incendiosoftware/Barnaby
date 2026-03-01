@@ -10,6 +10,29 @@ import { buildStableSystemPrompt, buildDynamicContext } from './systemPrompt'
 import { truncateHistory } from './historyTruncation'
 import { logModelPayloadAudit } from './modelPayloadLogger'
 
+/** Convert local file path to base64 data URL payload blocks */
+function readImageAsBase64Block(imagePath: string): { type: 'image', source: { type: 'base64', media_type: string, data: string } } | null {
+  try {
+    const ext = path.extname(imagePath).toLowerCase()
+    let mediaType = 'image/jpeg'
+    if (ext === '.png') mediaType = 'image/png'
+    else if (ext === '.gif') mediaType = 'image/gif'
+    else if (ext === '.webp') mediaType = 'image/webp'
+
+    const buffer = fs.readFileSync(imagePath)
+    return {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: mediaType,
+        data: buffer.toString('base64'),
+      }
+    }
+  } catch (err) {
+    return null
+  }
+}
+
 /** Ensure npm global bin is in PATH so Electron can find claude CLI. */
 function getClaudeSpawnEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env }
@@ -95,6 +118,9 @@ export type ClaudeConnectOptions = {
   permissionMode?: 'verify-first' | 'proceed-always'
   sandbox?: 'read-only' | 'workspace-write'
   interactionMode?: string
+  workspaceContext?: string
+  showWorkspaceContextInPrompt?: boolean
+  systemPrompt?: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
   mcpConfigPath?: string
 }
@@ -123,6 +149,9 @@ export class ClaudeClient extends EventEmitter {
   private permissionMode: 'verify-first' | 'proceed-always' = 'verify-first'
   private sandbox: 'read-only' | 'workspace-write' = 'workspace-write'
   private interactionMode: string = 'agent'
+  private workspaceContext = ''
+  private showWorkspaceContextInPrompt = false
+  private systemPrompt = ''
   private mcpConfigPath: string | null = null
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
 
@@ -209,6 +238,9 @@ export class ClaudeClient extends EventEmitter {
     this.permissionMode = options.permissionMode ?? 'verify-first'
     this.sandbox = options.sandbox ?? 'workspace-write'
     this.interactionMode = options.interactionMode ?? 'agent'
+    this.workspaceContext = typeof options.workspaceContext === 'string' ? options.workspaceContext.trim() : ''
+    this.showWorkspaceContextInPrompt = options.showWorkspaceContextInPrompt === true
+    this.systemPrompt = typeof options.systemPrompt === 'string' ? options.systemPrompt.trim() : ''
     this.mcpConfigPath = options.mcpConfigPath ?? null
     if (normalized !== requestedModel) {
       this.emitEvent({
@@ -238,7 +270,10 @@ export class ClaudeClient extends EventEmitter {
     // Write only the STABLE system prompt to the temp file.
     // This part does not change across turns, so Claude can cache it internally.
     // Dynamic context (workspace tree, git status) is prepended per-turn in sendUserMessage().
-    const stablePrompt = buildStableSystemPrompt({ interactionMode: this.interactionMode })
+    const stablePrompt = buildStableSystemPrompt({
+      interactionMode: this.interactionMode,
+      additionalSystemPrompt: this.systemPrompt,
+    })
     const tmpDir = os.tmpdir()
     this.systemPromptFile = path.join(tmpDir, `barnaby-claude-prompt-${Date.now()}.txt`)
     fs.writeFileSync(this.systemPromptFile, stablePrompt, 'utf8')
@@ -431,13 +466,26 @@ export class ClaudeClient extends EventEmitter {
     }
   }
 
+  async sendUserMessageWithImages(text: string, imagePaths: string[], options?: { interactionMode?: string; gitStatus?: string }) {
+    await this.sendUserMessageInternal(text, imagePaths, options)
+  }
+
   async sendUserMessage(text: string, options?: { interactionMode?: string; gitStatus?: string }) {
+    await this.sendUserMessageInternal(text, [], options)
+  }
+
+  private async sendUserMessageInternal(text: string, imagePaths: string[], options?: { interactionMode?: string; gitStatus?: string }) {
     const trimmed = text.trim()
-    if (!trimmed) return
+    if (!trimmed && !imagePaths?.length) return
 
     const fileContext = resolveAtFileReferences(trimmed, this.cwd)
     const fullText = trimmed + fileContext
-    this.history.push({ role: 'user', text: fullText })
+
+    let historyText = fullText
+    if (imagePaths?.length) {
+      historyText += `\n[Attached ${imagePaths.length} image(s)]`
+    }
+    this.history.push({ role: 'user', text: historyText })
 
     // If the persistent process died, respawn it
     if (!this.proc) {
@@ -467,15 +515,23 @@ export class ClaudeClient extends EventEmitter {
       permissionMode: this.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first',
       sandbox: this.sandbox,
       gitStatus: options?.gitStatus,
+      workspaceContext: this.workspaceContext,
+      showWorkspaceContextInPrompt: this.showWorkspaceContextInPrompt,
     })
     const messageWithContext = `[Workspace context]\n${dynamicCtx}\n\n---\n\n${fullText}`
+
+    const contentBlocks: any[] = [{ type: 'text', text: messageWithContext }]
+    for (const imgPath of (imagePaths || [])) {
+      const block = readImageAsBase64Block(imgPath)
+      if (block) contentBlocks.push(block)
+    }
 
     // Write the user message as a JSONL line to the persistent process's stdin
     const userMsg = JSON.stringify({
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: messageWithContext }],
+        content: contentBlocks,
       },
     }) + '\n'
     logModelPayloadAudit({

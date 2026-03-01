@@ -14,6 +14,7 @@ import { rust } from '@codemirror/lang-rust'
 import { cpp } from '@codemirror/lang-cpp'
 import { sql } from '@codemirror/lang-sql'
 import { java } from '@codemirror/lang-java'
+import { vscodeDark } from '@uiw/codemirror-theme-vscode'
 import type { LanguageSupport } from '@codemirror/language'
 
 function getLanguageSupport(filename: string): LanguageSupport | null {
@@ -125,17 +126,24 @@ export function CodeMirrorEditor({
     () =>
       EditorView.theme({
         '&': {
-          backgroundColor: darkMode ? 'rgb(10 10 10)' : 'rgb(255 255 255)',
+          backgroundColor: darkMode ? 'var(--theme-dark-900, rgb(23 23 23))' : 'rgb(255 255 255)',
+          color: darkMode ? 'color-mix(in srgb, #ffffff 90%, var(--theme-dark-900))' : 'rgb(23 23 23)',
         },
         '& .cm-content': {
           caretColor: darkMode ? 'rgb(248 250 252)' : 'rgb(23 23 23)',
         },
         '& .cm-gutters': {
-          color: darkMode ? 'rgb(163 163 163)' : 'rgb(115 115 115)',
+          color: darkMode ? 'color-mix(in srgb, #ffffff 50%, var(--theme-dark-900))' : 'rgb(115 115 115)',
         },
       }),
     [darkMode],
   )
+
+  const activeExtensions = useMemo(() => {
+    const arr = [...extensions, theme]
+    if (darkMode) arr.push(vscodeDark)
+    return arr
+  }, [extensions, theme, darkMode])
 
   return (
     <CodeMirror
@@ -143,7 +151,7 @@ export function CodeMirrorEditor({
       onChange={onChange}
       readOnly={readOnly}
       basicSetup={basicSetup}
-      extensions={[theme, ...extensions]}
+      extensions={activeExtensions}
       onFocus={onFocus}
       onKeyDown={(e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {

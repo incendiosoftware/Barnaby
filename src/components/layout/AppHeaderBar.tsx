@@ -16,6 +16,7 @@ interface AppHeaderBarProps {
   UI_INPUT_CLASS: string
   UI_ICON_BUTTON_CLASS: string
   openWorkspaceSettings: (mode: 'new' | 'edit') => void
+  openManageWorkspaces: () => void
   historyDropdownRef: React.RefObject<HTMLDivElement>
   historyDropdownOpen: boolean
   setHistoryDropdownOpen: React.Dispatch<React.SetStateAction<boolean>>
@@ -45,6 +46,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
     UI_INPUT_CLASS,
     UI_ICON_BUTTON_CLASS,
     openWorkspaceSettings,
+    openManageWorkspaces,
     historyDropdownRef,
     historyDropdownOpen,
     setHistoryDropdownOpen,
@@ -130,12 +132,17 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
           <button
             type="button"
             className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
-            onClick={() => openWorkspaceSettings('edit')}
-            title="Edit selected workspace"
+            onClick={openManageWorkspaces}
+            title="Manage workspaces"
+            aria-label="Manage workspaces"
           >
             <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-              <path d="M3 11.5L3.6 9.2L10.6 2.2L12.8 4.4L5.8 11.4L3 12Z" stroke="currentColor" strokeWidth="1.2" />
-              <path d="M8.5 3.9L11.1 6.5" stroke="currentColor" strokeWidth="1.2" />
+              <rect x="2.5" y="3" width="11" height="2" rx="0.8" stroke="currentColor" strokeWidth="1.1" />
+              <rect x="2.5" y="7" width="11" height="2" rx="0.8" stroke="currentColor" strokeWidth="1.1" />
+              <rect x="2.5" y="11" width="11" height="2" rx="0.8" stroke="currentColor" strokeWidth="1.1" />
+              <circle cx="13.5" cy="4" r="1.2" fill="currentColor" />
+              <circle cx="10.5" cy="8" r="1.2" fill="currentColor" />
+              <circle cx="12" cy="12" r="1.2" fill="currentColor" />
             </svg>
           </button>
           <div className="mx-2 h-6 w-px bg-neutral-300/80 dark:bg-neutral-700/80" />
@@ -167,7 +174,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
                       </span>
                       <button
                         type="button"
-                        className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50/70 text-blue-700 hover:bg-emerald-100 hover:border-emerald-300 hover:text-emerald-700 dark:border-blue-900/70 dark:bg-blue-950/25 dark:text-blue-300 dark:hover:bg-emerald-950/40 dark:hover:border-emerald-900 dark:hover:text-emerald-300"
+                        className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md text-neutral-500 hover:bg-emerald-100 hover:text-emerald-700 dark:text-neutral-400 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300"
                         onClick={(e) => {
                           e.stopPropagation()
                           void downloadHistoryTranscript(entry.id)
@@ -181,7 +188,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
                       </button>
                       <button
                         type="button"
-                        className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50/70 text-blue-700 hover:bg-red-100 hover:border-red-300 hover:text-red-700 dark:border-blue-900/70 dark:bg-blue-950/25 dark:text-blue-300 dark:hover:bg-red-950/40 dark:hover:border-red-900 dark:hover:text-red-300"
+                        className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md text-neutral-500 hover:bg-red-100 hover:text-red-700 dark:text-neutral-400 dark:hover:bg-red-950/40 dark:hover:text-red-300"
                         onClick={(e) => {
                           e.stopPropagation()
                           setDeleteHistoryIdPending(entry.id)
@@ -249,8 +256,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
           </div>
           <div data-layout-toolbar="true" className="flex items-center gap-1">
             <button
-              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${layoutMode === 'vertical' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-                }`}
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg ${layoutMode === 'vertical' ? 'bg-neutral-200 text-blue-700 dark:bg-neutral-700 dark:text-blue-200' : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'}`}
               onClick={() => setLayoutMode('vertical')}
               title="Tile Vertical"
               aria-label="Tile Vertical"
@@ -261,8 +267,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
               </svg>
             </button>
             <button
-              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${layoutMode === 'horizontal' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-                }`}
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg ${layoutMode === 'horizontal' ? 'bg-neutral-200 text-blue-700 dark:bg-neutral-700 dark:text-blue-200' : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'}`}
               onClick={() => setLayoutMode('horizontal')}
               title="Tile Horizontal"
               aria-label="Tile Horizontal"
@@ -273,8 +278,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
               </svg>
             </button>
             <button
-              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border shadow-sm ${layoutMode === 'grid' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-                }`}
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg ${layoutMode === 'grid' ? 'bg-neutral-200 text-blue-700 dark:bg-neutral-700 dark:text-blue-200' : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'}`}
               onClick={() => setLayoutMode('grid')}
               title="Tile Grid"
               aria-label="Tile Grid"

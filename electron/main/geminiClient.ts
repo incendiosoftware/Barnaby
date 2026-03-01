@@ -103,6 +103,9 @@ export type GeminiConnectOptions = {
   permissionMode?: 'verify-first' | 'proceed-always'
   sandbox?: 'read-only' | 'workspace-write'
   interactionMode?: string
+  workspaceContext?: string
+  showWorkspaceContextInPrompt?: boolean
+  systemPrompt?: string
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
   mcpConfigPath?: string
 }
@@ -113,6 +116,9 @@ export class GeminiClient extends EventEmitter {
   private permissionMode: 'verify-first' | 'proceed-always' = 'verify-first'
   private sandbox: 'read-only' | 'workspace-write' = 'workspace-write'
   private interactionMode: string = 'agent'
+  private workspaceContext = ''
+  private showWorkspaceContextInPrompt = false
+  private systemPrompt = ''
   private mcpConfigPath: string | null = null
   private mcpServerNames: string[] = []
   private history: Array<{ role: 'user' | 'assistant'; text: string }> = []
@@ -200,6 +206,9 @@ export class GeminiClient extends EventEmitter {
     this.permissionMode = options.permissionMode ?? 'verify-first'
     this.sandbox = options.sandbox ?? 'workspace-write'
     this.interactionMode = options.interactionMode ?? 'agent'
+    this.workspaceContext = typeof options.workspaceContext === 'string' ? options.workspaceContext.trim() : ''
+    this.showWorkspaceContextInPrompt = options.showWorkspaceContextInPrompt === true
+    this.systemPrompt = typeof options.systemPrompt === 'string' ? options.systemPrompt.trim() : ''
     this.mcpConfigPath = options.mcpConfigPath ?? null
     if (normalized !== requestedModel) {
       this.emitEvent({
@@ -533,7 +542,10 @@ export class GeminiClient extends EventEmitter {
    */
   private writePolicyFile() {
     this.cleanupPolicyFile()
-    const stablePrompt = buildStableSystemPrompt({ interactionMode: this.interactionMode })
+    const stablePrompt = buildStableSystemPrompt({
+      interactionMode: this.interactionMode,
+      additionalSystemPrompt: this.systemPrompt,
+    })
     const tmpDir = os.tmpdir()
     this.policyFilePath = path.join(tmpDir, `barnaby-gemini-policy-${Date.now()}.md`)
     fs.writeFileSync(this.policyFilePath, stablePrompt, 'utf8')
@@ -569,6 +581,8 @@ export class GeminiClient extends EventEmitter {
       permissionMode: this.permissionMode,
       sandbox: this.sandbox,
       gitStatus,
+      workspaceContext: this.workspaceContext,
+      showWorkspaceContextInPrompt: this.showWorkspaceContextInPrompt,
     })
 
     // On resumed turns, only send dynamic context + user message.

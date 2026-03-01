@@ -90,6 +90,8 @@ export interface WorkspaceLifecycleContext {
   setActivePanelId: React.Dispatch<React.SetStateAction<string>>
   setSelectedHistoryId: React.Dispatch<React.SetStateAction<string>>
   setPendingWorkspaceSwitch: React.Dispatch<React.SetStateAction<{ targetRoot: string; source: WorkspaceSwitchSource } | null>>
+  upsertPanelToHistory: (panel: AgentPanelState) => void
+  requestImmediateAppStateSave: () => void
 }
 
 export interface WorkspaceLifecycleController {
@@ -344,8 +346,17 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
 
   async function doWorkspaceSwitch(targetRoot: string, source: WorkspaceSwitchSource) {
     const currentWorkspace = ctx.workspaceRootRef.current?.trim()
-    const panelIds = [...new Set(ctx.panelsRef.current.map((panel) => panel.id))]
-    if (currentWorkspace) ctx.workspaceSnapshotsRef.current[currentWorkspace] = buildWorkspaceSnapshot(currentWorkspace)
+    const currentPanels = ctx.panelsRef.current
+    const panelIds = [...new Set(currentPanels.map((panel) => panel.id))]
+    if (currentWorkspace) {
+      ctx.workspaceSnapshotsRef.current[currentWorkspace] = buildWorkspaceSnapshot(currentWorkspace)
+      const normalizedCurrent = normalizeWorkspacePathForCompare(currentWorkspace)
+      for (const panel of currentPanels) {
+        if (normalizeWorkspacePathForCompare(panel.cwd) === normalizedCurrent) {
+          ctx.upsertPanelToHistory(panel)
+        }
+      }
+    }
     const fromPicker = source === 'picker'
     if (fromPicker) {
       ctx.setWorkspacePickerError(null)
@@ -370,6 +381,7 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
     ctx.setExpandedDirectories({})
     applyWorkspaceSnapshot(openedRoot)
     if (source === 'workspace-create') ctx.setShowWorkspaceModal(false)
+    ctx.requestImmediateAppStateSave()
   }
 
   function requestWorkspaceSwitch(targetRoot: string, source: WorkspaceSwitchSource) {
@@ -394,6 +406,7 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
           applyWorkspaceSnapshot(openedRoot)
           if (fromPicker) closeWorkspacePicker()
           if (source === 'workspace-create') ctx.setShowWorkspaceModal(false)
+          ctx.requestImmediateAppStateSave()
         } finally {
           if (fromPicker) ctx.setWorkspacePickerOpening(null)
         }

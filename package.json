@@ -45,7 +45,6 @@
     "build:release": "npm run build:dist && electron-builder",
     "release:notes": "node scripts/create-release-notes.mjs",
     "release:prepare": "node scripts/run-with-version-bump.mjs \"npm run release:notes && npm run build:portable:raw\"",
-    "publish": "gh workflow run release.yml -f releasable=true --ref main",
     "postinstall": "node scripts/shortcut-win.mjs && node scripts/rebuild-native.mjs",
     "publish:npm": "npm run build && npm publish",
     "package:win": "npm run build:dist && electron-packager . Barnaby --platform=win32 --arch=x64 --out=release/0.0.1/packaged --overwrite --asar --prune=true --icon=build/icon.png",

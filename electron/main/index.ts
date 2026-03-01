@@ -2643,12 +2643,6 @@ async function gitBuild(workspaceRoot: string, _selectedPaths?: string[]): Promi
   return { ok: result.ok, error: result.error }
 }
 
-async function gitRelease(workspaceRoot: string, _selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }> {
-  const root = path.resolve(workspaceRoot)
-  const result = await runShellCommand(root, 'gh', ['workflow', 'run', 'release.yml', '-f', 'releasable=true', '--ref', 'main'])
-  return { ok: result.ok, error: result.error }
-}
-
 async function getGitStatus(workspaceRoot: string): Promise<GitStatusResult> {
   const root = path.resolve(workspaceRoot)
   const base: Omit<GitStatusResult, 'ok'> = {
@@ -3583,10 +3577,6 @@ ipcMain.handle('agentorchestrator:gitDeploy', async (_evt, workspaceRoot: string
 
 ipcMain.handle('agentorchestrator:gitBuild', async (_evt, workspaceRoot: string, selectedPaths?: string[]) => {
   return gitBuild(workspaceRoot, selectedPaths)
-})
-
-ipcMain.handle('agentorchestrator:gitRelease', async (_evt, workspaceRoot: string, selectedPaths?: string[]) => {
-  return gitRelease(workspaceRoot, selectedPaths)
 })
 
 ipcMain.on('agentorchestrator:setRecentWorkspaces', (_evt, list: string[]) => {

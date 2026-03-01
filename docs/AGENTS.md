@@ -8,20 +8,17 @@ This repository builds a local desktop executable (Electron). It is not a web de
 - **run dev**: `npm run dev`
 - **build**: `npm run build` (portable artifact, no version bump)
 - **package**: `npm run package` (bump version + distributable)
-- **publish**: `npm run publish` (release to GitHub)
 
 ## Build Policy
 
 - **build** = artifact only, uses current version. Use for testing or CI.
 - **package** = bump version + distributable. Use when preparing a new release.
-- **publish** = release to GitHub. Run after package + commit + push.
 - Do not assume publish unless user explicitly asks.
 
 ## Incremental Semantics
 
 Each instruction includes all prior steps. Do not repeat work:
 - **package** = bump + build (do not run build separately first).
-- **release** = package → commit → push → publish
 
 When user says "build and package", treat as **package** (package includes build; do not run build twice).
 
@@ -45,15 +42,7 @@ Use these exact flows when the user asks:
 
 - **build** (no bump): `npm run build`
 - **package** (bump + distributable): `npm run package`
-- **publish** (release to GitHub): `npm run publish` (or `gh workflow run release.yml -f releasable=true --ref main`)
 - **Full prep** (bump + notes + build): `npm run release:prepare`
-- **Push with publish**: package → commit → push → `npm run publish`
-
-### Release Notes Rules
-
-- Preferred release notes file: `RELEASE_NOTES_<version>.md`
-- Generate scaffold file for current version: `npm run release:notes`
-- The release workflow uses `RELEASE_NOTES_<version>.md` if present, otherwise auto-generates fallback notes.
 
 ## Plan Mode Workflow
 

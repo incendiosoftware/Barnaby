@@ -69,9 +69,9 @@ export function AgentPanelHeader({
       <div className="flex items-center gap-1 shrink-0 cursor-default">
         <button
           className={[
-            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-            'bg-white text-neutral-700 hover:bg-neutral-100 hover:text-neutral-900',
-            'dark:bg-transparent dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200',
+            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed',
+            'bg-transparent text-neutral-700 hover:bg-neutral-200/80 active:bg-neutral-300/80 hover:text-neutral-900',
+            'dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80 dark:hover:text-neutral-100',
           ].join(' ')}
           onClick={onSplit}
           disabled={panelsCount >= MAX_PANELS}
@@ -86,9 +86,9 @@ export function AgentPanelHeader({
         </button>
         <button
           className={[
-            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md transition-colors',
-            'bg-white text-neutral-700 hover:bg-red-50 hover:text-red-700',
-            'dark:bg-transparent dark:text-neutral-400 dark:hover:bg-red-900/50 dark:hover:text-red-300',
+            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md transition-colors focus:outline-none',
+            'bg-transparent text-neutral-700 hover:bg-red-50 hover:text-red-700 active:bg-red-100',
+            'dark:text-neutral-300 dark:hover:bg-red-950/60 dark:hover:text-red-300 dark:active:bg-red-900/70',
           ].join(' ')}
           onClick={onClose}
           title="Close"

@@ -3611,7 +3611,7 @@ export default function App() {
   const gitContextFileCountLabel = `${gitContextSelectedCount} ${gitContextSelectedCount === 1 ? 'file' : 'files'}`
   const headerDockToggleButtonClass = (isActive: boolean) =>
     `h-9 w-9 inline-flex items-center justify-center rounded-lg shrink-0 ${isActive
-      ? 'shadow-inner bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100'
+      ? 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100'
       : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'
     }`
   const workspaceDockButtonOnLeft = true

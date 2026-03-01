@@ -121,9 +121,9 @@ export function CodeWindowTile({
             type="button"
             title="Code"
             aria-label="Code"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium ${codeWindowTab === 'code'
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus:outline-none ${codeWindowTab === 'code'
               ? 'bg-neutral-200 text-blue-800 dark:bg-neutral-700 dark:text-blue-100'
-              : 'bg-transparent hover:bg-neutral-200/80 text-neutral-600 dark:hover:bg-neutral-700/80 dark:text-neutral-300'
+              : 'bg-transparent hover:bg-neutral-200 text-neutral-600 dark:hover:bg-neutral-700 dark:text-neutral-300'
               }`}
             onClick={() => onCodeWindowTabChange('code')}
           >
@@ -137,9 +137,9 @@ export function CodeWindowTile({
             type="button"
             title="Settings"
             aria-label="Settings"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium ${codeWindowTab === 'settings'
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus:outline-none ${codeWindowTab === 'settings'
               ? 'bg-neutral-200 text-blue-800 dark:bg-neutral-700 dark:text-blue-100'
-              : 'bg-transparent hover:bg-neutral-200/80 text-neutral-600 dark:hover:bg-neutral-700/80 dark:text-neutral-300'
+              : 'bg-transparent hover:bg-neutral-200 text-neutral-600 dark:hover:bg-neutral-700 dark:text-neutral-300'
               }`}
             onClick={() => onCodeWindowTabChange('settings')}
           >
@@ -153,7 +153,7 @@ export function CodeWindowTile({
           type="button"
           title={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
           aria-label={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
-          className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium bg-transparent hover:bg-neutral-200/80 text-neutral-600 dark:hover:bg-neutral-700/80 dark:text-neutral-300"
+          className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md bg-transparent text-xs font-medium text-neutral-600 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80"
           onClick={onDockSideToggle}
         >
           <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -167,7 +167,7 @@ export function CodeWindowTile({
           type="button"
           title={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
           aria-label={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
-          className="h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors bg-transparent text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200"
+          className="h-8 w-8 inline-flex items-center justify-center rounded-md bg-transparent text-xs font-medium text-neutral-600 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80"
           onClick={onCloseCodeWindow}
         >
           <svg width="14" height="14" viewBox="0 0 10 10" fill="none" aria-hidden="true">
@@ -218,7 +218,7 @@ export function CodeWindowTile({
           </button>
           <button
             type="button"
-            className={`${CODE_WINDOW_TOOLBAR_BUTTON} ${applicationSettings.editorWordWrap ? 'shadow-inner bg-neutral-200 border-neutral-400 text-neutral-800 dark:bg-neutral-700/80 dark:border-neutral-600 dark:text-neutral-100' : ''}`}
+            className={`${CODE_WINDOW_TOOLBAR_BUTTON} ${applicationSettings.editorWordWrap ? 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700/80 dark:text-neutral-100' : ''}`}
             onClick={onWordWrapToggle}
             aria-label={applicationSettings.editorWordWrap ? 'Word wrap on' : 'Word wrap off'}
             title={applicationSettings.editorWordWrap ? 'Word wrap on (click to turn off)' : 'Word wrap off (click to turn on)'}

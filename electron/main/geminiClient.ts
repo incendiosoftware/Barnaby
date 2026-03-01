@@ -7,6 +7,7 @@ import { EventEmitter } from 'node:events'
 /** Ensure npm global bin is in PATH so Electron can find gemini CLI. */
 function getGeminiSpawnEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env }
+  delete env.CLAUDECODE
   if (process.platform === 'win32') {
     const npmBin = process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : ''
     if (npmBin && env.PATH && !env.PATH.includes(npmBin)) {

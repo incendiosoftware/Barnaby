@@ -380,6 +380,7 @@ export type ModelInterface = {
   displayName: string
   provider: ModelProvider
   enabled: boolean
+  isDefault?: boolean
   config?: Record<string, string>
 }
 
@@ -394,7 +395,7 @@ export type AvailableCatalogModels = {
   openrouter: { id: string; displayName: string }[]
 }
 
-export type AppSettingsView = 'connectivity' | 'models' | 'preferences' | 'agents' | 'orchestrator' | 'mcp-servers' | 'diagnostics'
+export type AppSettingsView = 'connectivity' | 'preferences' | 'agents' | 'orchestrator' | 'mcp-servers' | 'diagnostics'
 
 export type ModelCatalogRefreshStatus = {
   kind: 'success' | 'error'

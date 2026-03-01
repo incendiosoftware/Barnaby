@@ -74,11 +74,13 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Group models by provider and select the first enabled model for each
+  // Group models by provider and select the default or first enabled model for each
   const defaultModelsByProvider: Partial<Record<ConnectivityProvider, string>> = {}
   for (const m of modelInterfaces) {
-    if (m.enabled && !defaultModelsByProvider[m.provider]) {
-      defaultModelsByProvider[m.provider] = m.id
+    if (m.enabled) {
+      if (m.isDefault || !defaultModelsByProvider[m.provider]) {
+        defaultModelsByProvider[m.provider] = m.id
+      }
     }
   }
 
@@ -226,6 +228,18 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
                   Choose Provider
                 </div>
                 <div className="py-1 flex flex-col">
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-neutral-200/50 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 flex items-center justify-between group"
+                    onClick={() => {
+                      createAgentPanel()
+                      setNewChatDropdownOpen(false)
+                    }}
+                  >
+                    <span>Workspace Default</span>
+                    <span className="text-[10px] text-neutral-400 dark:text-neutral-500 opacity-0 group-hover:opacity-100 transition-opacity">Workspace settings</span>
+                  </button>
+                  <div className="mx-3 my-1 border-b border-neutral-200/70 dark:border-neutral-700"></div>
                   {Object.entries(defaultModelsByProvider).map(([p, modelId]) => {
                     const provider = p as ConnectivityProvider
                     const info = providerLabels[provider]

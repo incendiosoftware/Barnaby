@@ -123,8 +123,8 @@ export function createAgentPipelineController(ctx: AgentPipelineContext): AgentP
         prev.map((x) => x.id !== winId ? x : { ...x, status: 'Sending message...' }),
       )
       ctx.appendPanelDebug(winId, 'turn/start', 'Starting turn...')
-      if (provider !== 'codex' && provider !== 'gemini' && imagePaths.length > 0) {
-        throw new Error('Image attachments are supported for Codex and Gemini panels only.')
+      if (provider !== 'codex' && provider !== 'gemini' && provider !== 'claude' && imagePaths.length > 0) {
+        throw new Error('Image attachments are supported for Claude, Codex, and Gemini panels only.')
       }
       const needsPriorMessages =
         provider === 'codex' &&

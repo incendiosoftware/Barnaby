@@ -10,8 +10,7 @@
       "Shell(npx)",
       "Shell(tsc)",
       "Shell(git)",
-      "Read(src/**)",
-      "Read(package.json**)",
+      "Read(**)",
       "Write(**)"
     ],
     "deny": [

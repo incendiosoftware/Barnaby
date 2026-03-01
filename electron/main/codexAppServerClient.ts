@@ -129,15 +129,21 @@ export class CodexAppServerClient extends EventEmitter {
     // `codex app-server` speaks JSON-RPC over JSONL on stdio (one JSON object per line).
     // On Windows, Codex is commonly installed as an npm shim (`codex.cmd`), which can't be
     // executed via CreateProcess directly. Run it through cmd.exe so stdin/stdout pipes work.
+
+    const env = { ...process.env }
+    delete env.CLAUDECODE
+
     const proc =
       process.platform === 'win32'
         ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'codex app-server'], {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            windowsHide: true,
-          })
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: true,
+          env,
+        })
         : spawn('codex', ['app-server'], {
-            stdio: ['pipe', 'pipe', 'pipe'],
-          })
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env,
+        })
     this.proc = proc
 
     proc.on('exit', (code, signal) => {
@@ -332,19 +338,19 @@ export class CodexAppServerClient extends EventEmitter {
         if (this.permissionMode === 'proceed-always') {
           const command = this.extractApprovalCommand((msg as any).params)
           const filePath = this.extractApprovalPath((msg as any).params)
-          
+
           if (filePath) {
-             const mode = method.includes('read') ? 'read' : 'write' // Heuristic
-             if (this.shouldAutoApprovePath(filePath, mode)) {
-               this.sendResponse(id, { decision: 'accept' })
-             } else {
-               this.emitEvent({
-                 type: 'status',
-                 status: 'error',
-                 message: `Action blocked by allowed command prefixes (${filePath}). Update workspace prefix allowlist to permit this command.`,
-               })
-               this.sendResponse(id, { decision: 'decline' })
-             }
+            const mode = method.includes('read') ? 'read' : 'write' // Heuristic
+            if (this.shouldAutoApprovePath(filePath, mode)) {
+              this.sendResponse(id, { decision: 'accept' })
+            } else {
+              this.emitEvent({
+                type: 'status',
+                status: 'error',
+                message: `Action blocked by allowed command prefixes (${filePath}). Update workspace prefix allowlist to permit this command.`,
+              })
+              this.sendResponse(id, { decision: 'decline' })
+            }
           } else if (command) {
             if (this.shouldAutoApproveCommand(command)) {
               this.sendResponse(id, { decision: 'accept' })
@@ -358,8 +364,8 @@ export class CodexAppServerClient extends EventEmitter {
               this.sendResponse(id, { decision: 'decline' })
             }
           } else {
-             // Fallback
-             this.sendResponse(id, { decision: 'decline' })
+            // Fallback
+            this.sendResponse(id, { decision: 'decline' })
           }
         } else {
           this.emitEvent({
@@ -450,17 +456,17 @@ export class CodexAppServerClient extends EventEmitter {
           kind: 'rateLimits',
           primary: primary
             ? {
-                usedPercent: primary.used_percent,
-                windowMinutes: primary.window_minutes,
-                resetsAt: primary.resets_at,
-              }
+              usedPercent: primary.used_percent,
+              windowMinutes: primary.window_minutes,
+              resetsAt: primary.resets_at,
+            }
             : null,
           secondary: secondary
             ? {
-                usedPercent: secondary.used_percent,
-                windowMinutes: secondary.window_minutes,
-                resetsAt: secondary.resets_at,
-              }
+              usedPercent: secondary.used_percent,
+              windowMinutes: secondary.window_minutes,
+              resetsAt: secondary.resets_at,
+            }
             : null,
         },
       })
@@ -503,38 +509,38 @@ export class CodexAppServerClient extends EventEmitter {
   private writeCliConfig(cwd: string) {
     // Only proceed if we have meaningful permissions to write
     if (this.permissionMode !== 'proceed-always') return
-    
+
     const configDir = path.join(cwd, '.cursor')
     const configPath = path.join(configDir, 'cli.json')
 
     // If all lists are empty, we should NOT enforce a restrictive cli.json.
     // Instead, we remove it to restore the default "Allow All" behavior of the agent.
     if (this.allowedCommandPrefixes.length === 0 &&
-        this.allowedAutoReadPrefixes.length === 0 &&
-        this.allowedAutoWritePrefixes.length === 0 &&
-        this.deniedAutoReadPrefixes.length === 0 &&
-        this.deniedAutoWritePrefixes.length === 0) {
-        
-        if (fs.existsSync(configPath)) {
-            try {
-                fs.unlinkSync(configPath)
-            } catch (e) { /* ignore */ }
-        }
-        return
+      this.allowedAutoReadPrefixes.length === 0 &&
+      this.allowedAutoWritePrefixes.length === 0 &&
+      this.deniedAutoReadPrefixes.length === 0 &&
+      this.deniedAutoWritePrefixes.length === 0) {
+
+      if (fs.existsSync(configPath)) {
+        try {
+          fs.unlinkSync(configPath)
+        } catch (e) { /* ignore */ }
+      }
+      return
     }
-    
+
     // Resolve shell permissions from explicit prefixes plus required toolchain companions.
     const allowedBinaries = this.buildAllowedShellPermissions()
 
     // Build read/write rules
-    const readRules = this.allowedAutoReadPrefixes.length > 0 
-        ? this.allowedAutoReadPrefixes.map(p => `Read(${p}**)`)
-        : ['Read(**)']
+    const readRules = this.allowedAutoReadPrefixes.length > 0
+      ? this.allowedAutoReadPrefixes.map(p => `Read(${p}**)`)
+      : ['Read(**)']
 
-    const writeRules = this.allowedAutoWritePrefixes.length > 0 
-        ? this.allowedAutoWritePrefixes.map(p => `Write(${p}**)`)
-        : ['Write(**)']
-    
+    const writeRules = this.allowedAutoWritePrefixes.length > 0
+      ? this.allowedAutoWritePrefixes.map(p => `Write(${p}**)`)
+      : ['Write(**)']
+
     const deniedRead = this.deniedAutoReadPrefixes.map(p => `Read(${p}**)`)
     const deniedWrite = this.deniedAutoWritePrefixes.map(p => `Write(${p}**)`)
 
@@ -557,15 +563,15 @@ export class CodexAppServerClient extends EventEmitter {
         fs.mkdirSync(configDir, { recursive: true })
       }
       fs.writeFileSync(
-        configPath, 
+        configPath,
         JSON.stringify(config, null, 2),
         'utf8'
       )
     } catch (err) {
-      this.emitEvent({ 
-        type: 'status', 
-        status: 'error', 
-        message: `Failed to write permission config: ${String(err)}` 
+      this.emitEvent({
+        type: 'status',
+        status: 'error',
+        message: `Failed to write permission config: ${String(err)}`
       })
     }
   }
@@ -635,9 +641,9 @@ export class CodexAppServerClient extends EventEmitter {
     const list = mode === 'read' ? this.allowedAutoReadPrefixes : this.allowedAutoWritePrefixes
     const denied = mode === 'read' ? this.deniedAutoReadPrefixes : this.deniedAutoWritePrefixes
     if (list.length === 0 && denied.length === 0) return true
-    
+
     const p = pathStr.trim().replace(/\\/g, '/')
-    
+
     // Check denials first
     for (const prefix of denied) {
       if (p.startsWith(prefix)) return false
@@ -648,7 +654,7 @@ export class CodexAppServerClient extends EventEmitter {
     for (const prefix of list) {
       if (p.startsWith(prefix)) return true
     }
-    
+
     return false
   }
 

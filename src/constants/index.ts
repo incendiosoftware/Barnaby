@@ -35,11 +35,11 @@ export const MODAL_BACKDROP_CLASS = 'fixed inset-0 z-50 bg-black/35 backdrop-blu
 export const MODAL_CARD_CLASS = 'rounded-2xl border border-neutral-200/80 dark:border-neutral-800 bg-white/95 dark:bg-neutral-950 shadow-2xl'
 export const UI_BUTTON_SECONDARY_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
 export const UI_BUTTON_PRIMARY_CLASS = 'px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-500'
-export const UI_ICON_BUTTON_CLASS = 'h-9 w-9 inline-flex items-center justify-center rounded-lg bg-white hover:bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-export const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md transition-colors bg-transparent text-neutral-700 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200'
-export const UI_TOOLBAR_ICON_BUTTON_CLASS = 'h-7 w-7 inline-flex items-center justify-center rounded-md bg-transparent hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'
-export const CODE_WINDOW_TOOLBAR_BUTTON = 'h-7 w-7 inline-flex items-center justify-center rounded-md bg-transparent hover:bg-neutral-200/80 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-700 dark:hover:bg-neutral-800/80 dark:text-neutral-300'
-export const CODE_WINDOW_TOOLBAR_BUTTON_SM = 'h-7 w-9 inline-flex items-center justify-center rounded-md transition-colors bg-white text-neutral-700 hover:bg-neutral-100 dark:bg-transparent dark:hover:bg-neutral-800/80 dark:text-neutral-300'
+export const UI_ICON_BUTTON_CLASS = 'h-9 w-9 inline-flex items-center justify-center rounded-md bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-200 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
+export const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
+export const UI_TOOLBAR_ICON_BUTTON_CLASS = 'h-7 w-7 inline-flex items-center justify-center rounded-md bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 disabled:opacity-50 disabled:cursor-not-allowed dark:text-neutral-200 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
+export const CODE_WINDOW_TOOLBAR_BUTTON = 'h-7 w-7 inline-flex items-center justify-center rounded-md bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 disabled:opacity-50 disabled:cursor-not-allowed dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
+export const CODE_WINDOW_TOOLBAR_BUTTON_SM = 'h-7 w-9 inline-flex items-center justify-center rounded-md bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
 export const UI_INPUT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 placeholder:text-neutral-500 dark:placeholder:text-neutral-400'
 export const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100'
 export const STATUS_SYMBOL_ICON_CLASS = 'h-4 w-4 text-neutral-600 dark:text-neutral-300'
@@ -63,7 +63,7 @@ export const PROVIDER_SUBSCRIPTION_URLS: Record<string, string> = {
 
 export const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
 export const CONNECTIVITY_PROVIDERS: ConnectivityProvider[] = ['codex', 'claude', 'gemini', 'openrouter']
-export const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'models', 'preferences', 'agents', 'orchestrator', 'mcp-servers', 'diagnostics']
+export const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'preferences', 'agents', 'orchestrator', 'mcp-servers', 'diagnostics']
 
 export const DOCK_PANEL_LABELS: Record<DockPanelId, string> = {
   orchestrator: 'Orchestrator',

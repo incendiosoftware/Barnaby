@@ -42,6 +42,7 @@ function getClaudeSpawnEnv(): NodeJS.ProcessEnv {
       env.PATH = `${npmBin}${path.delimiter}${env.PATH}`
     }
   }
+  delete env.CLAUDECODE
   return env
 }
 

@@ -110,6 +110,7 @@ export type ClaudeClientEvent =
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
   | { type: 'thinking'; message: string }
+  | { type: 'promptPreview'; content: string; format: 'text' | 'json' }
 
 const INITIAL_HISTORY_MAX_MESSAGES = 24
 
@@ -161,6 +162,7 @@ export class ClaudeClient extends EventEmitter {
   private sessionId: string | null = null
   private stdoutBuffer: string = ''
   private stderr: string = ''
+  private stableSystemPrompt = ''
 
   /** Temp file holding the system prompt (cleaned up on close). */
   private systemPromptFile: string | null = null
@@ -207,6 +209,13 @@ export class ClaudeClient extends EventEmitter {
 
   emitEvent(evt: ClaudeClientEvent) {
     this.emit('event', evt)
+  }
+
+  private emitPromptPreview(content: string, format: 'text' | 'json' = 'text') {
+    if (!this.showWorkspaceContextInPrompt) return
+    const redacted = String(content ?? '').replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g, '[data-url-redacted]')
+    if (!redacted.trim()) return
+    this.emitEvent({ type: 'promptPreview', content: redacted, format })
   }
 
   private resetTurnInactivityTimer() {
@@ -275,6 +284,7 @@ export class ClaudeClient extends EventEmitter {
       interactionMode: this.interactionMode,
       additionalSystemPrompt: this.systemPrompt,
     })
+    this.stableSystemPrompt = stablePrompt
     const tmpDir = os.tmpdir()
     this.systemPromptFile = path.join(tmpDir, `barnaby-claude-prompt-${Date.now()}.txt`)
     fs.writeFileSync(this.systemPromptFile, stablePrompt, 'utf8')
@@ -535,6 +545,15 @@ export class ClaudeClient extends EventEmitter {
         content: contentBlocks,
       },
     }) + '\n'
+    this.emitPromptPreview(
+      [
+        '[Stable system prompt]',
+        this.stableSystemPrompt,
+        '[Turn payload]',
+        userMsg.trim(),
+      ].join('\n\n'),
+      'text',
+    )
     logModelPayloadAudit({
       provider: 'claude',
       endpoint: 'cli:stream-json-stdin',

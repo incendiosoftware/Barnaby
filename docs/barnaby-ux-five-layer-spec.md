@@ -5,7 +5,7 @@ Status: Draft (implementation-ready)
 Owner: Barnaby app (renderer + main)
 
 ## 1. Purpose
-
+s
 Define a concrete Barnaby architecture for:
 
 1. `context`

@@ -57,7 +57,7 @@ function DebugOutputPanel({ api, onClose }: { api: { getDebugLogContent?: () => 
           {onClose && (
             <button
               type="button"
-              className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700"
+              className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded border-0 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700"
               onClick={onClose}
               title="Close"
               aria-label="Close"
@@ -298,6 +298,7 @@ import {
   withExhaustedRateLimitWarning,
   withLimitWarningMessage,
   withModelBanner,
+  withOutsideWorkspaceBuildWarning,
   workspaceSettingsToTextDraft,
   fileNameFromRelativePath,
   formatCheckedAt,
@@ -741,9 +742,18 @@ export default function App() {
     source: 'menu' | 'picker' | 'dropdown' | 'workspace-create'
   } | null>(null)
 
-  const [panels, setPanels] = useState<AgentPanelState[]>(() => [
-    makeDefaultPanel('default', getInitialWorkspaceRoot()),
-  ])
+  const [panels, setPanels] = useState<AgentPanelState[]>(() => {
+    const initialWorkspaceRoot = getInitialWorkspaceRoot()
+    const initialWorkspaceSettings = workspaceSettingsByPath[initialWorkspaceRoot]
+    const initialPanel = makeDefaultPanel(
+      'default',
+      initialWorkspaceRoot,
+      undefined,
+      undefined,
+      initialWorkspaceSettings?.cursorAllowBuilds === true,
+    )
+    return [initialPanel]
+  })
   const [activePanelId, setActivePanelId] = useState<string>('default')
   const panelTimelineById = useMemo<Record<string, TimelineUnit[]>>(
     () =>
@@ -2453,6 +2463,9 @@ export default function App() {
         else if (ws?.defaultModel) p.model = ws.defaultModel
         p.provider = getModelProvider(p.model)  // Lock provider based on model
         p.messages = withModelBanner(p.messages, p.model)
+        if (ws?.cursorAllowBuilds === true) {
+          p.messages = withOutsideWorkspaceBuildWarning(p.messages)
+        }
         if (options.interactionMode) p.interactionMode = parseInteractionMode(options.interactionMode as any)
         if (options.permissionMode) p.permissionMode = options.permissionMode as any
         if (options.sandbox) p.sandbox = options.sandbox as any

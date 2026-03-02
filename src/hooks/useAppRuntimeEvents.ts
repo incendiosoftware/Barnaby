@@ -117,6 +117,25 @@ export function useAppRuntimeEvents(ctx: any) {
         return
       }
 
+      if (evt?.type === 'promptPreview') {
+        const content = typeof evt.content === 'string' ? evt.content.trim() : ''
+        if (!content) return
+        const language = evt.format === 'json' ? 'json' : 'text'
+        const fence = '````'
+        const preview = `Prompt sent to model:\n${fence}${language}\n${content}\n${fence}`
+        setPanels((prev: any[]) =>
+          prev.map((w) =>
+            w.id !== agentWindowId
+              ? w
+              : {
+                ...w,
+                messages: [...w.messages, { id: newId(), role: 'system' as const, content: preview, format: 'markdown' as const, createdAt: Date.now() }],
+              },
+          ),
+        )
+        return
+      }
+
       markPanelActivity(agentWindowId, evt)
 
       if (evt?.type === 'status') {

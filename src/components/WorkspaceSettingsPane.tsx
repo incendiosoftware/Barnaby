@@ -54,7 +54,7 @@ export function WorkspaceSettingsPane({
         {onClose && (
           <button
             type="button"
-            className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
+            className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded border-0 text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
             onClick={onClose}
             title="Close"
             aria-label="Close"
@@ -159,11 +159,8 @@ export function WorkspaceSettingsPane({
                   checked={workspaceForm.cursorAllowBuilds ?? false}
                   onChange={(e) => onCursorAllowBuildsChange(e.target.checked)}
                 />
-                Allow builds in Cursor (disables sandbox for this workspace)
+                Allow build commands outside workspace (requires new chat session)
               </label>
-              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                Use when Cursor Agent fails with spawn EPERM on Windows.
-              </p>
             </div>
           )}
           {workspaceForm.sandbox !== 'read-only' && workspaceForm.permissionMode === 'proceed-always' && (
@@ -216,11 +213,6 @@ export function WorkspaceSettingsPane({
                   placeholder={'../\n.env'}
                 />
               </div>
-              {workspaceForm.permissionMode === 'proceed-always' && (
-                <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                  If builds fail with EPERM on Windows: Enable Cursor Settings &gt; Agents &gt; Inline Editing &amp; Terminal &gt; Legacy Terminal Tool. This makes the command allowlist apply correctly.
-                </p>
-              )}
             </>
           )}
           <p className="text-[11px] text-neutral-500 dark:text-neutral-400">

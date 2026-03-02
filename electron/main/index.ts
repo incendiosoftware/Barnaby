@@ -27,7 +27,6 @@ import { initializePluginHost, shutdownPluginHost, setPluginHostWindow, setWorks
 import { readOrchestratorSecrets, writeOrchestratorSecrets, writeOrchestratorSettings, type OrchestratorSettingsData } from './orchestratorStorage'
 import { validateLicenseKey } from './licenseKeys'
 import { McpServerManager, type McpServerConfig } from './mcpClient'
-import { writeCursorCliConfig } from './permissions'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
 const WORKSPACE_LOCK_DIRNAME = '.barnaby'
@@ -3497,24 +3496,6 @@ ipcMain.handle('agentorchestrator:writeWorkspaceConfig', async (_evt, folderPath
     workspace: workspaceSettings,
   }
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
-
-  if (workspaceSettings.permissionMode === 'proceed-always' || workspaceSettings.cursorAllowBuilds) {
-    try {
-      writeCursorCliConfig({
-        cwd: resolvedFolder,
-        permissionMode: workspaceSettings.permissionMode ?? 'verify-first',
-        allowedCommandPrefixes: workspaceSettings.allowedCommandPrefixes,
-        allowedAutoReadPrefixes: workspaceSettings.allowedAutoReadPrefixes,
-        allowedAutoWritePrefixes: workspaceSettings.allowedAutoWritePrefixes,
-        deniedAutoReadPrefixes: workspaceSettings.deniedAutoReadPrefixes,
-        deniedAutoWritePrefixes: workspaceSettings.deniedAutoWritePrefixes,
-        cursorAllowBuilds: workspaceSettings.cursorAllowBuilds ?? false,
-      })
-    } catch (err) {
-      console.error(`Failed to write Cursor CLI config: ${String(err)}`)
-    }
-  }
-
   return true
 })
 

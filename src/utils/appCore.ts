@@ -92,6 +92,8 @@ export function getModelProvider(modelId: string): ConnectivityProvider {
 }
 
 export const LIMIT_WARNING_PREFIX = 'Warning (Limits):'
+export const OUTSIDE_WORKSPACE_BUILD_WARNING_PREFIX = 'Warning (Outside Workspace Builds):'
+export const OUTSIDE_WORKSPACE_BUILD_WARNING = `${OUTSIDE_WORKSPACE_BUILD_WARNING_PREFIX} "Allow build commands outside workspace" is enabled for this chat. Build commands may run outside the workspace folder.`
 export const TRANSCRIPT_SAVED_PREFIX = '📄 Transcript saved:'
 export const CONTEXT_COMPACTION_NOTICE_PREFIX = '⚙️ System Notice: The conversation history was getting too long.'
 export const CONTEXT_COMPACTION_NOTICE = `${CONTEXT_COMPACTION_NOTICE_PREFIX} Older messages have been compacted into a summary to save memory.`
@@ -1658,9 +1660,54 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: st
   })
 }
 
-export function makeDefaultPanel(id: string, cwd: string, initialModel?: string, historyId = newId()): AgentPanelState {
+function isOutsideWorkspaceBuildWarningMessage(message: ChatMessage | undefined): boolean {
+  return Boolean(
+    message &&
+    message.role === 'system' &&
+    typeof message.content === 'string' &&
+    message.content.startsWith(OUTSIDE_WORKSPACE_BUILD_WARNING_PREFIX),
+  )
+}
+
+export function withOutsideWorkspaceBuildWarning(messages: ChatMessage[]): ChatMessage[] {
+  const existingIdx = messages.findIndex((message) => isOutsideWorkspaceBuildWarningMessage(message))
+  const existing = existingIdx >= 0 ? messages[existingIdx] : null
+  const warning: ChatMessage = existing
+    ? { ...existing, role: 'system', content: OUTSIDE_WORKSPACE_BUILD_WARNING, format: 'text' }
+    : { id: newId(), role: 'system', content: OUTSIDE_WORKSPACE_BUILD_WARNING, format: 'text', createdAt: Date.now() }
+
+  if (existingIdx === 0) {
+    const normalizedHead = warning
+    if (messages[0].content === normalizedHead.content && messages[0].format === 'text') return messages
+    return [normalizedHead, ...messages.slice(1)]
+  }
+
+  if (existingIdx > 0) {
+    return [warning, ...messages.slice(0, existingIdx), ...messages.slice(existingIdx + 1)]
+  }
+
+  return [warning, ...messages]
+}
+
+export function makeDefaultPanel(
+  id: string,
+  cwd: string,
+  initialModel?: string,
+  historyId = newId(),
+  cursorAllowBuilds = false,
+): AgentPanelState {
   const model = initialModel ?? DEFAULT_MODEL
   const provider = getModelProvider(model)
+  const baseMessages: ChatMessage[] = [
+    {
+      id: newId(),
+      role: 'system',
+      content: `Model: ${model}`,
+      format: 'text',
+      createdAt: Date.now(),
+    },
+  ]
+  const messages = cursorAllowBuilds ? withOutsideWorkspaceBuildWarning(baseMessages) : baseMessages
 
   return {
     id,
@@ -1676,15 +1723,7 @@ export function makeDefaultPanel(id: string, cwd: string, initialModel?: string,
     status: 'Not connected',
     connected: false,
     streaming: false,
-    messages: [
-      {
-        id: newId(),
-        role: 'system',
-        content: `Model: ${model}`,
-        format: 'text',
-        createdAt: Date.now(),
-      },
-    ],
+    messages,
     attachments: [],
     input: '',
     pendingInputs: [],
@@ -1695,10 +1734,23 @@ export function makeDefaultPanel(id: string, cwd: string, initialModel?: string,
 
 export function withModelBanner(messages: ChatMessage[], model: string): ChatMessage[] {
   const banner = `${MODEL_BANNER_PREFIX}${model}`
-  if (messages[0]?.role === 'system' && messages[0].content.startsWith(MODEL_BANNER_PREFIX)) {
-    return [{ ...messages[0], content: banner, format: 'text' }, ...messages.slice(1)]
+  const hasOutsideWorkspaceBuildWarning = isOutsideWorkspaceBuildWarningMessage(messages[0])
+  const modelBannerIndex = hasOutsideWorkspaceBuildWarning ? 1 : 0
+  if (
+    messages[modelBannerIndex]?.role === 'system' &&
+    messages[modelBannerIndex].content.startsWith(MODEL_BANNER_PREFIX)
+  ) {
+    return [
+      ...messages.slice(0, modelBannerIndex),
+      { ...messages[modelBannerIndex], content: banner, format: 'text' },
+      ...messages.slice(modelBannerIndex + 1),
+    ]
   }
-  return [{ id: newId(), role: 'system', content: banner, format: 'text', createdAt: Date.now() }, ...messages]
+  return [
+    ...messages.slice(0, modelBannerIndex),
+    { id: newId(), role: 'system', content: banner, format: 'text', createdAt: Date.now() },
+    ...messages.slice(modelBannerIndex),
+  ]
 }
 
 function buildDefaultWorkspaceSettings(path: string): WorkspaceSettings {

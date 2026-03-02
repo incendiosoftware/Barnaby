@@ -3,7 +3,6 @@ import { EventEmitter } from 'node:events'
 import readline from 'node:readline'
 import path from 'node:path'
 import { logModelPayloadAudit } from './modelPayloadLogger'
-import { writeCursorCliConfig } from './permissions'
 
 type JsonRpcId = number
 
@@ -30,6 +29,7 @@ export type FireHarnessCodexEvent =
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
   | { type: 'thinking'; message: string }
+  | { type: 'promptPreview'; content: string; format: 'text' | 'json' }
   | { type: 'planUpdated'; plan: unknown }
   | { type: 'rawNotification'; method: string; params?: unknown }
 
@@ -76,6 +76,13 @@ export class CodexAppServerClient extends EventEmitter {
 
   emitEvent(evt: FireHarnessCodexEvent) {
     this.emit('event', evt)
+  }
+
+  private emitPromptPreview(content: string, format: 'text' | 'json' = 'text') {
+    if (!this.showWorkspaceContextInPrompt) return
+    const redacted = String(content ?? '').replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g, '[data-url-redacted]')
+    if (!redacted.trim()) return
+    this.emitEvent({ type: 'promptPreview', content: redacted, format })
   }
 
   private resetTurnInactivityTimer() {
@@ -179,24 +186,19 @@ export class CodexAppServerClient extends EventEmitter {
     this.sendNotification('initialized', {})
 
     // Create the thread and let approval policy come from workspace permission settings.
+    // When allowBuildCommands is enabled, pass danger-full-access so Codex can spawn build
+    // processes (npm, esbuild, etc.) without OS sandbox blocking (e.g. spawn EPERM on Windows).
+    const effectiveSandbox =
+      options.cursorAllowBuilds === true
+        ? 'danger-full-access'
+        : (options.sandbox ?? 'workspace-write')
     const threadStart = await this.sendRequest('thread/start', {
       model: options.model,
       cwd: options.cwd,
       approvalPolicy:
         options.approvalPolicy ??
         (this.permissionMode === 'proceed-always' ? 'never' : 'on-request'),
-      sandbox: options.sandbox ?? 'workspace-write',
-    })
-
-    writeCursorCliConfig({
-      cwd: options.cwd,
-      permissionMode: this.permissionMode,
-      allowedCommandPrefixes: this.allowedCommandPrefixes,
-      allowedAutoReadPrefixes: this.allowedAutoReadPrefixes,
-      allowedAutoWritePrefixes: this.allowedAutoWritePrefixes,
-      deniedAutoReadPrefixes: this.deniedAutoReadPrefixes,
-      deniedAutoWritePrefixes: this.deniedAutoWritePrefixes,
-      cursorAllowBuilds: options.cursorAllowBuilds ?? false,
+      sandbox: effectiveSandbox,
     })
 
     const threadId = (threadStart as any)?.thread?.id
@@ -220,6 +222,7 @@ export class CodexAppServerClient extends EventEmitter {
       threadId: this.threadId,
       input: [{ type: 'text', text: inputText }],
     }
+    this.emitPromptPreview(JSON.stringify(requestPayload), 'json')
     logModelPayloadAudit({
       provider: 'codex-app-server',
       endpoint: 'turn/start',
@@ -250,6 +253,7 @@ export class CodexAppServerClient extends EventEmitter {
       threadId: this.threadId,
       input,
     }
+    this.emitPromptPreview(JSON.stringify(requestPayload), 'json')
     logModelPayloadAudit({
       provider: 'codex-app-server',
       endpoint: 'turn/start',

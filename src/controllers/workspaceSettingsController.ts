@@ -36,6 +36,7 @@ function normalizeWorkspaceSettingsForm(form: WorkspaceSettings): WorkspaceSetti
     allowedAutoWritePrefixes: normalizeAllowedCommandPrefixes(form.allowedAutoWritePrefixes),
     deniedAutoReadPrefixes: normalizeAllowedCommandPrefixes(form.deniedAutoReadPrefixes),
     deniedAutoWritePrefixes: normalizeAllowedCommandPrefixes(form.deniedAutoWritePrefixes),
+    cursorAllowBuilds: form.cursorAllowBuilds === true,
   }
 }
 

@@ -28,6 +28,7 @@ export interface TimelineMessageRowProps {
   isDebugSystemNote: boolean
   isLimitSystemWarning: boolean
   isContextCompactionNotice: boolean
+  isOutsideWorkspaceBuildWarning: boolean
   canShowGrantPermissionButton: boolean
   messageContainerStyle: React.CSSProperties | undefined
   showCompletedDurationOnMessage: boolean
@@ -68,6 +69,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
     isDebugSystemNote,
     isLimitSystemWarning,
     isContextCompactionNotice,
+    isOutsideWorkspaceBuildWarning,
     canShowGrantPermissionButton,
     messageContainerStyle,
     showCompletedDurationOnMessage,
@@ -203,6 +205,9 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
         isContextCompactionNotice
           ? 'bg-cyan-50/95 border-cyan-300 text-cyan-900 dark:bg-cyan-950/35 dark:border-cyan-800 dark:text-cyan-200'
           : '',
+        isOutsideWorkspaceBuildWarning
+          ? 'bg-red-50/95 border-red-300 text-red-900 dark:bg-red-950/35 dark:border-red-800 dark:text-red-200'
+          : '',
         isDebugSystemNote
           ? 'border-red-200 text-red-900 dark:border-red-900 dark:text-red-200'
           : '',
@@ -274,6 +279,8 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
                       ? 'font-semibold text-amber-900 dark:text-amber-200'
                       : isContextCompactionNotice
                         ? 'font-semibold text-cyan-900 dark:text-cyan-200'
+                        : isOutsideWorkspaceBuildWarning
+                          ? 'font-semibold text-red-900 dark:text-red-200'
                         : 'text-neutral-700 dark:text-neutral-300'
                     }`}
                   style={isDebugSystemNote ? { color: debugNoteColor } : undefined}
@@ -293,7 +300,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
             )}
           </div>
         ) : content ? (
-          <div className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${isDebugSystemNote ? 'italic text-red-800 dark:text-red-200' : ''}`}>
+          <div className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${isDebugSystemNote ? 'italic text-red-800 dark:text-red-200' : isOutsideWorkspaceBuildWarning ? 'font-semibold text-red-900 dark:text-red-200' : ''}`}>
             {canShowGrantPermissionButton ? (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{content}</span>

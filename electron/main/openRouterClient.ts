@@ -13,6 +13,7 @@ export type OpenRouterClientEvent =
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
   | { type: 'thinking'; message: string }
+  | { type: 'promptPreview'; content: string; format: 'text' | 'json' }
 
 export type OpenRouterConnectOptions = {
   cwd: string
@@ -65,6 +66,13 @@ export class OpenRouterClient extends EventEmitter {
 
   emitEvent(evt: OpenRouterClientEvent) {
     this.emit('event', evt)
+  }
+
+  private emitPromptPreview(content: string, format: 'text' | 'json' = 'text') {
+    if (!this.showWorkspaceContextInPrompt) return
+    const redacted = String(content ?? '').replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g, '[data-url-redacted]')
+    if (!redacted.trim()) return
+    this.emitEvent({ type: 'promptPreview', content: redacted, format })
   }
 
   async connect(options: OpenRouterConnectOptions) {
@@ -213,6 +221,7 @@ export class OpenRouterClient extends EventEmitter {
         stream: true,
       }
       const serializedPayload = JSON.stringify(requestBody)
+      if (attempt === 0) this.emitPromptPreview(serializedPayload, 'json')
       logModelPayloadAudit({
         provider: 'openrouter',
         endpoint: '/chat/completions',

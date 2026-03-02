@@ -1,6 +1,7 @@
 import type React from 'react'
 import type { AgentPanelState, DockLayoutState, DockPanelId, DockZoneId, DropTargetHint, LayoutMode, PermissionMode, SandboxMode, WorkspaceSettings } from '../types'
 import { getZoneForPanel, migratePanelsOnSplit, normalizeDockLayout } from '../utils/dockLayout'
+import { withOutsideWorkspaceBuildWarning } from '../utils/appCore'
 
 export type DockDropTarget = { zoneId: DockZoneId; hint: DropTargetHint }
 export type DragOverTarget = DockDropTarget | string | null
@@ -64,6 +65,9 @@ export function createPanelLayoutController(ctx: PanelLayoutControllerContext): 
     p.model = startupModel
     p.provider = ctx.getModelProvider(startupModel)  // Lock provider based on initial model
     p.messages = ctx.withModelBanner(p.messages, startupModel)
+    if (ws?.cursorAllowBuilds === true) {
+      p.messages = withOutsideWorkspaceBuildWarning(p.messages)
+    }
     p.interactionMode = ctx.parseInteractionMode(sourcePanel?.interactionMode)
     p.permissionMode = sourcePanel?.permissionMode ?? ws?.permissionMode ?? p.permissionMode
     p.sandbox = sourcePanel?.sandbox ?? ws?.sandbox ?? p.sandbox

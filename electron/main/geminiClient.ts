@@ -93,6 +93,7 @@ export type GeminiClientEvent =
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
   | { type: 'thinking'; message: string }
+  | { type: 'promptPreview'; content: string; format: 'text' | 'json' }
   | { type: 'contextCompacting'; detail?: string }
   | { type: 'contextCompacted'; detail?: string }
 
@@ -128,6 +129,7 @@ export class GeminiClient extends EventEmitter {
   private hasActiveSession: boolean = false
   /** Path to the temp policy file containing the stable system prompt. */
   private policyFilePath: string | null = null
+  private stableSystemPrompt = ''
 
   private static TURN_INACTIVITY_TIMEOUT_MS = 180_000
   private turnInactivityTimer: ReturnType<typeof setTimeout> | null = null
@@ -199,6 +201,13 @@ export class GeminiClient extends EventEmitter {
     this.emit('event', evt)
   }
 
+  private emitPromptPreview(content: string, format: 'text' | 'json' = 'text') {
+    if (!this.showWorkspaceContextInPrompt) return
+    const redacted = String(content ?? '').replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g, '[data-url-redacted]')
+    if (!redacted.trim()) return
+    this.emitEvent({ type: 'promptPreview', content: redacted, format })
+  }
+
   async connect(options: GeminiConnectOptions) {
     const requestedModel = options.model || 'gemini-2.0-flash'
     const normalized = this.normalizeModelId(requestedModel)
@@ -242,6 +251,15 @@ export class GeminiClient extends EventEmitter {
     this.history.push({ role: 'user', text: fullMessage })
 
     const prompt = this.buildGeminiPrompt(fullMessage, options?.interactionMode, options?.gitStatus)
+    this.emitPromptPreview(
+      [
+        '[Stable system prompt]',
+        this.stableSystemPrompt,
+        '[Turn prompt]',
+        prompt,
+      ].join('\n\n'),
+      'text',
+    )
     const isResume = this.hasActiveSession
     await this.runTurn(prompt, isResume)
   }
@@ -255,6 +273,15 @@ export class GeminiClient extends EventEmitter {
     this.history.push({ role: 'user', text: fullMessage })
 
     const prompt = this.buildGeminiPrompt(fullMessage, options?.interactionMode, options?.gitStatus)
+    this.emitPromptPreview(
+      [
+        '[Stable system prompt]',
+        this.stableSystemPrompt,
+        '[Turn prompt]',
+        prompt,
+      ].join('\n\n'),
+      'text',
+    )
     const isResume = this.hasActiveSession
     await this.runTurn(prompt, isResume)
   }
@@ -547,6 +574,7 @@ export class GeminiClient extends EventEmitter {
       interactionMode: this.interactionMode,
       additionalSystemPrompt: this.systemPrompt,
     })
+    this.stableSystemPrompt = stablePrompt
     const tmpDir = os.tmpdir()
     this.policyFilePath = path.join(tmpDir, `barnaby-gemini-policy-${Date.now()}.md`)
     fs.writeFileSync(this.policyFilePath, stablePrompt, 'utf8')

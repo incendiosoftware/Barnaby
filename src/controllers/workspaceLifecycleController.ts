@@ -136,7 +136,7 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
 
   function makeWorkspaceDefaultPanel(nextWorkspaceRoot: string) {
     const ws = ctx.workspaceSettingsByPath[nextWorkspaceRoot]
-    const panel = makeDefaultPanel('default', nextWorkspaceRoot)
+    const panel = makeDefaultPanel('default', nextWorkspaceRoot, undefined, undefined, ws?.cursorAllowBuilds === true)
     if (ws?.defaultModel) {
       panel.model = ws.defaultModel
       panel.messages = withModelBanner(panel.messages, ws.defaultModel)

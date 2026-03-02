@@ -14,7 +14,7 @@ import {
   CONTEXT_COMPACTION_NOTICE_PREFIX,
   isPermissionEscalationMessage,
   LIMIT_WARNING_PREFIX,
-  TRANSCRIPT_SAVED_PREFIX,
+  OUTSIDE_WORKSPACE_BUILD_WARNING_PREFIX,
 } from '../../../utils/appCore'
 
 export interface TimelineUnitRowProps {
@@ -122,7 +122,8 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
   const isDebugSystemNote = m.role === 'system' && /^Debug \(/.test(m.content)
   const isLimitSystemWarning = m.role === 'system' && m.content.startsWith(LIMIT_WARNING_PREFIX)
   const isContextCompactionNotice = m.role === 'system' && m.content.startsWith(CONTEXT_COMPACTION_NOTICE_PREFIX)
-  const isTranscriptSavedNotice = m.role === 'system' && m.content.startsWith(TRANSCRIPT_SAVED_PREFIX)
+  const isOutsideWorkspaceBuildWarning =
+    m.role === 'system' && m.content.startsWith(OUTSIDE_WORKSPACE_BUILD_WARNING_PREFIX)
   const isApprovalRequiredMessage = m.role === 'system' && isPermissionEscalationMessage(m.content)
   const canShowGrantPermissionButton =
     isApprovalRequiredMessage && !props.isStreaming && props.permissionMode !== 'proceed-always' && !props.actionsLocked
@@ -158,6 +159,7 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
       isDebugSystemNote={isDebugSystemNote}
       isLimitSystemWarning={isLimitSystemWarning}
       isContextCompactionNotice={isContextCompactionNotice}
+      isOutsideWorkspaceBuildWarning={isOutsideWorkspaceBuildWarning}
       canShowGrantPermissionButton={canShowGrantPermissionButton}
       messageContainerStyle={messageContainerStyle}
       showCompletedDurationOnMessage={showCompletedDurationOnMessage}

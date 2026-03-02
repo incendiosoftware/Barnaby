@@ -943,11 +943,8 @@ export function AppModals(props: AppModalsProps) {
                           }))
                         }
                       />
-                      Allow builds in Cursor (disables sandbox for this workspace)
+                      Allow build commands outside workspace (requires new chat session)
                     </label>
-                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                      Use when Cursor Agent fails with spawn EPERM on Windows.
-                    </p>
                   </div>
                 </div>
               )}
@@ -964,11 +961,6 @@ export function AppModals(props: AppModalsProps) {
                     <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
                       One prefix per line. Leave blank to allow all commands.
                     </p>
-                    {workspaceForm.permissionMode === 'proceed-always' && (
-                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                        If builds fail with EPERM on Windows: Enable Cursor Settings &gt; Agents &gt; Inline Editing &amp; Terminal &gt; Legacy Terminal Tool. This makes the command allowlist apply correctly.
-                      </p>
-                    )}
                   </div>
                 </div>
               )}

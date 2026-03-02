@@ -15,6 +15,7 @@ export type OpenAIClientEvent =
   | { type: 'assistantCompleted' }
   | { type: 'usageUpdated'; usage: unknown }
   | { type: 'thinking'; message: string }
+  | { type: 'promptPreview'; content: string; format: 'text' | 'json' }
 
 export type OpenAIConnectOptions = {
   cwd: string
@@ -70,6 +71,13 @@ export class OpenAIClient extends EventEmitter {
 
   emitEvent(evt: OpenAIClientEvent) {
     this.emit('event', evt)
+  }
+
+  private emitPromptPreview(content: string, format: 'text' | 'json' = 'text') {
+    if (!this.showWorkspaceContextInPrompt) return
+    const redacted = String(content ?? '').replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g, '[data-url-redacted]')
+    if (!redacted.trim()) return
+    this.emitEvent({ type: 'promptPreview', content: redacted, format })
   }
 
   async connect(options: OpenAIConnectOptions) {
@@ -272,6 +280,7 @@ export class OpenAIClient extends EventEmitter {
         stream: true,
       }
       const serializedPayload = JSON.stringify(requestBody)
+      if (attempt === 0) this.emitPromptPreview(serializedPayload, 'json')
       logModelPayloadAudit({
         provider: 'openai',
         endpoint: '/chat/completions',

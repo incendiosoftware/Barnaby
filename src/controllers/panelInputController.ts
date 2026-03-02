@@ -3,8 +3,6 @@ import type {
   AgentInteractionMode,
   AgentPanelState,
   ChatMessage,
-  PermissionMode,
-  SandboxMode,
 } from '../types'
 import { INTERACTION_MODE_META } from '../constants'
 import {
@@ -25,7 +23,6 @@ export interface PanelInputControllerContext {
   lastScrollToUserMessageRef: React.MutableRefObject<{ panelId: string; messageId: string } | null>
   setPanels: React.Dispatch<React.SetStateAction<AgentPanelState[]>>
   setInputDraftEditByPanel: React.Dispatch<React.SetStateAction<Record<string, any>>>
-  setSettingsPopoverByPanel: React.Dispatch<React.SetStateAction<Record<string, any>>>
   setResendingPanelId: React.Dispatch<React.SetStateAction<string | null>>
   autoResizeTextarea: (panelId: string) => void
   upsertPanelToHistory: (panel: AgentPanelState) => void
@@ -35,12 +32,7 @@ export interface PanelInputControllerContext {
   sendToAgent: (panelId: string, text: string, imagePaths?: string[]) => Promise<void>
   appendPanelDebug: (panelId: string, stage: string, detail: string) => void
   getModelProvider: (modelId: string) => string
-  getWorkspaceSecurityLimitsForPath: (path: string) => { sandbox: SandboxMode; permissionMode: PermissionMode }
-  clampPanelSecurityForWorkspace: (
-    cwd: string,
-    sandbox: SandboxMode,
-    permissionMode: PermissionMode,
-  ) => { sandbox: SandboxMode; permissionMode: PermissionMode }
+  getWorkspaceSecurityLimitsForPath: (path: string) => { sandbox: 'read-only' | 'workspace-write'; permissionMode: 'verify-first' | 'proceed-always' }
 }
 
 export interface PanelInputController {
@@ -54,8 +46,6 @@ export interface PanelInputController {
   grantPermissionAndResend: (panelId: string) => void
   summarizeSessionContext: (winId: string) => void
   setInteractionMode: (panelId: string, nextMode: AgentInteractionMode) => void
-  setPanelSandbox: (panelId: string, next: SandboxMode) => void
-  setPanelPermission: (panelId: string, next: PermissionMode) => void
 }
 
 export function createPanelInputController(ctx: PanelInputControllerContext): PanelInputController {
@@ -391,28 +381,12 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
             ? p
             : {
                 ...p,
-                permissionMode: 'verify-first',
-                status: 'Permissions are locked to Verify first by Workspace settings.',
+                status: 'Permissions are managed in Workspace settings. Set Permissions to Proceed always there, then resend.',
               },
         ),
       )
       return
     }
-    ctx.setPanels((prev) =>
-      prev.map((p) =>
-        p.id !== panelId
-          ? p
-          : (() => {
-              const clamped = ctx.clampPanelSecurityForWorkspace(p.cwd, p.sandbox, 'proceed-always')
-              return {
-                ...p,
-                permissionMode: clamped.permissionMode,
-                connected: false,
-                status: 'Permissions set: Proceed always (reconnect on next send).',
-              }
-            })(),
-      ),
-    )
     setTimeout(() => resendLastUserMessage(panelId), 0)
   }
 
@@ -504,79 +478,6 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
     )
   }
 
-  function setPanelSandbox(panelId: string, next: SandboxMode) {
-    ctx.setPanels((prev) =>
-      prev.map((p) =>
-        p.id !== panelId
-          ? p
-          : (() => {
-              const limits = ctx.getWorkspaceSecurityLimitsForPath(p.cwd)
-              if (limits.sandbox === 'read-only') {
-                return {
-                  ...p,
-                  status: 'Sandbox is locked to View. Expand sandbox in Workspace settings.',
-                }
-              }
-              const clamped = ctx.clampPanelSecurityForWorkspace(
-                p.cwd,
-                next,
-                next === 'read-only' ? 'verify-first' : p.permissionMode,
-              )
-              const status =
-                next === 'read-only'
-                  ? 'Sandbox set to read-only. Permissions locked to Verify first.'
-                  : limits.permissionMode === 'verify-first'
-                    ? 'Sandbox set to workspace-write. Permissions remain locked to Verify first by Workspace settings.'
-                    : `Sandbox set to ${next} (reconnect on next send).`
-              return {
-                ...p,
-                sandbox: clamped.sandbox,
-                permissionMode: clamped.permissionMode,
-                connected: false,
-                status,
-              }
-            })(),
-      ),
-    )
-    ctx.setSettingsPopoverByPanel((prev) => ({ ...prev, [panelId]: null }))
-  }
-
-  function setPanelPermission(panelId: string, next: PermissionMode) {
-    ctx.setPanels((prev) =>
-      prev.map((p) =>
-        p.id !== panelId
-          ? p
-          : (() => {
-              const limits = ctx.getWorkspaceSecurityLimitsForPath(p.cwd)
-              if (limits.sandbox === 'read-only') {
-                return {
-                  ...p,
-                  status: 'Permissions are disabled because workspace sandbox is Read only.',
-                }
-              }
-              if (limits.permissionMode === 'verify-first' && next === 'proceed-always') {
-                return {
-                  ...p,
-                  permissionMode: 'verify-first',
-                  status: 'Permissions are locked to Verify first by Workspace settings.',
-                }
-              }
-              const clamped = ctx.clampPanelSecurityForWorkspace(p.cwd, p.sandbox, next)
-              return {
-                ...p,
-                permissionMode: clamped.permissionMode,
-                connected: false,
-                status:
-                  clamped.permissionMode === 'proceed-always'
-                    ? 'Permissions set: Proceed always (reconnect on next send).'
-                    : 'Permissions set: Verify first (reconnect on next send).',
-              }
-            })(),
-      ),
-    )
-    ctx.setSettingsPopoverByPanel((prev) => ({ ...prev, [panelId]: null }))
-  }
-
   return {
     injectQueuedMessage,
     beginQueuedMessageEdit,
@@ -588,7 +489,5 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
     grantPermissionAndResend,
     summarizeSessionContext,
     setInteractionMode,
-    setPanelSandbox,
-    setPanelPermission,
   }
 }

@@ -175,14 +175,8 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
   const assistantMessageContainerStyle =
     role === 'assistant' && !shouldCollapseThinking
       ? {
-        backgroundColor:
-          activeTheme.mode === 'dark'
-            ? 'var(--theme-assistant-bubble-bg-dark, color-mix(in srgb, var(--theme-accent-soft-dark) 45%, var(--theme-dark-900)))'
-            : 'var(--theme-assistant-bubble-bg-light, color-mix(in srgb, var(--theme-accent-soft) 34%, white))',
-        borderColor:
-          activeTheme.mode === 'dark'
-            ? 'color-mix(in srgb, var(--theme-accent-500) 24%, var(--theme-dark-900))'
-            : 'color-mix(in srgb, var(--theme-accent-500) 18%, white)',
+        backgroundColor: activeTheme.assistantBubbleBg,
+        borderColor: activeTheme.borderStrong,
       }
       : undefined
   const mergedMessageContainerStyle: React.CSSProperties = {

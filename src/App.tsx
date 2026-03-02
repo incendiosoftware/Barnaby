@@ -118,9 +118,6 @@ import type {
   ProviderRegistry,
   SandboxMode,
   StandaloneTheme,
-  Theme,
-  ThemeEditableField,
-  ThemeOverrideValues,
   ThemeOverrides,
   WorkspaceDockSide,
   WorkspaceSettings,
@@ -145,7 +142,6 @@ import {
   CONTEXT_OUTPUT_RESERVE_RATIO,
   CONNECTIVITY_PROVIDERS,
   DEFAULT_BUILTIN_PROVIDER_CONFIGS,
-  DEFAULT_DIAGNOSTICS_MESSAGE_COLORS,
   DEFAULT_DIAGNOSTICS_VISIBILITY,
   DEFAULT_EXPLORER_PREFS,
   DEFAULT_GPT_CONTEXT_TOKENS,
@@ -161,7 +157,6 @@ import {
   DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES,
   FONT_SCALE_STEP,
   INPUT_MAX_HEIGHT_PX,
-  LEGACY_PRESET_TO_THEME_ID,
   MAX_AUTO_CONTINUE,
   MAX_EDITOR_FILE_SIZE_BYTES,
   MAX_EDITOR_PANELS,
@@ -198,7 +193,6 @@ import {
   PROVIDERS_API_ONLY,
 } from './constants'
 import { THEMES } from './constants/themes'
-import { THEME_PRESET_CSS } from './constants/themeStyles'
 import { ExplorerPane } from './components/ExplorerPane'
 import { GitPane } from './components/GitPane'
 import { WorkspaceSettingsPane } from './components/WorkspaceSettingsPane'
@@ -287,6 +281,7 @@ import {
   parsePersistedAppState,
   parsePersistedEditorPanel,
   pickString,
+  normalizeWorkspaceSettingsFromPartial,
   resolveProviderConfigs,
   resolveWorkspaceRelativePathFromChatHref,
   sanitizeThemeOverrides,
@@ -307,6 +302,7 @@ import {
   fileNameFromRelativePath,
   formatCheckedAt,
   toLocalFileUrl,
+  TRANSCRIPT_SAVED_PREFIX,
 } from './utils/appCore'
 import {
   estimatePanelContextUsage as estimatePanelContextUsageUtil,
@@ -454,7 +450,7 @@ export default function App() {
   const [lastPromptDurationMsByPanel, setLastPromptDurationMsByPanel] = useState<Record<string, number>>({})
   const [panelTurnCompleteAtById, setPanelTurnCompleteAtById] = useState<Record<string, number>>({})
   type InputDraftEditState = { kind: 'queued'; index: number } | { kind: 'recalled' }
-  const [settingsPopoverByPanel, setSettingsPopoverByPanel] = useState<Record<string, 'mode' | 'sandbox' | 'permission' | 'model' | null>>({})
+  const [settingsPopoverByPanel, setSettingsPopoverByPanel] = useState<Record<string, 'mode' | 'model' | null>>({})
   const [inputDraftEditByPanel, setInputDraftEditByPanel] = useState<Record<string, InputDraftEditState | null>>({})
   const [codeBlockOpenById, setCodeBlockOpenById] = useState<Record<string, boolean>>({})
   const [timelineOpenByUnitId, setTimelineOpenByUnitId] = useState<Record<string, boolean>>({})
@@ -555,6 +551,9 @@ export default function App() {
   const needsContextOnNextCodexSendRef = useRef<Record<string, boolean>>({})
   const workspaceRootRef = useRef(workspaceRoot)
   const workspaceListRef = useRef(workspaceList)
+  const workspaceFormRef = useRef(workspaceForm)
+  const workspaceFormSyncedRootRef = useRef(workspaceRoot)
+  const workspaceModalOpenRef = useRef(showWorkspaceModal)
   const activeWorkspaceLockRef = useRef('')
   const appStateHydratedRef = useRef(false)
   const appStateSaveTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
@@ -696,29 +695,41 @@ export default function App() {
 
   function toggleDockPanel(panelId: string) {
     const id = panelId as DockPanelId
-    if (!Object.keys(DOCK_PANEL_LABELS).includes(id)) return
-    const zone = getZoneForPanel(effectiveDockLayout, id)
-    if (zone) {
-      setDockLayout((prev) => {
-        const layout = normalizeDockLayout(prev)
-        const z = { ...layout.zones }
-        const tabs = z[zone]?.filter((t) => t !== id) ?? []
-        if (tabs.length === 0) delete z[zone]
-        else z[zone] = tabs
-        const at = { ...layout.activeTab }
-        if (at[zone] === id) at[zone] = tabs[0]
+    if (!Object.prototype.hasOwnProperty.call(DOCK_PANEL_LABELS, id)) return
+    setDockLayout((prev) => {
+      const layout = normalizeDockLayout(prev)
+      const z = { ...layout.zones }
+      const at = { ...layout.activeTab }
+      const existingZone = getZoneForPanel(layout, id)
+
+      if (existingZone) {
+        const tabs = z[existingZone]?.filter((tabId) => tabId !== id) ?? []
+        if (tabs.length === 0) {
+          delete z[existingZone]
+          delete at[existingZone]
+        } else {
+          z[existingZone] = tabs
+          if (at[existingZone] === id) at[existingZone] = tabs[0]
+        }
         return { ...prev, zones: z, activeTab: at }
-      })
-    } else {
-      setDockLayout((prev) => {
-        const layout = normalizeDockLayout(prev)
-        const z = { ...layout.zones }
-        const defaultZone = id === 'orchestrator' ? 'left-top' : id === 'workspace-folder' || id === 'workspace-settings' ? 'left-bottom' : id === 'application-settings' || id === 'source-control' ? 'right' : 'bottom'
-        const target = z[defaultZone] ?? []
-        z[defaultZone] = [...target, id]
-        return { ...prev, zones: z, activeTab: { ...layout.activeTab, [defaultZone]: id } }
-      })
-    }
+      }
+
+      const defaultZone =
+        id === 'orchestrator'
+          ? ('left-top' as const)
+          : id === 'workspace-folder' || id === 'workspace-settings'
+            ? ('left-bottom' as const)
+            : id === 'application-settings' || id === 'source-control'
+              ? (z.right ? 'right' : z['right-top'] ? 'right-top' : z['right-bottom'] ? 'right-bottom' : 'right')
+              : (z.bottom ? 'bottom' : z['bottom-left'] ? 'bottom-left' : z['bottom-right'] ? 'bottom-right' : 'bottom')
+
+      const targetTabs = z[defaultZone] ?? []
+      if (!targetTabs.includes(id)) {
+        z[defaultZone] = [...targetTabs, id]
+      }
+      at[defaultZone] = id
+      return { ...prev, zones: z, activeTab: at }
+    })
   }
   const [zoomLevel, setZoomLevel] = useState(0)
   const [draggingPanelId, setDraggingPanelId] = useState<string | null>(null)
@@ -762,7 +773,6 @@ export default function App() {
     }
     return catalogTheme
   }, [effectiveThemeId, themeCatalog, themeEditorDraft])
-  const effectiveTheme: Theme = activeTheme.mode
 
   // ── localStorage persistence (delegated to hook) ───────────────────
   useLocalStoragePersistence({
@@ -791,21 +801,43 @@ export default function App() {
     setThemeEditorDraft((prev) => (prev && prev.id === selectedTheme.id ? prev : cloneTheme(selectedTheme)))
   }, [themeCatalog, selectedThemeEditorId, applicationSettings.themeId])
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
-    void api.setWindowTheme?.(effectiveTheme).catch(() => { })
-  }, [api, effectiveTheme])
+    const root = document.documentElement
+    root.classList.toggle('dark', activeTheme.codeSyntax === 'dark')
+    root.style.colorScheme = activeTheme.codeSyntax
+    void api.setWindowTheme?.(activeTheme.codeSyntax).catch(() => { })
+  }, [api, activeTheme.codeSyntax])
   useEffect(() => {
     const root = document.documentElement
-    root.style.setProperty('--theme-accent-500', activeTheme.accent500)
-    root.style.setProperty('--theme-accent-600', activeTheme.accent600)
-    root.style.setProperty('--theme-accent-700', activeTheme.accent700)
-    root.style.setProperty('--theme-accent-text', activeTheme.accentText)
-    root.style.setProperty('--theme-accent-soft', activeTheme.accentSoft)
-    root.style.setProperty('--theme-accent-soft-dark', activeTheme.accentSoftDark)
-    root.style.setProperty('--theme-assistant-bubble-bg-light', activeTheme.assistantBubbleBgLight)
-    root.style.setProperty('--theme-assistant-bubble-bg-dark', activeTheme.assistantBubbleBgDark)
-    root.style.setProperty('--theme-dark-950', activeTheme.dark950)
-    root.style.setProperty('--theme-dark-900', activeTheme.dark900)
+    root.style.setProperty('--theme-accent', activeTheme.accent)
+    root.style.setProperty('--theme-accent-strong', activeTheme.accentStrong)
+    root.style.setProperty('--theme-accent-muted', activeTheme.accentMuted)
+    root.style.setProperty('--theme-accent-on-primary', activeTheme.accentOnPrimary)
+    root.style.setProperty('--theme-accent-tint', activeTheme.accentTint)
+    root.style.setProperty('--theme-bg-base', activeTheme.bgBase)
+    root.style.setProperty('--theme-bg-surface', activeTheme.bgSurface)
+    root.style.setProperty('--theme-bg-elevated', activeTheme.bgElevated)
+    root.style.setProperty('--theme-text-primary', activeTheme.textPrimary)
+    root.style.setProperty('--theme-text-secondary', activeTheme.textSecondary)
+    root.style.setProperty('--theme-text-tertiary', activeTheme.textTertiary)
+    root.style.setProperty('--theme-border-default', activeTheme.borderDefault)
+    root.style.setProperty('--theme-border-strong', activeTheme.borderStrong)
+    root.style.setProperty('--theme-assistant-bubble-bg', activeTheme.assistantBubbleBg)
+    root.style.setProperty('--theme-scrollbar-thumb', activeTheme.scrollbarThumb)
+    root.style.setProperty('--theme-scrollbar-track', activeTheme.scrollbarTrack)
+    root.style.setProperty('--ui-select-bg', activeTheme.bgSurface)
+    root.style.setProperty('--ui-select-fg', activeTheme.textPrimary)
+
+    // Temporary compatibility aliases while Tailwind utility migration is in progress.
+    root.style.setProperty('--theme-accent-500', activeTheme.accent)
+    root.style.setProperty('--theme-accent-600', activeTheme.accentStrong)
+    root.style.setProperty('--theme-accent-700', activeTheme.accentMuted)
+    root.style.setProperty('--theme-accent-text', activeTheme.accentOnPrimary)
+    root.style.setProperty('--theme-accent-soft', activeTheme.accentTint)
+    root.style.setProperty('--theme-accent-soft-dark', activeTheme.accentTint)
+    root.style.setProperty('--theme-assistant-bubble-bg-light', activeTheme.assistantBubbleBg)
+    root.style.setProperty('--theme-assistant-bubble-bg-dark', activeTheme.assistantBubbleBg)
+    root.style.setProperty('--theme-dark-950', activeTheme.bgBase)
+    root.style.setProperty('--theme-dark-900', activeTheme.bgSurface)
   }, [activeTheme])
   useEffect(() => {
     const chat = FONT_OPTIONS.find((f) => f.id === applicationSettings.fontChat) ?? FONT_OPTIONS[0]
@@ -827,6 +859,15 @@ export default function App() {
   useEffect(() => {
     api.setRecentWorkspaces?.(workspaceList)
   }, [workspaceList, api])
+  useEffect(() => {
+    const dockPanelVisibility = Object.fromEntries(
+      (Object.keys(DOCK_PANEL_LABELS) as DockPanelId[]).map((panelId) => [
+        panelId,
+        Boolean(getZoneForPanel(effectiveDockLayout, panelId)),
+      ]),
+    )
+    api.setDockPanelMenuState?.(dockPanelVisibility)
+  }, [api, effectiveDockLayout])
   useEffect(() => {
     void api.syncOrchestratorSettings?.(orchestratorSettings)
   }, [api, orchestratorSettings])
@@ -855,6 +896,7 @@ export default function App() {
   // ── Ref syncs ─────────────────────────────────────────────────────
   useEffect(() => { workspaceRootRef.current = workspaceRoot }, [workspaceRoot])
   useEffect(() => { workspaceListRef.current = workspaceList }, [workspaceList])
+  useEffect(() => { workspaceFormRef.current = workspaceForm }, [workspaceForm])
 
   // ── UI side-effects ───────────────────────────────────────────────
   useEffect(() => {
@@ -882,6 +924,81 @@ export default function App() {
     if (!workspaceRoot || workspaceList.includes(workspaceRoot)) return
     setWorkspaceList((prev) => [...new Set([workspaceRoot, ...prev])])
   }, [workspaceRoot])
+
+  useEffect(() => {
+    const modalJustClosed = workspaceModalOpenRef.current && !showWorkspaceModal
+    workspaceModalOpenRef.current = showWorkspaceModal
+    if (!workspaceRoot || showWorkspaceModal) return
+
+    const normalizedWorkspaceRoot = normalizeWorkspacePathForCompare(workspaceRoot)
+    const normalizedSyncedRoot = normalizeWorkspacePathForCompare(workspaceFormSyncedRootRef.current || '')
+    const rootChanged = normalizedWorkspaceRoot !== normalizedSyncedRoot
+    workspaceFormSyncedRootRef.current = workspaceRoot
+
+    const currentForm = workspaceFormRef.current
+    const normalizedFormPath = normalizeWorkspacePathForCompare(currentForm.path || '')
+    if (!rootChanged && !modalJustClosed && normalizedFormPath !== normalizedWorkspaceRoot) return
+
+    const activeWorkspaceSettings = workspaceSettingsByPath[workspaceRoot]
+    const nextForm = normalizeWorkspaceSettingsFromPartial(workspaceRoot, {
+      ...(activeWorkspaceSettings ?? {}),
+      path: workspaceRoot,
+    })
+    const currentNormalizedForm = normalizeWorkspaceSettingsFromPartial(currentForm.path || workspaceRoot, currentForm)
+    if (JSON.stringify(currentNormalizedForm) === JSON.stringify(nextForm)) return
+
+    setWorkspaceForm(nextForm)
+    setWorkspaceFormTextDraft(workspaceSettingsToTextDraft(nextForm))
+  }, [workspaceRoot, workspaceSettingsByPath[workspaceRoot], showWorkspaceModal])
+
+  useEffect(() => {
+    const readWorkspaceTextFile = api.readWorkspaceTextFile
+    if (!readWorkspaceTextFile) return
+    const workspacePaths = [...new Set([workspaceRoot, ...workspaceList].map((p) => p.trim()).filter(Boolean))]
+    if (workspacePaths.length === 0) return
+    let cancelled = false
+
+    void (async () => {
+      const updates: Record<string, WorkspaceSettings> = {}
+      await Promise.all(
+        workspacePaths.map(async (workspacePath) => {
+          try {
+            const file = await readWorkspaceTextFile(workspacePath, '.agentorchestrator.json')
+            if (!file?.content?.trim()) return
+            const parsed = JSON.parse(file.content) as unknown
+            if (!parsed || typeof parsed !== 'object') return
+            const parsedRecord = parsed as Record<string, unknown>
+            const workspaceRaw =
+              parsedRecord.workspace && typeof parsedRecord.workspace === 'object'
+                ? (parsedRecord.workspace as Partial<WorkspaceSettings>)
+                : (parsedRecord as Partial<WorkspaceSettings>)
+            updates[workspacePath] = normalizeWorkspaceSettingsFromPartial(workspacePath, {
+              ...workspaceRaw,
+              path: workspacePath,
+            })
+          } catch {
+            // ignore missing/invalid workspace config
+          }
+        }),
+      )
+      if (cancelled || Object.keys(updates).length === 0) return
+      setWorkspaceSettingsByPath((prev) => {
+        let changed = false
+        const next = { ...prev }
+        for (const [workspacePath, settings] of Object.entries(updates)) {
+          const current = prev[workspacePath]
+          if (current && JSON.stringify(current) === JSON.stringify(settings)) continue
+          next[workspacePath] = settings
+          changed = true
+        }
+        return changed ? next : prev
+      })
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [api, workspaceRoot, workspaceList])
 
   useEffect(() => {
     if (!workspaceRoot) return
@@ -1301,7 +1418,7 @@ export default function App() {
         applicationSettings,
         themeOverrides,
       }
-      void api.saveAppState(payload).catch(() => {})
+      void api.saveAppState(payload).catch(() => { })
     }
     function flushAppStateSave() {
       if (appStateSaveTimerRef.current !== null) {
@@ -1460,7 +1577,10 @@ export default function App() {
     setPanels((prev) => {
       let changed = false
       const next = prev.map((panel) => {
-        const clamped = clampPanelSecurityForWorkspace(panel.cwd, panel.sandbox, panel.permissionMode)
+        const ws = workspaceSettingsByPath[panel.cwd] ?? workspaceSettingsByPath[workspaceRoot]
+        const wsSandbox = ws?.sandbox ?? panel.sandbox
+        const wsPermission = ws?.permissionMode ?? panel.permissionMode
+        const clamped = clampPanelSecurityForWorkspace(panel.cwd, wsSandbox, wsPermission)
         if (clamped.sandbox === panel.sandbox && clamped.permissionMode === panel.permissionMode) return panel
         changed = true
         return {
@@ -1916,6 +2036,70 @@ export default function App() {
     }
     if (!result?.canceled) {
       alert(result?.error ? `Could not save transcript: ${result.error}` : 'Could not save transcript.')
+    }
+  }
+
+  async function downloadPanelTranscript(panelId: string) {
+    const panel = panelsRef.current.find((p) => p.id === panelId)
+    if (!panel) return
+    if (!api.saveTranscriptDirect) {
+      alert('Transcript download is not available in this build.')
+      return
+    }
+    const title = getConversationPrecis(panel) || 'Untitled chat'
+    const safeTitle = toSafeTranscriptFileSegment(title)
+    const lines: string[] = []
+    lines.push('# Barnaby Conversation Transcript')
+    lines.push('')
+    lines.push(`Title: ${title}`)
+    lines.push(`Exported: ${new Date().toLocaleString()}`)
+    lines.push(`Workspace: ${panel.cwd || workspaceRoot || '(unknown)'}`)
+    lines.push(`Model: ${panel.model || '(unknown)'}`)
+    lines.push(`Permissions: ${panel.permissionMode}`)
+    lines.push(`Sandbox: ${panel.sandbox}`)
+    lines.push('')
+    lines.push('---')
+    lines.push('')
+    const messages = stripSyntheticAutoContinueMessages(panel.messages)
+    for (let i = 0; i < messages.length; i++) {
+      const message = messages[i]
+      const roleLabel = message.role === 'assistant' ? 'Assistant' : message.role === 'user' ? 'User' : 'System'
+      const createdAtLabel = formatTranscriptTime(message.createdAt)
+      lines.push(`## ${i + 1}. ${roleLabel}${createdAtLabel ? ` (${createdAtLabel})` : ''}`)
+      lines.push('')
+      const content = String(message.content ?? '').trim()
+      lines.push(content || '(no text)')
+      if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+        lines.push('')
+        lines.push('Attachments:')
+        for (const attachment of message.attachments) {
+          const label = attachment.label || 'attachment'
+          const filePath = attachment.path || '(no path)'
+          lines.push(`- ${label}: ${filePath}`)
+        }
+      }
+      lines.push('')
+    }
+    const transcript = lines.join('\n')
+    try {
+      const result = await api.saveTranscriptDirect(panel.cwd || workspaceRoot, safeTitle, transcript)
+      if (result?.ok && result.path) {
+        const notice = `${TRANSCRIPT_SAVED_PREFIX} ${result.path}`
+        setPanels((prev) =>
+          prev.map((p) =>
+            p.id !== panelId
+              ? p
+              : {
+                ...p,
+                messages: [...p.messages, { id: newId(), role: 'system', content: notice, format: 'text', createdAt: Date.now() }],
+              },
+          ),
+        )
+      } else {
+        alert(result?.error ? `Could not save transcript: ${result.error}` : 'Could not save transcript.')
+      }
+    } catch (err) {
+      alert(`Could not save transcript: ${formatError(err)}`)
     }
   }
 
@@ -2796,6 +2980,9 @@ export default function App() {
             onPermissionModeChange={(value) =>
               workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, permissionMode: value }))
             }
+            onCursorAllowBuildsChange={(value) =>
+              workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, cursorAllowBuilds: value }))
+            }
             onWorkspaceContextChange={(value) =>
               workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, workspaceContext: value }))
             }
@@ -3228,6 +3415,9 @@ export default function App() {
                 onPermissionModeChange={(value) =>
                   workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, permissionMode: value }))
                 }
+                onCursorAllowBuildsChange={(value) =>
+                  workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, cursorAllowBuilds: value }))
+                }
                 onWorkspaceContextChange={(value) =>
                   workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, workspaceContext: value }))
                 }
@@ -3516,7 +3706,6 @@ export default function App() {
     lastScrollToUserMessageRef,
     setPanels,
     setInputDraftEditByPanel,
-    setSettingsPopoverByPanel,
     setResendingPanelId,
     autoResizeTextarea,
     upsertPanelToHistory,
@@ -3527,7 +3716,6 @@ export default function App() {
     appendPanelDebug,
     getModelProvider,
     getWorkspaceSecurityLimitsForPath,
-    clampPanelSecurityForWorkspace,
   }), [
     panels,
     editorPanels,
@@ -3545,8 +3733,6 @@ export default function App() {
     grantPermissionAndResend,
     summarizeSessionContext,
     setInteractionMode,
-    setPanelSandbox,
-    setPanelPermission,
   } = panelInputCtrl
 
   function renderAgentOrchestratorPane() {
@@ -3610,7 +3796,7 @@ export default function App() {
     : 0
   const gitContextFileCountLabel = `${gitContextSelectedCount} ${gitContextSelectedCount === 1 ? 'file' : 'files'}`
   const headerDockToggleButtonClass = (isActive: boolean) =>
-    `h-9 w-9 inline-flex items-center justify-center rounded-lg shrink-0 ${isActive
+    `h-9 w-9 inline-flex items-center justify-center rounded-lg border-0 shrink-0 ${isActive
       ? 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100'
       : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'
     }`
@@ -3643,7 +3829,6 @@ export default function App() {
 
   return (
     <div className="theme-preset h-screen w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden flex flex-col bg-neutral-100 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
-      <style>{THEME_PRESET_CSS}</style>
       <AppHeaderBar
         workspaceDockButtonOnLeft={workspaceDockButtonOnLeft}
         toolsDockButtonsOnLeft={toolsDockButtonsOnLeft}
@@ -3671,6 +3856,7 @@ export default function App() {
         layoutMode={layoutMode}
         setLayoutMode={setLayoutMode}
         modelInterfaces={modelConfig.interfaces.filter(m => m.enabled)}
+        workspaceDefaultModel={workspaceSettingsByPath[workspaceRoot]?.defaultModel ?? DEFAULT_MODEL}
       />
 
       <div className="flex-1 flex flex-col min-h-0 min-w-0">
@@ -4288,6 +4474,7 @@ export default function App() {
           handleDragStart,
           handleDragEnd,
           splitAgentPanel,
+          downloadPanelTranscript,
           closePanel,
           registerMessageViewport,
           onMessageViewportScroll,
@@ -4315,8 +4502,6 @@ export default function App() {
           cancelDraftEdit,
           setSettingsPopoverByPanel,
           setInteractionMode,
-          setPanelSandbox,
-          setPanelPermission,
           switchModel,
           parseInteractionMode,
           getPanelSecurityState,

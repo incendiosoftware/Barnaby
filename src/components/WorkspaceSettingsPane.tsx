@@ -22,6 +22,7 @@ export interface WorkspaceSettingsPaneProps {
   onDefaultModelChange: (value: string) => void
   onSandboxChange: (value: SandboxMode) => void
   onPermissionModeChange: (value: PermissionMode) => void
+  onCursorAllowBuildsChange: (value: boolean) => void
   onWorkspaceContextChange: (value: string) => void
   onShowWorkspaceContextInPromptChange: (value: boolean) => void
   onSystemPromptChange: (value: string) => void
@@ -39,6 +40,7 @@ export function WorkspaceSettingsPane({
   onDefaultModelChange,
   onSandboxChange,
   onPermissionModeChange,
+  onCursorAllowBuildsChange,
   onWorkspaceContextChange,
   onShowWorkspaceContextInPromptChange,
   onSystemPromptChange,
@@ -61,20 +63,20 @@ export function WorkspaceSettingsPane({
           </button>
         )}
       </div>
-      <div className="flex-1 overflow-auto px-3 py-3">
-        <div className="space-y-3 text-xs">
-          <div className="space-y-1.5">
+      <div className="flex-1 min-w-0 overflow-auto overflow-x-hidden px-3 py-3">
+        <div className="min-w-0 space-y-3 text-xs">
+          <div className="min-w-0 space-y-1.5">
             <label className="text-neutral-600 dark:text-neutral-300">Folder location</label>
-            <div className="grid grid-cols-[1fr_auto] gap-2">
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
               <input
-                className={`w-full ${UI_INPUT_CLASS} font-mono text-xs`}
+                className={`w-full min-w-0 ${UI_INPUT_CLASS} font-mono text-xs`}
                 value={workspaceForm.path}
                 onChange={(e) => onPathChange(e.target.value)}
                 onBlur={(e) => onPathBlur(e.target.value)}
               />
               <button
                 type="button"
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-md border-0 bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                 onClick={onBrowse}
                 title="Browse for workspace folder"
                 aria-label="Browse for workspace folder"
@@ -86,10 +88,10 @@ export function WorkspaceSettingsPane({
               </button>
             </div>
           </div>
-          <div className="space-y-1.5">
+          <div className="min-w-0 space-y-1.5">
             <label className="text-neutral-600 dark:text-neutral-300">Default model</label>
             <select
-              className={`w-full ${UI_SELECT_CLASS}`}
+              className={`w-full min-w-0 ${UI_SELECT_CLASS}`}
               value={workspaceForm.defaultModel}
               onChange={(e) => onDefaultModelChange(e.target.value)}
             >
@@ -100,10 +102,10 @@ export function WorkspaceSettingsPane({
               ))}
             </select>
           </div>
-          <div className="space-y-1.5">
+          <div className="min-w-0 space-y-1.5">
             <label className="text-neutral-600 dark:text-neutral-300">Workspace context</label>
             <textarea
-              className={`w-full max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} text-xs`}
+              className={`w-full min-w-0 max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} text-xs`}
               value={workspaceForm.workspaceContext}
               onChange={(e) => onWorkspaceContextChange(e.target.value)}
               placeholder="Describe this workspace and its purpose."
@@ -117,19 +119,19 @@ export function WorkspaceSettingsPane({
               Show workspace context in prompt.
             </label>
           </div>
-          <div className="space-y-1.5">
+          <div className="min-w-0 space-y-1.5">
             <label className="text-neutral-600 dark:text-neutral-300">System prompt</label>
             <textarea
-              className={`w-full max-w-full min-h-[96px] resize-y ${UI_INPUT_CLASS} text-xs`}
+              className={`w-full min-w-0 max-w-full min-h-[96px] resize-y ${UI_INPUT_CLASS} text-xs`}
               value={workspaceForm.systemPrompt}
               onChange={(e) => onSystemPromptChange(e.target.value)}
               placeholder="Additional system instructions for agents in this workspace."
             />
           </div>
-          <div className="space-y-1.5">
+          <div className="min-w-0 space-y-1.5">
             <label className="text-neutral-600 dark:text-neutral-300">Sandbox</label>
             <select
-              className={`w-full ${UI_SELECT_CLASS}`}
+              className={`w-full min-w-0 ${UI_SELECT_CLASS}`}
               value={workspaceForm.sandbox}
               onChange={(e) => onSandboxChange(e.target.value as SandboxMode)}
             >
@@ -141,24 +143,35 @@ export function WorkspaceSettingsPane({
             </p>
           </div>
           {workspaceForm.sandbox !== 'read-only' && (
-            <div className="space-y-1.5">
+            <div className="min-w-0 space-y-1.5">
               <label className="text-neutral-600 dark:text-neutral-300">Permissions</label>
               <select
-                className={`w-full ${UI_SELECT_CLASS}`}
+                className={`w-full min-w-0 ${UI_SELECT_CLASS}`}
                 value={workspaceForm.permissionMode}
                 onChange={(e) => onPermissionModeChange(e.target.value as PermissionMode)}
               >
                 <option value="verify-first">Verify first (safer)</option>
                 <option value="proceed-always">Proceed always (autonomous)</option>
               </select>
+              <label className="inline-flex items-center gap-2 text-neutral-600 dark:text-neutral-300">
+                <input
+                  type="checkbox"
+                  checked={workspaceForm.cursorAllowBuilds ?? false}
+                  onChange={(e) => onCursorAllowBuildsChange(e.target.checked)}
+                />
+                Allow builds in Cursor (disables sandbox for this workspace)
+              </label>
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                Use when Cursor Agent fails with spawn EPERM on Windows.
+              </p>
             </div>
           )}
           {workspaceForm.sandbox !== 'read-only' && workspaceForm.permissionMode === 'proceed-always' && (
             <>
-              <div className="space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <label className="text-neutral-600 dark:text-neutral-300">Allowed command prefixes</label>
                 <textarea
-                  className={`w-full max-w-full min-h-[96px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
+                  className={`w-full min-w-0 max-w-full min-h-[96px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
                   value={workspaceFormTextDraft.allowedCommandPrefixes}
                   onChange={(e) => onTextDraftChange('allowedCommandPrefixes', e.target.value)}
                   placeholder={'npm run\nnpm test\ntsc\ngit status'}
@@ -167,42 +180,47 @@ export function WorkspaceSettingsPane({
                   One prefix per line. Leave blank to allow all commands in Proceed always mode.
                 </p>
               </div>
-              <div className="space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <label className="text-neutral-600 dark:text-neutral-300">Allowed auto-read paths</label>
                 <textarea
-                  className={`w-full max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
+                  className={`w-full min-w-0 max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
                   value={workspaceFormTextDraft.allowedAutoReadPrefixes}
                   onChange={(e) => onTextDraftChange('allowedAutoReadPrefixes', e.target.value)}
                   placeholder={'(Leave blank to allow reading any file)'}
                 />
               </div>
-              <div className="space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <label className="text-neutral-600 dark:text-neutral-300">Allowed auto-write paths</label>
                 <textarea
-                  className={`w-full max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
+                  className={`w-full min-w-0 max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
                   value={workspaceFormTextDraft.allowedAutoWritePrefixes}
                   onChange={(e) => onTextDraftChange('allowedAutoWritePrefixes', e.target.value)}
                   placeholder={'(Leave blank to allow editing any file)'}
                 />
               </div>
-              <div className="space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <label className="text-neutral-600 dark:text-neutral-300">Denied auto-read paths</label>
                 <textarea
-                  className={`w-full max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
+                  className={`w-full min-w-0 max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
                   value={workspaceFormTextDraft.deniedAutoReadPrefixes}
                   onChange={(e) => onTextDraftChange('deniedAutoReadPrefixes', e.target.value)}
                   placeholder={'../\n.env'}
                 />
               </div>
-              <div className="space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <label className="text-neutral-600 dark:text-neutral-300">Denied auto-write paths</label>
                 <textarea
-                  className={`w-full max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
+                  className={`w-full min-w-0 max-w-full min-h-[64px] resize-y ${UI_INPUT_CLASS} font-mono text-xs`}
                   value={workspaceFormTextDraft.deniedAutoWritePrefixes}
                   onChange={(e) => onTextDraftChange('deniedAutoWritePrefixes', e.target.value)}
                   placeholder={'../\n.env'}
                 />
               </div>
+              {workspaceForm.permissionMode === 'proceed-always' && (
+                <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                  If builds fail with EPERM on Windows: Enable Cursor Settings &gt; Agents &gt; Inline Editing &amp; Terminal &gt; Legacy Terminal Tool. This makes the command allowlist apply correctly.
+                </p>
+              )}
             </>
           )}
           <p className="text-[11px] text-neutral-500 dark:text-neutral-400">

@@ -76,7 +76,7 @@ export function GitPane({
   const commitTitle = hasSelection ? `Commit selected changes (${resolvedSelectedPaths.length})` : 'Commit all changes'
   const pushTitle = hasSelection ? `Push (commit selected ${resolvedSelectedPaths.length} first)` : 'Push'
   const iconBtnClass =
-    'h-8 w-8 inline-flex items-center justify-center rounded-md bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed'
+    'h-8 w-8 inline-flex items-center justify-center rounded-md border-0 bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed'
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
@@ -86,7 +86,7 @@ export function GitPane({
           {onClose && (
             <button
               type="button"
-              className="h-6 w-6 inline-flex items-center justify-center rounded text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
+              className="h-6 w-6 inline-flex items-center justify-center rounded border-0 text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
               onClick={onClose}
               title="Close"
               aria-label="Close"

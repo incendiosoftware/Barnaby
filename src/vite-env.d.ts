@@ -84,6 +84,7 @@ interface Window {
         workspaceContext?: string
         showWorkspaceContextInPrompt?: boolean
         systemPrompt?: string
+        cursorAllowBuilds?: boolean
         provider?: 'codex' | 'claude' | 'gemini' | 'openrouter'
         modelConfig?: Record<string, string>
         initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
@@ -106,6 +107,11 @@ interface Window {
     saveTranscriptFile(workspaceRoot: string, suggestedFileName: string, content: string): Promise<{
       ok: boolean
       canceled?: boolean
+      path?: string
+      error?: string
+    }>
+    saveTranscriptDirect(workspaceRoot: string, fileName: string, content: string): Promise<{
+      ok: boolean
       path?: string
       error?: string
     }>
@@ -232,6 +238,7 @@ interface Window {
     gitRelease(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }>
     setRecentWorkspaces(list: string[]): void
     setEditorMenuState(enabled: boolean): void
+    setDockPanelMenuState(visibility: Record<string, boolean>): void
     findInPage(text: string): Promise<void>
     showContextMenu(kind: 'input-selection' | 'chat-selection'): Promise<{ ok: boolean }>
     getProviderAuthStatus(config: ProviderConfigForAuth): Promise<ProviderAuthStatus>

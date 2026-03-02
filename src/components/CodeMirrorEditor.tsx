@@ -126,22 +126,23 @@ export function CodeMirrorEditor({
     () =>
       EditorView.theme({
         '&': {
-          backgroundColor: darkMode ? 'var(--theme-dark-900, rgb(23 23 23))' : 'rgb(255 255 255)',
-          color: darkMode ? 'color-mix(in srgb, #ffffff 90%, var(--theme-dark-900))' : 'rgb(23 23 23)',
+          backgroundColor: darkMode ? 'var(--theme-bg-surface, rgb(23 23 23))' : 'rgb(255 255 255)',
+          color: darkMode ? 'var(--theme-text-primary, rgb(245 245 245))' : 'rgb(23 23 23)',
         },
         '& .cm-content': {
           caretColor: darkMode ? 'rgb(248 250 252)' : 'rgb(23 23 23)',
         },
         '& .cm-gutters': {
-          color: darkMode ? 'color-mix(in srgb, #ffffff 50%, var(--theme-dark-900))' : 'rgb(115 115 115)',
+          color: darkMode ? 'var(--theme-text-tertiary, rgb(163 163 163))' : 'rgb(115 115 115)',
         },
       }),
     [darkMode],
   )
 
   const activeExtensions = useMemo(() => {
-    const arr = [...extensions, theme]
+    const arr = [...extensions]
     if (darkMode) arr.push(vscodeDark)
+    arr.push(theme)
     return arr
   }, [extensions, theme, darkMode])
 

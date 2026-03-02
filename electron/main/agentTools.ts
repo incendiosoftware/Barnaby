@@ -13,6 +13,10 @@ const AGENT_MAX_SEARCH_FILES = 1200
 const AGENT_DEFAULT_SHELL_TIMEOUT_MS = 120_000
 const AGENT_MAX_SHELL_TIMEOUT_MS = 300_000
 
+export function rewriteWindowsGrepCommand(command: string): string {
+  return command.replace(/(^|[|&;]\s*)grep(?=\s|$)/gi, '$1rg')
+}
+
 export type ToolDefinition = {
   type: 'function'
   function: {
@@ -36,6 +40,7 @@ export class AgentToolRunner {
   private permissionMode: string
   private allowedCommandPrefixes: string[]
   private mcpServerManager?: McpServerManager
+  private windowsRipgrepAvailable: boolean | null = null
 
   constructor(options: AgentToolRunnerOptions) {
     this.cwd = options.cwd
@@ -278,9 +283,13 @@ export class AgentToolRunner {
     if (!command) return 'Tool error: command is required.'
 
     if (this.allowedCommandPrefixes.length > 0) {
-      const allowed = this.allowedCommandPrefixes.some((prefix) => command.startsWith(prefix))
-      if (!allowed) {
-        return `Tool error: Command not in allowlist. Allowed prefixes: ${this.allowedCommandPrefixes.join(', ')}`
+      if (this.allowedCommandPrefixes.some((prefix) => prefix.trim() === '*')) {
+        // Explicit wildcard unlocks shell commands in proceed-always mode.
+      } else {
+        const allowed = this.allowedCommandPrefixes.some((prefix) => command.startsWith(prefix))
+        if (!allowed) {
+          return `Tool error: Command not in allowlist. Allowed prefixes: ${this.allowedCommandPrefixes.join(', ')}`
+        }
       }
     }
 
@@ -291,8 +300,21 @@ export class AgentToolRunner {
   }
 
   private async runShellCommandAsync(command: string, timeoutMs: number): Promise<string> {
+    let commandToRun = command
+    let compatNote = ''
+    if (process.platform === 'win32' && /(^|[|&;]\s*)grep(?=\s|$)/i.test(command)) {
+      const hasRipgrep = await this.hasWindowsRipgrep()
+      if (hasRipgrep) {
+        const rewritten = rewriteWindowsGrepCommand(command)
+        if (rewritten !== command) {
+          commandToRun = rewritten
+          compatNote = '[compat] Rewrote grep to rg for Windows command compatibility.'
+        }
+      }
+    }
+
     const shell = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh'
-    const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-lc', command]
+    const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', commandToRun] : ['-lc', commandToRun]
 
     try {
       const child = spawn(shell, shellArgs, {
@@ -338,15 +360,54 @@ export class AgentToolRunner {
       const result = await Promise.race([exit, timeout])
       if (timeoutHandle) clearTimeout(timeoutHandle)
       if ('timeout' in result) {
-        return `Command timed out after ${timeoutMs}ms.\n\nstdout:\n${stdout || '(empty)'}\n\nstderr:\n${stderr || '(empty)'}`
+        const body = `Command timed out after ${timeoutMs}ms.\n\nstdout:\n${stdout || '(empty)'}\n\nstderr:\n${stderr || '(empty)'}`
+        return compatNote ? `${compatNote}\n${body}` : body
       }
       const code = result.code ?? -1
       const signal = result.signal ?? ''
       const meta = `exit_code=${code}${signal ? ` signal=${signal}` : ''}${timedOut ? ' timeout=true' : ''}`
-      return `${meta}\n\nstdout:\n${stdout || '(empty)'}\n\nstderr:\n${stderr || '(empty)'}`
+      const body = `${meta}\n\nstdout:\n${stdout || '(empty)'}\n\nstderr:\n${stderr || '(empty)'}`
+      return compatNote ? `${compatNote}\n${body}` : body
     } catch (err) {
-      return `Tool error: Failed to run command: ${err instanceof Error ? err.message : String(err)}`
+      const body = `Tool error: Failed to run command: ${err instanceof Error ? err.message : String(err)}`
+      return compatNote ? `${compatNote}\n${body}` : body
     }
+  }
+
+  private async hasWindowsRipgrep(): Promise<boolean> {
+    if (process.platform !== 'win32') return false
+    if (this.windowsRipgrepAvailable !== null) return this.windowsRipgrepAvailable
+
+    const available = await new Promise<boolean>((resolve) => {
+      try {
+        const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'where rg'], {
+          cwd: this.cwd,
+          env: process.env,
+          windowsHide: true,
+          stdio: ['ignore', 'ignore', 'ignore'],
+        })
+        child.on('error', () => resolve(false))
+        child.on('exit', (code) => resolve(code === 0))
+      } catch {
+        resolve(false)
+      }
+    })
+
+    this.windowsRipgrepAvailable = available
+    return available
+  }
+
+  // exposed for tests
+  __setWindowsRipgrepAvailableForTests(value: boolean | null): void {
+    this.windowsRipgrepAvailable = value
+  }
+  // exposed for tests
+  async __hasWindowsRipgrepForTests(): Promise<boolean> {
+    return this.hasWindowsRipgrep()
+  }
+  // exposed for tests
+  async __runShellCommandAsyncForTests(command: string, timeoutMs: number): Promise<string> {
+    return this.runShellCommandAsync(command, timeoutMs)
   }
 
   private searchWorkspace(args: Record<string, unknown>): string {

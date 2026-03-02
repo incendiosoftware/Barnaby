@@ -47,6 +47,7 @@ import {
   DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES,
   DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES,
   DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES,
+  DEFAULT_WORKSPACE_CURSOR_ALLOW_BUILDS,
   DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES,
   DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES,
   DEFAULT_FONT_CODE,
@@ -91,6 +92,7 @@ export function getModelProvider(modelId: string): ConnectivityProvider {
 }
 
 export const LIMIT_WARNING_PREFIX = 'Warning (Limits):'
+export const TRANSCRIPT_SAVED_PREFIX = '📄 Transcript saved:'
 export const CONTEXT_COMPACTION_NOTICE_PREFIX = '⚙️ System Notice: The conversation history was getting too long.'
 export const CONTEXT_COMPACTION_NOTICE = `${CONTEXT_COMPACTION_NOTICE_PREFIX} Older messages have been compacted into a summary to save memory.`
 export const MANUAL_CONTEXT_COMPACTION_NOTICE =
@@ -1699,76 +1701,92 @@ export function withModelBanner(messages: ChatMessage[], model: string): ChatMes
   return [{ id: newId(), role: 'system', content: banner, format: 'text', createdAt: Date.now() }, ...messages]
 }
 
+function buildDefaultWorkspaceSettings(path: string): WorkspaceSettings {
+  return {
+    path,
+    defaultModel: DEFAULT_MODEL,
+    permissionMode: 'verify-first',
+    sandbox: 'workspace-write',
+    workspaceContext: '',
+    showWorkspaceContextInPrompt: false,
+    systemPrompt: '',
+    allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+    allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
+    allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
+    deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+    deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
+    cursorAllowBuilds: DEFAULT_WORKSPACE_CURSOR_ALLOW_BUILDS,
+  }
+}
+
+export function normalizeWorkspaceSettingsFromPartial(
+  fallbackPath: string,
+  value?: Partial<WorkspaceSettings> | null,
+): WorkspaceSettings {
+  const normalizedFallbackPath = typeof fallbackPath === 'string' ? fallbackPath.trim() : ''
+  const defaults = buildDefaultWorkspaceSettings(normalizedFallbackPath)
+  const v = value ?? {}
+  const path =
+    typeof v.path === 'string' && v.path.trim() ? v.path.trim() : normalizedFallbackPath || defaults.path
+  const sandbox: SandboxMode = v?.sandbox === 'read-only' ? 'read-only' : 'workspace-write'
+  const permissionMode: PermissionMode =
+    sandbox === 'read-only'
+      ? 'verify-first'
+      : v?.permissionMode === 'proceed-always'
+        ? 'proceed-always'
+        : 'verify-first'
+
+  const hasAllowedCommandPrefixes = Array.isArray(v?.allowedCommandPrefixes)
+  const hasAllowedAutoReadPrefixes = Array.isArray(v?.allowedAutoReadPrefixes)
+  const hasAllowedAutoWritePrefixes = Array.isArray(v?.allowedAutoWritePrefixes)
+  const hasDeniedAutoReadPrefixes = Array.isArray(v?.deniedAutoReadPrefixes)
+  const hasDeniedAutoWritePrefixes = Array.isArray(v?.deniedAutoWritePrefixes)
+  const allowedCommandPrefixes = normalizeAllowedCommandPrefixes(v?.allowedCommandPrefixes)
+  const allowedAutoReadPrefixes = normalizeAllowedCommandPrefixes(v?.allowedAutoReadPrefixes)
+  const allowedAutoWritePrefixes = normalizeAllowedCommandPrefixes(v?.allowedAutoWritePrefixes)
+  const deniedAutoReadPrefixes = normalizeAllowedCommandPrefixes(v?.deniedAutoReadPrefixes)
+  const deniedAutoWritePrefixes = normalizeAllowedCommandPrefixes(v?.deniedAutoWritePrefixes)
+
+  const cursorAllowBuilds =
+    typeof v?.cursorAllowBuilds === 'boolean' ? v.cursorAllowBuilds : defaults.cursorAllowBuilds ?? false
+
+  return {
+    path,
+    defaultModel: typeof v?.defaultModel === 'string' && v.defaultModel ? v.defaultModel : defaults.defaultModel,
+    permissionMode,
+    sandbox,
+    workspaceContext: typeof v?.workspaceContext === 'string' ? v.workspaceContext : defaults.workspaceContext,
+    showWorkspaceContextInPrompt: v?.showWorkspaceContextInPrompt === true,
+    systemPrompt: typeof v?.systemPrompt === 'string' ? v.systemPrompt : defaults.systemPrompt,
+    allowedCommandPrefixes: hasAllowedCommandPrefixes ? allowedCommandPrefixes : defaults.allowedCommandPrefixes,
+    allowedAutoReadPrefixes: hasAllowedAutoReadPrefixes ? allowedAutoReadPrefixes : defaults.allowedAutoReadPrefixes,
+    allowedAutoWritePrefixes: hasAllowedAutoWritePrefixes ? allowedAutoWritePrefixes : defaults.allowedAutoWritePrefixes,
+    deniedAutoReadPrefixes: hasDeniedAutoReadPrefixes ? deniedAutoReadPrefixes : defaults.deniedAutoReadPrefixes,
+    deniedAutoWritePrefixes: hasDeniedAutoWritePrefixes ? deniedAutoWritePrefixes : defaults.deniedAutoWritePrefixes,
+    cursorAllowBuilds,
+  }
+}
+
 export function getInitialWorkspaceSettings(list: string[]): Record<string, WorkspaceSettings> {
   try {
     const raw = globalThis.localStorage?.getItem(WORKSPACE_SETTINGS_STORAGE_KEY)
     const parsed = raw ? (JSON.parse(raw) as Record<string, Partial<WorkspaceSettings>>) : {}
     const result: Record<string, WorkspaceSettings> = {}
     for (const [key, value] of Object.entries(parsed)) {
-      const path = typeof value?.path === 'string' && value.path.trim() ? value.path : key
+      const path = typeof value?.path === 'string' && value.path.trim() ? value.path.trim() : key.trim()
       if (!path) continue
-      const v = value as Partial<WorkspaceSettings>
-      const hasAllowedCommandPrefixes = Array.isArray(v?.allowedCommandPrefixes)
-      const hasAllowedAutoReadPrefixes = Array.isArray(v?.allowedAutoReadPrefixes)
-      const hasAllowedAutoWritePrefixes = Array.isArray(v?.allowedAutoWritePrefixes)
-      const hasDeniedAutoReadPrefixes = Array.isArray(v?.deniedAutoReadPrefixes)
-      const hasDeniedAutoWritePrefixes = Array.isArray(v?.deniedAutoWritePrefixes)
-      const allowedCommandPrefixes = normalizeAllowedCommandPrefixes(v?.allowedCommandPrefixes)
-      const allowedAutoReadPrefixes = normalizeAllowedCommandPrefixes(v?.allowedAutoReadPrefixes)
-      const allowedAutoWritePrefixes = normalizeAllowedCommandPrefixes(v?.allowedAutoWritePrefixes)
-      const deniedAutoReadPrefixes = normalizeAllowedCommandPrefixes(v?.deniedAutoReadPrefixes)
-      const deniedAutoWritePrefixes = normalizeAllowedCommandPrefixes(v?.deniedAutoWritePrefixes)
-      result[path] = {
-        path,
-        defaultModel: typeof value?.defaultModel === 'string' && value.defaultModel ? value.defaultModel : DEFAULT_MODEL,
-        permissionMode: value?.permissionMode === 'proceed-always' ? 'proceed-always' : 'verify-first',
-        sandbox: value?.sandbox === 'read-only' ? value.sandbox : 'workspace-write',
-        workspaceContext: typeof value?.workspaceContext === 'string' ? value.workspaceContext : '',
-        showWorkspaceContextInPrompt: value?.showWorkspaceContextInPrompt === true,
-        systemPrompt: typeof value?.systemPrompt === 'string' ? value.systemPrompt : '',
-        allowedCommandPrefixes: hasAllowedCommandPrefixes ? allowedCommandPrefixes : [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
-        allowedAutoReadPrefixes: hasAllowedAutoReadPrefixes ? allowedAutoReadPrefixes : [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
-        allowedAutoWritePrefixes: hasAllowedAutoWritePrefixes ? allowedAutoWritePrefixes : [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
-        deniedAutoReadPrefixes: hasDeniedAutoReadPrefixes ? deniedAutoReadPrefixes : [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
-        deniedAutoWritePrefixes: hasDeniedAutoWritePrefixes ? deniedAutoWritePrefixes : [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
-      }
+      result[path] = normalizeWorkspaceSettingsFromPartial(path, value)
     }
     for (const p of list) {
       if (!result[p]) {
-        result[p] = {
-          path: p,
-          defaultModel: DEFAULT_MODEL,
-          permissionMode: 'verify-first',
-          sandbox: 'workspace-write',
-          workspaceContext: '',
-          showWorkspaceContextInPrompt: false,
-          systemPrompt: '',
-          allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
-          allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
-          allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
-          deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
-          deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
-        }
+        result[p] = normalizeWorkspaceSettingsFromPartial(p)
       }
     }
     return result
   } catch {
     const result: Record<string, WorkspaceSettings> = {}
     for (const p of list) {
-      result[p] = {
-        path: p,
-        defaultModel: DEFAULT_MODEL,
-        permissionMode: 'verify-first',
-        sandbox: 'workspace-write',
-        workspaceContext: '',
-        showWorkspaceContextInPrompt: false,
-        systemPrompt: '',
-        allowedCommandPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
-        allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
-        allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
-        deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
-        deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
-      }
+      result[p] = normalizeWorkspaceSettingsFromPartial(p)
     }
     return result
   }

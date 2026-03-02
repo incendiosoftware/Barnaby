@@ -29,6 +29,7 @@ interface AppHeaderBarProps {
   layoutMode: LayoutMode
   setLayoutMode: React.Dispatch<React.SetStateAction<LayoutMode>>
   modelInterfaces: ModelInterface[]
+  workspaceDefaultModel: string
 }
 
 export function AppHeaderBar(props: AppHeaderBarProps) {
@@ -59,6 +60,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
     layoutMode,
     setLayoutMode,
     modelInterfaces,
+    workspaceDefaultModel,
   } = props
 
   const [newChatDropdownOpen, setNewChatDropdownOpen] = React.useState(false)
@@ -176,7 +178,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
                       </span>
                       <button
                         type="button"
-                        className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md text-neutral-500 hover:bg-emerald-100 hover:text-emerald-700 dark:text-neutral-400 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300"
+                        className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md border-0 text-neutral-500 hover:bg-emerald-100 hover:text-emerald-700 dark:text-neutral-400 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300"
                         onClick={(e) => {
                           e.stopPropagation()
                           void downloadHistoryTranscript(entry.id)
@@ -190,7 +192,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
                       </button>
                       <button
                         type="button"
-                        className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md text-neutral-500 hover:bg-red-100 hover:text-red-700 dark:text-neutral-400 dark:hover:bg-red-950/40 dark:hover:text-red-300"
+                        className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md border-0 text-neutral-500 hover:bg-red-100 hover:text-red-700 dark:text-neutral-400 dark:hover:bg-red-950/40 dark:hover:text-red-300"
                         onClick={(e) => {
                           e.stopPropagation()
                           setDeleteHistoryIdPending(entry.id)
@@ -213,7 +215,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
           <div ref={newChatDropdownRef} className="relative shrink-0">
             <button
               type="button"
-              className={`${UI_ICON_BUTTON_CLASS} shrink-0`}
+              className={`${UI_ICON_BUTTON_CLASS} shrink-0 border-0`}
               onClick={() => setNewChatDropdownOpen((o) => !o)}
               title="New chat"
               aria-label="New chat"
@@ -236,8 +238,8 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
                       setNewChatDropdownOpen(false)
                     }}
                   >
-                    <span>Workspace Default</span>
-                    <span className="text-[10px] text-neutral-400 dark:text-neutral-500 opacity-0 group-hover:opacity-100 transition-opacity">Workspace settings</span>
+                    <span>Default</span>
+                    <span className="text-[10px] text-neutral-400 dark:text-neutral-500 opacity-0 group-hover:opacity-100 transition-opacity">{workspaceDefaultModel}</span>
                   </button>
                   <div className="mx-3 my-1 border-b border-neutral-200/70 dark:border-neutral-700"></div>
                   {Object.entries(defaultModelsByProvider).map(([p, modelId]) => {
@@ -270,38 +272,38 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
           </div>
           <div data-layout-toolbar="true" className="flex items-center gap-1">
             <button
-              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg ${layoutMode === 'vertical' ? 'bg-neutral-200 text-blue-700 dark:bg-neutral-700 dark:text-blue-200' : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'}`}
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border-0 ${layoutMode === 'vertical' ? 'bg-neutral-200 text-blue-700 dark:bg-neutral-700 dark:text-blue-200' : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'}`}
               onClick={() => setLayoutMode('vertical')}
               title="Tile Vertical"
               aria-label="Tile Vertical"
             >
               <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-                <rect x="2.5" y="3" width="5.5" height="10" rx="1" stroke="currentColor" />
-                <rect x="8" y="3" width="5.5" height="10" rx="1" stroke="currentColor" />
+                <rect x="2.5" y="3" width="5" height="10" rx="1" fill="currentColor" />
+                <rect x="8.5" y="3" width="5" height="10" rx="1" fill="currentColor" />
               </svg>
             </button>
             <button
-              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg ${layoutMode === 'horizontal' ? 'bg-neutral-200 text-blue-700 dark:bg-neutral-700 dark:text-blue-200' : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'}`}
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border-0 ${layoutMode === 'horizontal' ? 'bg-neutral-200 text-blue-700 dark:bg-neutral-700 dark:text-blue-200' : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'}`}
               onClick={() => setLayoutMode('horizontal')}
               title="Tile Horizontal"
               aria-label="Tile Horizontal"
             >
               <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-                <rect x="2.5" y="3" width="11" height="5" rx="1" stroke="currentColor" />
-                <rect x="2.5" y="8" width="11" height="5" rx="1" stroke="currentColor" />
+                <rect x="2.5" y="3" width="11" height="4.5" rx="1" fill="currentColor" />
+                <rect x="2.5" y="8.5" width="11" height="4.5" rx="1" fill="currentColor" />
               </svg>
             </button>
             <button
-              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg ${layoutMode === 'grid' ? 'bg-neutral-200 text-blue-700 dark:bg-neutral-700 dark:text-blue-200' : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'}`}
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border-0 ${layoutMode === 'grid' ? 'bg-neutral-200 text-blue-700 dark:bg-neutral-700 dark:text-blue-200' : 'bg-transparent hover:bg-neutral-100 text-neutral-700 dark:hover:bg-neutral-700 dark:text-neutral-200'}`}
               onClick={() => setLayoutMode('grid')}
               title="Tile Grid"
               aria-label="Tile Grid"
             >
               <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-                <rect x="2.5" y="2.5" width="5" height="5" rx="1" stroke="currentColor" />
-                <rect x="8.5" y="2.5" width="5" height="5" rx="1" stroke="currentColor" />
-                <rect x="2.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor" />
-                <rect x="8.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor" />
+                <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" fill="currentColor" />
+                <rect x="9" y="2.5" width="4.5" height="4.5" rx="1" fill="currentColor" />
+                <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" fill="currentColor" />
+                <rect x="9" y="9" width="4.5" height="4.5" rx="1" fill="currentColor" />
               </svg>
             </button>
           </div>

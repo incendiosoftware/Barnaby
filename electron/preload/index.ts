@@ -27,6 +27,7 @@ export type CodexConnectOptions = {
   workspaceContext?: string
   showWorkspaceContextInPrompt?: boolean
   systemPrompt?: string
+  cursorAllowBuilds?: boolean
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
 }
 
@@ -122,6 +123,13 @@ const api = {
     return ipcRenderer.invoke('agentorchestrator:saveTranscriptFile', workspaceRoot, suggestedFileName, content) as Promise<{
       ok: boolean
       canceled?: boolean
+      path?: string
+      error?: string
+    }>
+  },
+  saveTranscriptDirect(workspaceRoot: string, fileName: string, content: string) {
+    return ipcRenderer.invoke('agentorchestrator:saveTranscriptDirect', workspaceRoot, fileName, content) as Promise<{
+      ok: boolean
       path?: string
       error?: string
     }>
@@ -377,6 +385,9 @@ const api = {
   },
   setEditorMenuState(enabled: boolean) {
     ipcRenderer.send('agentorchestrator:setEditorMenuState', Boolean(enabled))
+  },
+  setDockPanelMenuState(visibility: Record<string, boolean>) {
+    ipcRenderer.send('agentorchestrator:setDockPanelMenuState', visibility)
   },
   findInPage(text: string) {
     return ipcRenderer.invoke('agentorchestrator:findInPage', text) as Promise<void>

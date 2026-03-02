@@ -79,7 +79,7 @@ export const TimelineCodeBlock = React.memo(function TimelineCodeBlock({
           ) : (
             <SyntaxHighlighter
               language={lang}
-              style={activeTheme.mode === 'dark' ? oneDark : oneLight}
+              style={activeTheme.codeSyntax === 'dark' ? oneDark : oneLight}
               customStyle={{
                 margin: 0,
                 padding: '0.75rem',
@@ -87,7 +87,7 @@ export const TimelineCodeBlock = React.memo(function TimelineCodeBlock({
                 overflow: 'auto',
                 fontSize: '12px',
                 fontFamily: 'var(--app-font-code)',
-                background: activeTheme.mode === 'dark' ? 'rgba(10, 10, 10, 0.5)' : 'rgba(255, 255, 255, 0.5)',
+                background: activeTheme.codeSyntax === 'dark' ? 'rgba(10, 10, 10, 0.5)' : 'rgba(255, 255, 255, 0.5)',
               }}
               showLineNumbers={true}
               wrapLines={false}

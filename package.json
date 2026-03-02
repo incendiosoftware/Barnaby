@@ -1,7 +1,7 @@
 {
   "name": "@barnaby.build/barnaby",
   "productName": "Barnaby",
-  "version": "0.0.200",
+  "version": "0.0.209",
   "main": "dist-electron/main/index.js",
   "bin": {
     "barnaby": "bin/barnaby.cjs"
@@ -38,7 +38,8 @@
     "build:dist:raw": "tsc && vite build",
     "build:dist": "node scripts/run-with-version-bump.mjs \"npm run build:dist:raw\"",
     "build:portable:raw": "npm run build:dist:raw && electron-builder --win portable",
-    "build": "npm run build:portable",
+    "build": "node scripts/build-dispatch.mjs",
+    "build:raw": "npm run build:portable:raw",
     "build:portable": "node scripts/run-with-version-bump.mjs \"npm run build:portable:raw\"",
     "package": "npm run build:portable",
     "deploy": "npm run package",

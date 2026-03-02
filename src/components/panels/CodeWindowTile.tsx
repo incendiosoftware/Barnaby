@@ -109,7 +109,7 @@ export function CodeWindowTile({
     >
       <div
         data-code-window-dock-tab-bar="true"
-        className="px-2.5 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-1.5 bg-neutral-100 dark:bg-neutral-900/80 shrink-0 select-none"
+        className="px-2.5 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-1.5 bg-neutral-100 dark:bg-neutral-900 shrink-0 select-none"
         draggable={showWorkspaceWindow}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
@@ -121,7 +121,7 @@ export function CodeWindowTile({
             type="button"
             title="Code"
             aria-label="Code"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus:outline-none ${codeWindowTab === 'code'
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium transition-colors focus:outline-none ${codeWindowTab === 'code'
               ? 'bg-neutral-200 text-blue-800 dark:bg-neutral-700 dark:text-blue-100'
               : 'bg-transparent hover:bg-neutral-200 text-neutral-600 dark:hover:bg-neutral-700 dark:text-neutral-300'
               }`}
@@ -137,7 +137,7 @@ export function CodeWindowTile({
             type="button"
             title="Settings"
             aria-label="Settings"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus:outline-none ${codeWindowTab === 'settings'
+            className={`h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium transition-colors focus:outline-none ${codeWindowTab === 'settings'
               ? 'bg-neutral-200 text-blue-800 dark:bg-neutral-700 dark:text-blue-100'
               : 'bg-transparent hover:bg-neutral-200 text-neutral-600 dark:hover:bg-neutral-700 dark:text-neutral-300'
               }`}
@@ -153,7 +153,7 @@ export function CodeWindowTile({
           type="button"
           title={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
           aria-label={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
-          className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md bg-transparent text-xs font-medium text-neutral-600 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80"
+          className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-xs font-medium text-neutral-600 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80"
           onClick={onDockSideToggle}
         >
           <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -167,7 +167,7 @@ export function CodeWindowTile({
           type="button"
           title={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
           aria-label={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
-          className="h-8 w-8 inline-flex items-center justify-center rounded-md bg-transparent text-xs font-medium text-neutral-600 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80"
+          className="h-8 w-8 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-xs font-medium text-neutral-600 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80"
           onClick={onCloseCodeWindow}
         >
           <svg width="14" height="14" viewBox="0 0 10 10" fill="none" aria-hidden="true">
@@ -180,7 +180,7 @@ export function CodeWindowTile({
         <div className="absolute inset-0 rounded-lg pointer-events-none z-10" style={DROP_ZONE_OVERLAY_STYLE} />
       )}
       {!showingSettingsPanel && hasTabs && activePanel && (
-        <div className="px-2 py-2 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center gap-2 flex-wrap bg-neutral-100 dark:bg-neutral-900/80 shrink-0">
+        <div className="px-2 py-2 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center gap-2 flex-wrap bg-neutral-100 dark:bg-neutral-900 shrink-0">
           <span className="text-xs text-neutral-600 dark:text-neutral-400">Current file:</span>
           <select
             className={`flex-1 min-w-0 max-w-[240px] text-[11px] font-mono ${UI_SELECT_CLASS} dark:border-neutral-700/80 dark:bg-neutral-800/80 dark:text-neutral-200`}
@@ -310,7 +310,7 @@ export function CodeWindowTile({
           <div className="h-full min-h-0 flex flex-col overflow-hidden">
             {!activePanel.editMode && isMarkdown ? (
               <div
-                className="flex-1 overflow-auto p-6 md:p-8 bg-white dark:bg-[#1e1e1e] text-neutral-900 dark:text-neutral-100"
+                className="flex-1 overflow-auto p-6 md:p-8 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100"
                 style={{ fontSize: `${14 * activePanel.fontScale}px` }}
               >
                 <div className="max-w-4xl mx-auto">
@@ -330,7 +330,7 @@ export function CodeWindowTile({
                 filename={activePanel.relativePath}
                 wordWrap={applicationSettings.editorWordWrap}
                 fontScale={activePanel.fontScale}
-                darkMode={activeTheme.mode === 'dark'}
+                darkMode={activeTheme.codeSyntax === 'dark'}
                 onSave={() => onSave(activePanel.id)}
                 onSaveAs={() => onSaveAs(activePanel.id)}
                 onFocus={() => onFocusedEditorChange(activePanel.id)}

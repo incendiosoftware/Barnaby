@@ -21,6 +21,7 @@ export interface AgentPanelHeaderProps {
   onDragStart: (e: React.DragEvent) => void
   onDragEnd: () => void
   onSplit: () => void
+  onDownloadTranscript: () => void
   onClose: () => void
 }
 
@@ -34,6 +35,7 @@ export function AgentPanelHeader({
   onDragStart,
   onDragEnd,
   onSplit,
+  onDownloadTranscript,
   onClose,
 }: AgentPanelHeaderProps) {
   const showDropZone = draggingPanelId && draggingPanelId !== panel.id && dragOverTarget === `agent-${panel.id}`
@@ -69,7 +71,7 @@ export function AgentPanelHeader({
       <div className="flex items-center gap-1 shrink-0 cursor-default">
         <button
           className={[
-            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed',
+            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed',
             'bg-transparent text-neutral-700 hover:bg-neutral-200/80 active:bg-neutral-300/80 hover:text-neutral-900',
             'dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80 dark:hover:text-neutral-100',
           ].join(' ')}
@@ -84,9 +86,24 @@ export function AgentPanelHeader({
             <path d="M17 5v8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </button>
+        <div className="w-1" />
         <button
           className={[
-            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md transition-colors focus:outline-none',
+            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',
+            'bg-transparent text-neutral-700 hover:bg-emerald-100 hover:text-emerald-700 active:bg-emerald-200',
+            'dark:text-neutral-300 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 dark:active:bg-emerald-900/50',
+          ].join(' ')}
+          onClick={onDownloadTranscript}
+          title="Download transcript"
+          aria-label="Download transcript"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M8 2.4V9.8M8 9.8L5 6.8M8 9.8L11 6.8M2.8 12.6H13.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+        <button
+          className={[
+            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',
             'bg-transparent text-neutral-700 hover:bg-red-50 hover:text-red-700 active:bg-red-100',
             'dark:text-neutral-300 dark:hover:bg-red-950/60 dark:hover:text-red-300 dark:active:bg-red-900/70',
           ].join(' ')}

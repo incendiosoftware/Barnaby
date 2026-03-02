@@ -27,6 +27,7 @@ import { initializePluginHost, shutdownPluginHost, setPluginHostWindow, setWorks
 import { readOrchestratorSecrets, writeOrchestratorSecrets, writeOrchestratorSettings, type OrchestratorSettingsData } from './orchestratorStorage'
 import { validateLicenseKey } from './licenseKeys'
 import { McpServerManager, type McpServerConfig } from './mcpClient'
+import { writeCursorCliConfig } from './permissions'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
 const WORKSPACE_LOCK_DIRNAME = '.barnaby'
@@ -161,6 +162,7 @@ type WorkspaceConfigSettingsPayload = {
   allowedAutoWritePrefixes?: string[]
   deniedAutoReadPrefixes?: string[]
   deniedAutoWritePrefixes?: string[]
+  cursorAllowBuilds?: boolean
 }
 type ContextMenuKind = 'input-selection' | 'chat-selection'
 type ViewMenuDockPanelId =
@@ -1438,6 +1440,26 @@ async function saveTranscriptFile(workspaceRoot: string, suggestedFileName: stri
   fs.mkdirSync(path.dirname(result.filePath), { recursive: true })
   fs.writeFileSync(result.filePath, String(content ?? ''), 'utf8')
   return { ok: true as const, path: result.filePath }
+}
+
+async function saveTranscriptDirect(workspaceRoot: string, fileName: string, content: string) {
+  const trimmedRoot = workspaceRoot.trim()
+  let targetDir = path.join(app.getPath('downloads'), '.barnaby', 'downloads', 'chats')
+  if (trimmedRoot) {
+    try {
+      const resolvedRoot = path.resolve(trimmedRoot)
+      if (fs.existsSync(resolvedRoot) && fs.statSync(resolvedRoot).isDirectory()) {
+        targetDir = path.join(resolvedRoot, '.barnaby', 'downloads', 'chats')
+      }
+    } catch {
+      // fallback
+    }
+  }
+  const safeFileName = sanitizeFileNameSegment(fileName)
+  const filePath = path.join(targetDir, `${safeFileName}.md`)
+  fs.mkdirSync(targetDir, { recursive: true })
+  fs.writeFileSync(filePath, String(content ?? ''), 'utf8')
+  return { ok: true as const, path: filePath }
 }
 
 function parseGitStatus(rawStatus: string): GitStatusResult {
@@ -3084,6 +3106,23 @@ ipcMain.handle('agentorchestrator:saveTranscriptFile', async (_evt, workspaceRoo
   }
 })
 
+ipcMain.handle('agentorchestrator:saveTranscriptDirect', async (_evt, workspaceRoot: unknown, fileName: unknown, content: unknown) => {
+  try {
+    const resolvedWorkspaceRoot =
+      typeof workspaceRoot === 'string' && workspaceRoot.trim()
+        ? workspaceRoot.trim()
+        : ''
+    const safeFileName =
+      typeof fileName === 'string' && fileName.trim()
+        ? fileName.trim()
+        : 'conversation-transcript'
+    const body = typeof content === 'string' ? content : String(content ?? '')
+    return await saveTranscriptDirect(resolvedWorkspaceRoot, safeFileName, body)
+  } catch (err) {
+    return { ok: false as const, error: errorMessage(err) }
+  }
+})
+
 ipcMain.handle('agentorchestrator:loadAppState', async () => {
   return readPersistedAppState()
 })
@@ -3439,6 +3478,7 @@ function sanitizeWorkspaceConfigSettings(folderPath: string, raw: unknown): Work
     allowedAutoWritePrefixes: normalizeWorkspaceConfigPrefixes(source.allowedAutoWritePrefixes),
     deniedAutoReadPrefixes: normalizeWorkspaceConfigPrefixes(source.deniedAutoReadPrefixes),
     deniedAutoWritePrefixes: normalizeWorkspaceConfigPrefixes(source.deniedAutoWritePrefixes),
+    cursorAllowBuilds: source.cursorAllowBuilds === true,
   }
 }
 
@@ -3457,6 +3497,24 @@ ipcMain.handle('agentorchestrator:writeWorkspaceConfig', async (_evt, folderPath
     workspace: workspaceSettings,
   }
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
+
+  if (workspaceSettings.permissionMode === 'proceed-always' || workspaceSettings.cursorAllowBuilds) {
+    try {
+      writeCursorCliConfig({
+        cwd: resolvedFolder,
+        permissionMode: workspaceSettings.permissionMode ?? 'verify-first',
+        allowedCommandPrefixes: workspaceSettings.allowedCommandPrefixes,
+        allowedAutoReadPrefixes: workspaceSettings.allowedAutoReadPrefixes,
+        allowedAutoWritePrefixes: workspaceSettings.allowedAutoWritePrefixes,
+        deniedAutoReadPrefixes: workspaceSettings.deniedAutoReadPrefixes,
+        deniedAutoWritePrefixes: workspaceSettings.deniedAutoWritePrefixes,
+        cursorAllowBuilds: workspaceSettings.cursorAllowBuilds ?? false,
+      })
+    } catch (err) {
+      console.error(`Failed to write Cursor CLI config: ${String(err)}`)
+    }
+  }
+
   return true
 })
 
@@ -3559,6 +3617,13 @@ ipcMain.on('agentorchestrator:setEditorMenuState', (_evt, enabled: boolean) => {
   const next = Boolean(enabled)
   if (editorMenuEnabled === next) return
   editorMenuEnabled = next
+  setAppMenu()
+})
+
+ipcMain.on('agentorchestrator:setDockPanelMenuState', (_evt, state: Partial<Record<ViewMenuDockPanelId, unknown>>) => {
+  const next = normalizeViewMenuDockState(state)
+  if (viewMenuDockStateEquals(viewMenuDockState, next)) return
+  viewMenuDockState = next
   setAppMenu()
 })
 
@@ -4008,13 +4073,48 @@ function setAppMenu() {
           ],
         },
         { type: 'separator' },
-        { label: 'Orchestrator', click: () => sendMenuAction('toggleDockPanel', { panelId: 'orchestrator' }) },
-        { label: 'Workspace Folder', click: () => sendMenuAction('toggleDockPanel', { panelId: 'workspace-folder' }) },
-        { label: 'Workspace Settings', click: () => sendMenuAction('toggleDockPanel', { panelId: 'workspace-settings' }) },
-        { label: 'Application Settings', click: () => sendMenuAction('toggleDockPanel', { panelId: 'application-settings' }) },
-        { label: 'Source Control', click: () => sendMenuAction('toggleDockPanel', { panelId: 'source-control' }) },
-        { label: 'Terminal', click: () => sendMenuAction('toggleDockPanel', { panelId: 'terminal' }) },
-        { label: 'Debug Output', click: () => sendMenuAction('toggleDockPanel', { panelId: 'debug-output' }) },
+        {
+          label: 'Orchestrator',
+          type: 'checkbox',
+          checked: viewMenuDockState.orchestrator,
+          click: () => sendMenuAction('toggleDockPanel', { panelId: 'orchestrator' }),
+        },
+        {
+          label: 'Workspace Folder',
+          type: 'checkbox',
+          checked: viewMenuDockState['workspace-folder'],
+          click: () => sendMenuAction('toggleDockPanel', { panelId: 'workspace-folder' }),
+        },
+        {
+          label: 'Workspace Settings',
+          type: 'checkbox',
+          checked: viewMenuDockState['workspace-settings'],
+          click: () => sendMenuAction('toggleDockPanel', { panelId: 'workspace-settings' }),
+        },
+        {
+          label: 'Application Settings',
+          type: 'checkbox',
+          checked: viewMenuDockState['application-settings'],
+          click: () => sendMenuAction('toggleDockPanel', { panelId: 'application-settings' }),
+        },
+        {
+          label: 'Source Control',
+          type: 'checkbox',
+          checked: viewMenuDockState['source-control'],
+          click: () => sendMenuAction('toggleDockPanel', { panelId: 'source-control' }),
+        },
+        {
+          label: 'Terminal',
+          type: 'checkbox',
+          checked: viewMenuDockState.terminal,
+          click: () => sendMenuAction('toggleDockPanel', { panelId: 'terminal' }),
+        },
+        {
+          label: 'Debug Output',
+          type: 'checkbox',
+          checked: viewMenuDockState['debug-output'],
+          click: () => sendMenuAction('toggleDockPanel', { panelId: 'debug-output' }),
+        },
         { type: 'separator' },
         { role: 'reload' },
         { role: 'toggleDevTools' },

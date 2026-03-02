@@ -8,12 +8,13 @@ import { TimelineActivityRow } from './TimelineActivityRow'
 import { TimelineOperationBatchRow } from './TimelineOperationBatchRow'
 import { TimelineThinkingBatchRow } from './TimelineThinkingBatchRow'
 import { TimelineMessageRow } from './TimelineMessageRow'
-import type { ChatRole, MessageFormat } from '../../../types'
+import type { ChatRole, MessageFormat, StandaloneTheme } from '../../../types'
 import type { TimelineUnit } from '../../../chat/timelineTypes'
 import {
   CONTEXT_COMPACTION_NOTICE_PREFIX,
   isPermissionEscalationMessage,
   LIMIT_WARNING_PREFIX,
+  TRANSCRIPT_SAVED_PREFIX,
 } from '../../../utils/appCore'
 
 export interface TimelineUnitRowProps {
@@ -30,7 +31,7 @@ export interface TimelineUnitRowProps {
   operationTraceColor: string
   timelineMessageColor: string
   debugNoteColor: string
-  activeTheme: { mode: 'light' | 'dark' }
+  activeTheme: StandaloneTheme
   panelId: string
   isStreaming: boolean
   permissionMode: 'verify-first' | 'proceed-always'
@@ -121,6 +122,7 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
   const isDebugSystemNote = m.role === 'system' && /^Debug \(/.test(m.content)
   const isLimitSystemWarning = m.role === 'system' && m.content.startsWith(LIMIT_WARNING_PREFIX)
   const isContextCompactionNotice = m.role === 'system' && m.content.startsWith(CONTEXT_COMPACTION_NOTICE_PREFIX)
+  const isTranscriptSavedNotice = m.role === 'system' && m.content.startsWith(TRANSCRIPT_SAVED_PREFIX)
   const isApprovalRequiredMessage = m.role === 'system' && isPermissionEscalationMessage(m.content)
   const canShowGrantPermissionButton =
     isApprovalRequiredMessage && !props.isStreaming && props.permissionMode !== 'proceed-always' && !props.actionsLocked
@@ -167,7 +169,7 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
       canRecallLastUserMessage={canRecallLastUserMessage}
       resendingPanelId={props.resendingPanelId}
       panelId={props.panelId}
-      activeTheme={props.activeTheme as import('../../../types').StandaloneTheme}
+      activeTheme={props.activeTheme}
       debugNoteColor={props.debugNoteColor}
       timelineMessageColor={props.timelineMessageColor}
       codeBlockOpenById={props.codeBlockOpenById}

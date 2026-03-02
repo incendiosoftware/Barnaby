@@ -177,6 +177,7 @@ export function AppModals(props: AppModalsProps) {
     allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
     deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
     deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
+    cursorAllowBuilds: false,
   })
 
   const workspaceManagerRows = workspaceList.map((workspacePath) => ({
@@ -915,21 +916,39 @@ export function AppModals(props: AppModalsProps) {
                 </div>
               </div>
               {workspaceForm.sandbox !== 'read-only' && (
-                <div className="grid grid-cols-[140px_1fr] items-center gap-2">
-                  <span className="text-neutral-600 dark:text-neutral-300">Permissions</span>
-                  <select
-                    className={UI_SELECT_CLASS}
-                    value={workspaceForm.permissionMode}
-                    onChange={(e) =>
-                      workspaceSettings.updateWorkspaceModalForm((prev: any) => ({
-                        ...prev,
-                        permissionMode: e.target.value as PermissionMode,
-                      }))
-                    }
-                  >
-                    <option value="verify-first">Verify first (safer)</option>
-                    <option value="proceed-always">Proceed always (autonomous)</option>
-                  </select>
+                <div className="grid grid-cols-[140px_1fr] items-start gap-2">
+                  <span className="text-neutral-600 dark:text-neutral-300 pt-1">Permissions</span>
+                  <div className="space-y-1">
+                    <select
+                      className={UI_SELECT_CLASS}
+                      value={workspaceForm.permissionMode}
+                      onChange={(e) =>
+                        workspaceSettings.updateWorkspaceModalForm((prev: any) => ({
+                          ...prev,
+                          permissionMode: e.target.value as PermissionMode,
+                        }))
+                      }
+                    >
+                      <option value="verify-first">Verify first (safer)</option>
+                      <option value="proceed-always">Proceed always (autonomous)</option>
+                    </select>
+                    <label className="inline-flex items-center gap-2 text-neutral-600 dark:text-neutral-300">
+                      <input
+                        type="checkbox"
+                        checked={workspaceForm.cursorAllowBuilds ?? false}
+                        onChange={(e) =>
+                          workspaceSettings.updateWorkspaceModalForm((prev: any) => ({
+                            ...prev,
+                            cursorAllowBuilds: e.target.checked,
+                          }))
+                        }
+                      />
+                      Allow builds in Cursor (disables sandbox for this workspace)
+                    </label>
+                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                      Use when Cursor Agent fails with spawn EPERM on Windows.
+                    </p>
+                  </div>
                 </div>
               )}
               {workspaceForm.sandbox !== 'read-only' && workspaceForm.permissionMode === 'proceed-always' && (
@@ -945,6 +964,11 @@ export function AppModals(props: AppModalsProps) {
                     <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
                       One prefix per line. Leave blank to allow all commands.
                     </p>
+                    {workspaceForm.permissionMode === 'proceed-always' && (
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        If builds fail with EPERM on Windows: Enable Cursor Settings &gt; Agents &gt; Inline Editing &amp; Terminal &gt; Legacy Terminal Tool. This makes the command allowlist apply correctly.
+                      </p>
+                    )}
                   </div>
                 </div>
               )}

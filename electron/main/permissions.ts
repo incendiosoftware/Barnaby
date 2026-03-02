@@ -1,6 +1,136 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+export type WriteCursorCliConfigOptions = {
+  cwd: string
+  permissionMode: 'verify-first' | 'proceed-always'
+  allowedCommandPrefixes?: string[]
+  allowedAutoReadPrefixes?: string[]
+  allowedAutoWritePrefixes?: string[]
+  deniedAutoReadPrefixes?: string[]
+  deniedAutoWritePrefixes?: string[]
+  cursorAllowBuilds?: boolean
+}
+
+function normalizePrefixesForConfig(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of raw) {
+    if (typeof item !== 'string') continue
+    const value = item.trim()
+    if (!value) continue
+    const key = value.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(value)
+  }
+  return result.slice(0, 64)
+}
+
+function buildAllowedShellPermissions(allowedCommandPrefixes: string[]): string[] {
+  const binaries = new Set<string>()
+  let allowsPackageManager = false
+  const add = (binary: string) => {
+    const value = binary.trim()
+    if (!value) return
+    binaries.add(`Shell(${value})`)
+  }
+  const addCompanionBinaries = () => {
+    add('node')
+    add('node.exe')
+    add('esbuild')
+    add('esbuild.exe')
+    add('vite')
+    if (process.platform === 'win32') {
+      add('cmd')
+      add('cmd.exe')
+    } else {
+      add('sh')
+      add('bash')
+    }
+  }
+  const packageManagers = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun'])
+
+  if (allowedCommandPrefixes.length === 0) {
+    add('*')
+    return Array.from(binaries)
+  }
+
+  for (const prefix of allowedCommandPrefixes) {
+    const parts = prefix.trim().split(/\s+/)
+    const primary = parts[0]
+    if (!primary) continue
+    add(primary)
+    if (packageManagers.has(primary.toLowerCase())) {
+      allowsPackageManager = true
+      addCompanionBinaries()
+    }
+  }
+
+  if (allowsPackageManager) add('*')
+
+  return Array.from(binaries)
+}
+
+/**
+ * Write .cursor/cli.json for Cursor IDE agent permissions.
+ * Call from workspace save and Codex connect.
+ * When cursorAllowBuilds is true, adds sandbox: { mode: "disabled" } to avoid spawn EPERM on Windows.
+ */
+export function writeCursorCliConfig(options: WriteCursorCliConfigOptions): void {
+  const {
+    cwd,
+    permissionMode,
+    cursorAllowBuilds = false,
+  } = options
+
+  const allowedCommandPrefixes = normalizePrefixesForConfig(options.allowedCommandPrefixes)
+  const allowedAutoReadPrefixes = normalizePrefixesForConfig(options.allowedAutoReadPrefixes)
+  const allowedAutoWritePrefixes = normalizePrefixesForConfig(options.allowedAutoWritePrefixes)
+  const deniedAutoReadPrefixes = normalizePrefixesForConfig(options.deniedAutoReadPrefixes)
+  const deniedAutoWritePrefixes = normalizePrefixesForConfig(options.deniedAutoWritePrefixes)
+
+  if (permissionMode !== 'proceed-always' && !cursorAllowBuilds) {
+    return
+  }
+
+  const configDir = path.join(cwd, '.cursor')
+  const configPath = path.join(configDir, 'cli.json')
+
+  const allowedBinaries = buildAllowedShellPermissions(allowedCommandPrefixes)
+  const readRules =
+    allowedAutoReadPrefixes.length > 0
+      ? allowedAutoReadPrefixes.map((p) => `Read(${p}**)`)
+      : ['Read(**)']
+  const writeRules =
+    allowedAutoWritePrefixes.length > 0
+      ? allowedAutoWritePrefixes.map((p) => `Write(${p}**)`)
+      : ['Write(**)']
+  const deniedRead = deniedAutoReadPrefixes.map((p) => `Read(${p}**)`)
+  const deniedWrite = deniedAutoWritePrefixes.map((p) => `Write(${p}**)`)
+
+  const config: Record<string, unknown> = {
+    permissions: {
+      allow: [...allowedBinaries, ...readRules, ...writeRules],
+      deny: [...deniedRead, ...deniedWrite],
+    },
+  }
+
+  if (cursorAllowBuilds) {
+    config.sandbox = { mode: 'disabled' }
+  }
+
+  try {
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true })
+    }
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
+  } catch (err) {
+    console.error(`Failed to write Cursor CLI config: ${String(err)}`)
+  }
+}
+
 export type PermissionOptions = {
   allowedCommandPrefixes?: string[]
   allowedAutoReadPrefixes?: string[]
@@ -100,6 +230,7 @@ export class PermissionManager {
 
   private buildAllowedShellPermissions(): string[] {
     const binaries = new Set<string>()
+    let allowsPackageManager = false
     const add = (binary: string) => {
       const value = binary.trim()
       if (!value) return
@@ -120,14 +251,8 @@ export class PermissionManager {
     const packageManagers = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun'])
 
     if (this.allowedCommandPrefixes.length === 0) {
-      // With an empty command prefix list we keep command execution broadly available.
-      add('npm')
-      add('npx')
-      add('pnpm')
-      add('yarn')
-      add('bun')
-      add('git')
-      addCompanionBinaries()
+      // Empty allowlist should map to fully open shell execution.
+      add('*')
       return Array.from(binaries)
     }
 
@@ -137,9 +262,14 @@ export class PermissionManager {
       if (!primary) continue
       add(primary)
       if (packageManagers.has(primary.toLowerCase())) {
+        allowsPackageManager = true
         addCompanionBinaries()
       }
     }
+
+    // Package managers can invoke arbitrary workspace toolchains (vite, esbuild, node-gyp, etc.).
+    // Granting npm/pnpm/yarn/bun should therefore permit shell subprocesses broadly.
+    if (allowsPackageManager) add('*')
 
     return Array.from(binaries)
   }

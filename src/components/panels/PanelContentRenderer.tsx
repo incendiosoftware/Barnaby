@@ -88,11 +88,7 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
   const settingsPopover = ctx.settingsPopoverByPanel[w.id] ?? null
   const interactionMode = ctx.parseInteractionMode(w.interactionMode)
   const panelSecurity = ctx.getPanelSecurityState(w)
-  const effectiveSandbox = panelSecurity.effectiveSandbox
   const effectivePermissionMode = panelSecurity.effectivePermissionMode
-  const sandboxLockedToView = panelSecurity.sandboxLockedToView
-  const permissionDisabledByReadOnlySandbox = panelSecurity.permissionLockedByReadOnlySandbox
-  const permissionLockedToVerifyFirst = panelSecurity.permissionLockedToVerifyFirst
   const contextUsage = ctx.estimatePanelContextUsage(w)
   const contextUsagePercent = contextUsage ? Math.max(0, Number(contextUsage.usedPercent.toFixed(1))) : null
   const contextUsageStrokeColor =
@@ -122,6 +118,7 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         onDragStart={(e) => ctx.handleDragStart(e, 'agent', w.id)}
         onDragEnd={ctx.handleDragEnd}
         onSplit={() => ctx.splitAgentPanel(w.id)}
+        onDownloadTranscript={() => ctx.downloadPanelTranscript(w.id)}
         onClose={() => ctx.closePanel(w.id)}
       />
 
@@ -148,7 +145,7 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
           activeTheme={ctx.activeTheme}
           panelId={w.id}
           isStreaming={w.streaming}
-          permissionMode={w.permissionMode}
+          permissionMode={effectivePermissionMode}
           isIdle={isIdle}
           activityClock={ctx.activityClock}
           lastAgentTimelineUnitId={lastAgentTimelineUnitId}
@@ -191,11 +188,6 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         showCompletionNotice={showCompletionNotice}
         settingsPopover={settingsPopover}
         interactionMode={interactionMode}
-        effectiveSandbox={effectiveSandbox}
-        effectivePermissionMode={effectivePermissionMode}
-        sandboxLockedToView={sandboxLockedToView}
-        permissionDisabledByReadOnlySandbox={permissionDisabledByReadOnlySandbox}
-        permissionLockedToVerifyFirst={permissionLockedToVerifyFirst}
         modelConfig={ctx.modelConfig}
         providerAuthByName={ctx.providerAuthByName}
         providerVerifiedByName={ctx.providerVerifiedByName}
@@ -247,24 +239,6 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         onSetInteractionMode={(mode) => {
           if (inputLocked) return
           ctx.setInteractionMode(w.id, mode)
-        }}
-        onSetPanelSandbox={(value) => {
-          if (inputLocked) return
-          ctx.setPanelSandbox(w.id, value)
-        }}
-        onSetPanelPermission={(value) => {
-          if (inputLocked) return
-          ctx.setPanelPermission(w.id, value)
-        }}
-        onSandboxLockedClick={() => {
-          if (inputLocked) return
-          ctx.setPanels((prev: AgentPanelState[]) =>
-            prev.map((p) =>
-              p.id !== w.id
-                ? p
-                : { ...p, status: 'Sandbox is locked to View. Expand sandbox in Workspace settings.' },
-            ),
-          )
         }}
         onSwitchModel={(modelId) => {
           if (inputLocked) return

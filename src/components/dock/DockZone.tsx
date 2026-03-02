@@ -88,9 +88,10 @@ export function DockZone({
   )
 
   const isTarget = dragOverTarget?.zoneId === zoneId
-  const headerClassName = dockSide === 'bottom'
-    ? 'flex items-center gap-1 px-1.5 py-1 shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-900/80'
-    : 'flex items-center gap-1 px-1.5 py-1 shrink-0 bg-neutral-200/70 dark:bg-neutral-800/70'
+  const headerClassName =
+    dockSide === 'bottom'
+      ? 'flex items-center gap-1 px-1.5 py-1 shrink-0 bg-blue-50/70 dark:bg-blue-900/40 shadow-sm border-b border-blue-200/60 dark:border-blue-900/50'
+      : 'flex items-center gap-1 px-1.5 py-1 shrink-0 bg-blue-50/70 dark:bg-blue-900/40 border-b border-blue-200/60 dark:border-blue-900/50'
 
   return (
     <div

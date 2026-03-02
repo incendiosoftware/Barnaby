@@ -15,8 +15,24 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  --ui-select-bg: #ffffff;
-  --ui-select-fg: #171717;
+  --theme-accent: #5e81ac;
+  --theme-accent-strong: #4c6a91;
+  --theme-accent-muted: #3b5473;
+  --theme-accent-on-primary: #d8e9f0;
+  --theme-accent-tint: #e5f2f7;
+  --theme-bg-base: #f5f5f5;
+  --theme-bg-surface: #ffffff;
+  --theme-bg-elevated: #f8fafc;
+  --theme-text-primary: #171717;
+  --theme-text-secondary: #525252;
+  --theme-text-tertiary: #737373;
+  --theme-border-default: #d4d4d4;
+  --theme-border-strong: #a3a3a3;
+  --theme-assistant-bubble-bg: #f0f8ff;
+  --theme-scrollbar-thumb: rgba(115, 115, 115, 0.55);
+  --theme-scrollbar-track: rgba(229, 229, 229, 0.45);
+  --ui-select-bg: var(--theme-bg-surface);
+  --ui-select-fg: var(--theme-text-primary);
 }
 
 /* Per-type font application (Cursor-style) */
@@ -34,12 +50,6 @@ body,
 
 html {
   color-scheme: light;
-}
-
-html.dark {
-  color-scheme: dark;
-  --ui-select-bg: var(--theme-dark-900, #171717);
-  --ui-select-fg: color-mix(in srgb, #ffffff 90%, var(--theme-dark-900, #171717));
 }
 
 body {

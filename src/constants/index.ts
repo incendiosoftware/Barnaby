@@ -35,11 +35,11 @@ export const MODAL_BACKDROP_CLASS = 'fixed inset-0 z-50 bg-black/35 backdrop-blu
 export const MODAL_CARD_CLASS = 'rounded-2xl border border-neutral-200/80 dark:border-neutral-800 bg-white/95 dark:bg-neutral-950 shadow-2xl'
 export const UI_BUTTON_SECONDARY_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
 export const UI_BUTTON_PRIMARY_CLASS = 'px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-500'
-export const UI_ICON_BUTTON_CLASS = 'h-9 w-9 inline-flex items-center justify-center rounded-md bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-200 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
-export const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
-export const UI_TOOLBAR_ICON_BUTTON_CLASS = 'h-7 w-7 inline-flex items-center justify-center rounded-md bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 disabled:opacity-50 disabled:cursor-not-allowed dark:text-neutral-200 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
-export const CODE_WINDOW_TOOLBAR_BUTTON = 'h-7 w-7 inline-flex items-center justify-center rounded-md bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 disabled:opacity-50 disabled:cursor-not-allowed dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
-export const CODE_WINDOW_TOOLBAR_BUTTON_SM = 'h-7 w-9 inline-flex items-center justify-center rounded-md bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
+export const UI_ICON_BUTTON_CLASS = 'h-9 w-9 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-200 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
+export const UI_CLOSE_ICON_BUTTON_CLASS = 'h-7 w-9 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
+export const UI_TOOLBAR_ICON_BUTTON_CLASS = 'h-7 w-7 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 disabled:opacity-50 disabled:cursor-not-allowed dark:text-neutral-200 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
+export const CODE_WINDOW_TOOLBAR_BUTTON = 'h-7 w-7 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 disabled:opacity-50 disabled:cursor-not-allowed dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
+export const CODE_WINDOW_TOOLBAR_BUTTON_SM = 'h-7 w-9 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-neutral-700 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80'
 export const UI_INPUT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 placeholder:text-neutral-500 dark:placeholder:text-neutral-400'
 export const UI_SELECT_CLASS = 'px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100'
 export const STATUS_SYMBOL_ICON_CLASS = 'h-4 w-4 text-neutral-600 dark:text-neutral-300'
@@ -55,8 +55,8 @@ export const API_CONFIG_BY_PROVIDER: Record<string, { apiBaseUrl: string; loginU
 }
 
 export const PROVIDER_SUBSCRIPTION_URLS: Record<string, string> = {
-  codex: 'https://platform.openai.com/account/usage',
-  claude: 'https://claude.ai',
+  codex: 'https://chatgpt.com/codex/settings/usage',
+  claude: 'https://claude.ai/settings/usage',
   gemini: 'https://aistudio.google.com/',
   openrouter: 'https://openrouter.ai/credits',
 }
@@ -122,7 +122,7 @@ export const DEFAULT_DIAGNOSTICS_MESSAGE_COLORS: DiagnosticsMessageColors = {
   debugNotes: '#b91c1c',
   activityUpdates: '#b45309',
   reasoningUpdates: '#047857',
-  operationTrace: '#1e3a8a',
+  operationTrace: '#5b6a95',
   thinkingProgress: '#737373',
   errorStatus: '#fce7f3',
 }
@@ -255,35 +255,42 @@ export const FONT_SIZE_OPTIONS: Array<{ value: number; label: string }> = [
 export const THINKING_MAX_CHARS = 180
 
 export const DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES = [
-  'npm run',
-  'npm test',
-  'npm install',
+  'npm',
   'npx',
   'tsc',
-  'git status',
-  'git diff',
+  'git',
+  'node',
+  'electron-builder',
 ]
 export const DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES = []
 export const DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES = []
 export const DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES = ['../', '.env']
 export const DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES = ['../', '.env']
+export const DEFAULT_WORKSPACE_CURSOR_ALLOW_BUILDS = false
 
 export const THEME_EDITABLE_FIELDS: Array<{ key: ThemeEditableField; label: string; group?: string }> = [
-  { key: 'accent500', label: 'Primary hover & links (buttons, borders, focus ring)', group: 'Primary / interactive' },
-  { key: 'accent600', label: 'Primary button solid & focus border', group: 'Primary / interactive' },
-  { key: 'accent700', label: 'Text on primary (light mode)', group: 'Primary / interactive' },
-  { key: 'accentText', label: 'Text on primary (dark mode)', group: 'Primary / interactive' },
-  { key: 'accentSoft', label: 'Primary tint background (light mode, e.g. user bubbles)', group: 'Primary / interactive' },
-  { key: 'accentSoftDark', label: 'Primary tint background (dark mode, e.g. user bubbles)', group: 'Primary / interactive' },
-  { key: 'assistantBubbleBgLight', label: 'Assistant bubble background (light mode)', group: 'Chat bubbles' },
-  { key: 'assistantBubbleBgDark', label: 'Assistant bubble background (dark mode)', group: 'Chat bubbles' },
-  { key: 'dark950', label: 'Darkest surface (main dark bg, scrollbar track)', group: 'Dark surfaces' },
-  { key: 'dark900', label: 'Dark surface (panels, borders, scrollbar)', group: 'Dark surfaces' },
+  { key: 'accent', label: 'Primary interactive color', group: 'Accent' },
+  { key: 'accentStrong', label: 'Primary solid color', group: 'Accent' },
+  { key: 'accentMuted', label: 'Accent text on surfaces', group: 'Accent' },
+  { key: 'accentOnPrimary', label: 'Text on accent backgrounds', group: 'Accent' },
+  { key: 'accentTint', label: 'Accent tint background', group: 'Accent' },
+  { key: 'bgBase', label: 'Main background', group: 'Surfaces' },
+  { key: 'bgSurface', label: 'Panel background', group: 'Surfaces' },
+  { key: 'bgElevated', label: 'Elevated/hover surface', group: 'Surfaces' },
+  { key: 'textPrimary', label: 'Primary text', group: 'Text' },
+  { key: 'textSecondary', label: 'Secondary text', group: 'Text' },
+  { key: 'textTertiary', label: 'Tertiary text', group: 'Text' },
+  { key: 'borderDefault', label: 'Default border', group: 'Borders' },
+  { key: 'borderStrong', label: 'Strong border', group: 'Borders' },
+  { key: 'assistantBubbleBg', label: 'Assistant bubble background', group: 'Chat' },
+  { key: 'scrollbarThumb', label: 'Scrollbar thumb', group: 'Scrollbars' },
+  { key: 'scrollbarTrack', label: 'Scrollbar track', group: 'Scrollbars' },
   { key: 'debugNotes', label: 'Debug notes', group: 'Diagnostics' },
   { key: 'activityUpdates', label: 'Activity updates', group: 'Diagnostics' },
   { key: 'reasoningUpdates', label: 'Reasoning updates', group: 'Diagnostics' },
   { key: 'operationTrace', label: 'Operation trace', group: 'Diagnostics' },
   { key: 'thinkingProgress', label: 'Thinking progress', group: 'Diagnostics' },
+  { key: 'errorStatus', label: 'Error status', group: 'Diagnostics' },
 ]
 
 export const INTERACTION_MODE_META: Record<AgentInteractionMode, { label: string; promptPrefix: string; hint: string }> = {

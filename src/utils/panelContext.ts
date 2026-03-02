@@ -131,18 +131,13 @@ function resolveWorkspaceSettingsForPath(
 
 export function clampPanelSecurityForWorkspace(
   cwd: string,
-  sandbox: SandboxMode,
-  permissionMode: PermissionMode,
+  _sandbox: SandboxMode,
+  _permissionMode: PermissionMode,
   workspaceSettingsByPath: Record<string, WorkspaceSettings>,
   workspaceRoot: string,
 ) {
   const limits = getWorkspaceSecurityLimitsForPath(cwd, workspaceSettingsByPath, workspaceRoot)
-  const nextSandbox: SandboxMode = limits.sandbox === 'read-only' ? 'read-only' : sandbox
-  const nextPermissionMode: PermissionMode =
-    nextSandbox === 'read-only' || limits.permissionMode === 'verify-first'
-      ? 'verify-first'
-      : permissionMode
-  return { sandbox: nextSandbox, permissionMode: nextPermissionMode }
+  return limits
 }
 
 export function getPanelSecurityState(

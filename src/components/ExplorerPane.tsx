@@ -115,7 +115,7 @@ export function ExplorerPane({
           {onClose && (
             <button
               type="button"
-              className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
+              className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded border-0 text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
               onClick={onClose}
               title="Close"
               aria-label="Close"
@@ -158,7 +158,7 @@ export function ExplorerPane({
           <div className="inline-flex items-center gap-1.5">
             <button
               type="button"
-              className="h-7 w-7 inline-flex items-center justify-center rounded bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+              className="h-7 w-7 inline-flex items-center justify-center rounded border-0 bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
               onClick={onRefresh}
               title="Refresh workspace folder"
               aria-label="Refresh workspace folder"
@@ -167,7 +167,7 @@ export function ExplorerPane({
             </button>
             <button
               type="button"
-              className="h-7 w-7 inline-flex items-center justify-center rounded bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+              className="h-7 w-7 inline-flex items-center justify-center rounded border-0 bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
               onClick={onExpandAll}
               title="Expand all"
               aria-label="Expand all"
@@ -176,7 +176,7 @@ export function ExplorerPane({
             </button>
             <button
               type="button"
-              className="h-7 w-7 inline-flex items-center justify-center rounded bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+              className="h-7 w-7 inline-flex items-center justify-center rounded border-0 bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
               onClick={onCollapseAll}
               title="Collapse all"
               aria-label="Collapse all"

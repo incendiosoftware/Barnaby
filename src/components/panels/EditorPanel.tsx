@@ -121,7 +121,7 @@ export function EditorPanel({
               filename={panel.relativePath}
               wordWrap={applicationSettings.editorWordWrap}
               fontScale={panel.fontScale}
-              darkMode={activeTheme.mode === 'dark'}
+              darkMode={activeTheme.codeSyntax === 'dark'}
               onSave={onSave}
               onSaveAs={onSaveAs}
               onFocus={onFocus}

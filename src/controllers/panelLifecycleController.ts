@@ -94,6 +94,7 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
     const workspaceContext = ws?.workspaceContext ?? ''
     const showWorkspaceContextInPrompt = ws?.showWorkspaceContextInPrompt === true
     const systemPrompt = ws?.systemPrompt ?? ''
+    const cursorAllowBuilds = ws?.cursorAllowBuilds ?? false
 
     await withTimeout(
       ctx.api.connect(winId, {
@@ -111,6 +112,7 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
         workspaceContext,
         showWorkspaceContextInPrompt,
         systemPrompt,
+        cursorAllowBuilds,
         provider,
         modelConfig: mi?.config,
         initialHistory,

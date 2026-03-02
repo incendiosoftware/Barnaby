@@ -1,9 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import readline from 'node:readline'
-import fs from 'node:fs'
 import path from 'node:path'
 import { logModelPayloadAudit } from './modelPayloadLogger'
+import { writeCursorCliConfig } from './permissions'
 
 type JsonRpcId = number
 
@@ -48,6 +48,7 @@ export type CodexConnectOptions = {
   workspaceContext?: string
   showWorkspaceContextInPrompt?: boolean
   systemPrompt?: string
+  cursorAllowBuilds?: boolean
 }
 
 export class CodexAppServerClient extends EventEmitter {
@@ -187,8 +188,16 @@ export class CodexAppServerClient extends EventEmitter {
       sandbox: options.sandbox ?? 'workspace-write',
     })
 
-    // Write the CLI config to enforce permissions
-    this.writeCliConfig(options.cwd)
+    writeCursorCliConfig({
+      cwd: options.cwd,
+      permissionMode: this.permissionMode,
+      allowedCommandPrefixes: this.allowedCommandPrefixes,
+      allowedAutoReadPrefixes: this.allowedAutoReadPrefixes,
+      allowedAutoWritePrefixes: this.allowedAutoWritePrefixes,
+      deniedAutoReadPrefixes: this.deniedAutoReadPrefixes,
+      deniedAutoWritePrefixes: this.deniedAutoWritePrefixes,
+      cursorAllowBuilds: options.cursorAllowBuilds ?? false,
+    })
 
     const threadId = (threadStart as any)?.thread?.id
     if (!threadId || typeof threadId !== 'string') {
@@ -506,122 +515,6 @@ export class CodexAppServerClient extends EventEmitter {
     this.proc.stdin.write(`${JSON.stringify(message)}\n`)
   }
 
-  private writeCliConfig(cwd: string) {
-    // Only proceed if we have meaningful permissions to write
-    if (this.permissionMode !== 'proceed-always') return
-
-    const configDir = path.join(cwd, '.cursor')
-    const configPath = path.join(configDir, 'cli.json')
-
-    // If all lists are empty, we should NOT enforce a restrictive cli.json.
-    // Instead, we remove it to restore the default "Allow All" behavior of the agent.
-    if (this.allowedCommandPrefixes.length === 0 &&
-      this.allowedAutoReadPrefixes.length === 0 &&
-      this.allowedAutoWritePrefixes.length === 0 &&
-      this.deniedAutoReadPrefixes.length === 0 &&
-      this.deniedAutoWritePrefixes.length === 0) {
-
-      if (fs.existsSync(configPath)) {
-        try {
-          fs.unlinkSync(configPath)
-        } catch (e) { /* ignore */ }
-      }
-      return
-    }
-
-    // Resolve shell permissions from explicit prefixes plus required toolchain companions.
-    const allowedBinaries = this.buildAllowedShellPermissions()
-
-    // Build read/write rules
-    const readRules = this.allowedAutoReadPrefixes.length > 0
-      ? this.allowedAutoReadPrefixes.map(p => `Read(${p}**)`)
-      : ['Read(**)']
-
-    const writeRules = this.allowedAutoWritePrefixes.length > 0
-      ? this.allowedAutoWritePrefixes.map(p => `Write(${p}**)`)
-      : ['Write(**)']
-
-    const deniedRead = this.deniedAutoReadPrefixes.map(p => `Read(${p}**)`)
-    const deniedWrite = this.deniedAutoWritePrefixes.map(p => `Write(${p}**)`)
-
-    const config = {
-      permissions: {
-        allow: [
-          ...allowedBinaries,
-          ...readRules,
-          ...writeRules
-        ],
-        deny: [
-          ...deniedRead,
-          ...deniedWrite
-        ]
-      }
-    }
-
-    try {
-      if (!fs.existsSync(configDir)) {
-        fs.mkdirSync(configDir, { recursive: true })
-      }
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify(config, null, 2),
-        'utf8'
-      )
-    } catch (err) {
-      this.emitEvent({
-        type: 'status',
-        status: 'error',
-        message: `Failed to write permission config: ${String(err)}`
-      })
-    }
-  }
-
-  private buildAllowedShellPermissions(): string[] {
-    const binaries = new Set<string>()
-    const add = (binary: string) => {
-      const value = binary.trim()
-      if (!value) return
-      binaries.add(`Shell(${value})`)
-    }
-    const addCompanionBinaries = () => {
-      add('node')
-      add('esbuild')
-      add('esbuild.exe')
-      if (process.platform === 'win32') {
-        add('cmd')
-        add('cmd.exe')
-      } else {
-        add('sh')
-        add('bash')
-      }
-    }
-    const packageManagers = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun'])
-
-    if (this.allowedCommandPrefixes.length === 0) {
-      // With an empty command prefix list we keep command execution broadly available.
-      add('npm')
-      add('npx')
-      add('pnpm')
-      add('yarn')
-      add('bun')
-      add('git')
-      addCompanionBinaries()
-      return Array.from(binaries)
-    }
-
-    for (const prefix of this.allowedCommandPrefixes) {
-      const parts = prefix.trim().split(/\s+/)
-      const primary = parts[0]
-      if (!primary) continue
-      add(primary)
-      if (packageManagers.has(primary.toLowerCase())) {
-        addCompanionBinaries()
-      }
-    }
-
-    return Array.from(binaries)
-  }
-
   private extractApprovalPath(params: any): string | null {
     const direct =
       this.pickString(params, ['path', 'file', 'filename']) ??
@@ -686,6 +579,7 @@ export class CodexAppServerClient extends EventEmitter {
 
   private shouldAutoApproveCommand(command: string | null): boolean {
     if (this.allowedCommandPrefixes.length === 0) return true
+    if (this.allowedCommandPrefixes.some((prefix) => prefix.trim() === '*')) return true
     if (!command) return false
     const normalizedCommand = command.trim().toLowerCase()
     return this.allowedCommandPrefixes.some((prefix) =>

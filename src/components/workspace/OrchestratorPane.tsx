@@ -71,7 +71,7 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
                 </div>
                 <button
                     type="button"
-                    className="h-7 w-7 inline-flex items-center justify-center rounded-md bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
+                    className="h-7 w-7 inline-flex items-center justify-center rounded-md border-0 bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
                     title="Orchestrator settings"
                     aria-label="Orchestrator settings"
                     onClick={onOpenSettings}

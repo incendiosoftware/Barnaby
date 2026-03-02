@@ -241,8 +241,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
               }`}
             onClick={() => setAppSettingsView(view)}
           >
-            {view === 'connectivity' && 'Connectivity'}
-            {view === 'models' && 'Models'}
+            {view === 'connectivity' && 'Providers & Models'}
             {view === 'preferences' && 'Preferences'}
             {view === 'agents' && 'Agents'}
             {view === 'orchestrator' && 'Orchestrator'}
@@ -252,7 +251,8 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
         ))}
       </div>
       <div className="p-4 overflow-auto flex-1 space-y-5">
-        {appSettingsView === 'models' && (
+        {/* Models tab removed — model controls are now inline per provider in the Providers & Models tab */}
+        {false && (
           <>
             <p className="text-sm text-neutral-600 dark:text-neutral-400">
               Add and configure model interfaces. Panel routing supports Codex, Claude, and Gemini.
@@ -348,16 +348,20 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                 <span className="text-xs text-neutral-500 dark:text-neutral-400">
                   {modelCatalogRefreshPending ? 'Querying provider CLIs/APIs now...' : 'Queries local provider CLIs/APIs'}
                 </span>
-                {modelCatalogRefreshStatus && (
-                  <span
-                    className={`text-xs ${modelCatalogRefreshStatus.kind === 'error'
-                      ? 'text-red-600 dark:text-red-400'
-                      : 'text-emerald-700 dark:text-emerald-400'
-                      }`}
-                  >
-                    {modelCatalogRefreshStatus.message}
-                  </span>
-                )}
+                {(() => {
+                  const refreshStatus = modelCatalogRefreshStatus
+                  if (!refreshStatus) return null
+                  return (
+                    <span
+                      className={`text-xs ${refreshStatus!.kind === 'error'
+                        ? 'text-red-600 dark:text-red-400'
+                        : 'text-emerald-700 dark:text-emerald-400'
+                        }`}
+                    >
+                      {refreshStatus!.message}
+                    </span>
+                  )
+                })()}
               </div>
             )}
             {editingModel ? (
@@ -402,13 +406,18 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                   <button
                     className={UI_BUTTON_PRIMARY_CLASS}
                     onClick={() => {
+                      const currentEditingModel = editingModel
+                      if (!currentEditingModel) {
+                        setModelFormStatus('No model selected.')
+                        return
+                      }
                       const nextId = modelForm.id.trim()
                       if (!nextId) {
                         setModelFormStatus('Model ID is required.')
                         return
                       }
                       const duplicate = modelConfig.interfaces.find(
-                        (m) => m.id === nextId && m.id !== editingModel.id,
+                        (m) => m.id === nextId && m.id !== currentEditingModel.id,
                       )
                       if (duplicate) {
                         setModelFormStatus(`Model ID "${nextId}" already exists.`)
@@ -419,7 +428,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                         id: nextId,
                         displayName: modelForm.displayName.trim() || nextId,
                       }
-                      const idx = modelConfig.interfaces.findIndex((m) => m.id === editingModel.id)
+                      const idx = modelConfig.interfaces.findIndex((m) => m.id === currentEditingModel.id)
                       const next = [...modelConfig.interfaces]
                       if (idx >= 0) next[idx] = nextModel
                       else next.push(nextModel)
@@ -1413,6 +1422,54 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                             {action && <span className="text-xs text-neutral-600 dark:text-neutral-400">{action}</span>}
                           </div>
                         )}
+                        {/* Per-provider model list */}
+                        {(() => {
+                          const providerModels = modelConfig.interfaces.filter((m) => m.provider === config.id)
+                          if (providerModels.length === 0) return null
+                          return (
+                            <div className="mt-3 pt-2 border-t border-neutral-200 dark:border-neutral-700 space-y-1.5">
+                              <div className="text-xs font-medium text-neutral-600 dark:text-neutral-300">Models</div>
+                              {providerModels.map((m) => (
+                                <div key={m.id} className="flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-neutral-50 dark:hover:bg-neutral-800">
+                                  <span className="text-sm text-neutral-800 dark:text-neutral-200 truncate min-w-0">{m.displayName || m.id}</span>
+                                  <div className="flex items-center gap-3 shrink-0">
+                                    <label className="inline-flex items-center gap-1 text-xs text-neutral-600 dark:text-neutral-300" title="Show this model in agent panel selectors">
+                                      <input
+                                        type="checkbox"
+                                        checked={m.enabled}
+                                        onChange={(e) => {
+                                          setModelConfig((prev) => ({
+                                            interfaces: prev.interfaces.map((x) =>
+                                              x.id === m.id ? { ...x, enabled: e.target.checked } : x,
+                                            ),
+                                          }))
+                                        }}
+                                      />
+                                      Use
+                                    </label>
+                                    <label className="inline-flex items-center gap-1 text-xs text-neutral-600 dark:text-neutral-300" title="Set as default model for this provider">
+                                      <input
+                                        type="radio"
+                                        name={`default-model-${config.id}`}
+                                        checked={m.isDefault ?? false}
+                                        onChange={() => {
+                                          setModelConfig((prev) => ({
+                                            interfaces: prev.interfaces.map((x) =>
+                                              x.provider === config.id
+                                                ? { ...x, isDefault: x.id === m.id }
+                                                : x,
+                                            ),
+                                          }))
+                                        }}
+                                      />
+                                      Default
+                                    </label>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )
+                        })()}
                       </div>
                     </details>
                   )

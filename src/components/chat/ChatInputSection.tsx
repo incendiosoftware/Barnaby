@@ -8,9 +8,7 @@ import type {
   AgentPanelState,
   ModelConfig,
   ModelProvider,
-  PermissionMode,
   ProviderAuthStatus,
-  SandboxMode,
 } from '../../types'
 import { SendIcon, SpinnerIcon, StopIcon } from '../icons'
 import {
@@ -21,7 +19,7 @@ import {
 import { INTERACTION_MODE_META, PANEL_INTERACTION_MODES, STATUS_SYMBOL_ICON_CLASS } from '../../constants'
 
 type InputDraftEditState = { kind: 'queued'; index: number } | { kind: 'recalled' }
-type SettingsPopover = 'mode' | 'sandbox' | 'permission' | 'model' | null
+type SettingsPopover = 'mode' | 'model' | null
 
 export interface ContextUsageInfo {
   modelContextTokens: number
@@ -29,43 +27,6 @@ export interface ContextUsageInfo {
   safeInputBudgetTokens: number
   estimatedInputTokens: number
   usedPercent: number
-}
-
-function renderSandboxSymbol(mode: SandboxMode) {
-  if (mode === 'read-only') {
-    return (
-      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-        <rect x="4.1" y="7.1" width="7.8" height="6" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
-        <path d="M5.9 7.1V5.5C5.9 4.34 6.84 3.4 8 3.4C9.16 3.4 10.1 4.34 10.1 5.5V7.1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-        <path d="M8 9.3V10.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      </svg>
-    )
-  }
-  return (
-    <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M2 4.8H6L7.2 6H14V12.8H2V4.8Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-      <path d="M2 6H14" stroke="currentColor" strokeWidth="1.1" />
-    </svg>
-  )
-}
-
-function renderPermissionSymbol(mode: PermissionMode) {
-  if (mode === 'verify-first') {
-    return (
-      <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-        <circle cx="6.8" cy="6.8" r="3.5" stroke="currentColor" strokeWidth="1.1" />
-        <path d="M5.4 6.8L6.5 7.9L8.4 6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M9.6 9.6L13.2 13.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      </svg>
-    )
-  }
-  return (
-    <svg className={STATUS_SYMBOL_ICON_CLASS} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <circle cx="8" cy="8" r="5.8" stroke="currentColor" strokeWidth="1.1" />
-      <path d="M5.4 8H10.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      <path d="M8.8 6.4L10.6 8L8.8 9.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
 }
 
 function renderInteractionModeSymbol(mode: AgentInteractionMode) {
@@ -132,11 +93,6 @@ export interface ChatInputSectionProps {
   showCompletionNotice: boolean
   settingsPopover: SettingsPopover
   interactionMode: AgentInteractionMode
-  effectiveSandbox: SandboxMode
-  effectivePermissionMode: PermissionMode
-  sandboxLockedToView: boolean
-  permissionDisabledByReadOnlySandbox: boolean
-  permissionLockedToVerifyFirst: boolean
   modelConfig: ModelConfig
   providerAuthByName: Partial<Record<string, ProviderAuthStatus>>
   providerVerifiedByName: Record<string, boolean>
@@ -157,9 +113,6 @@ export interface ChatInputSectionProps {
   onRemoveAttachment: (attachmentId: string) => void
   setSettingsPopover: (next: SettingsPopover) => void
   onSetInteractionMode: (mode: AgentInteractionMode) => void
-  onSetPanelSandbox: (value: SandboxMode) => void
-  onSetPanelPermission: (value: PermissionMode) => void
-  onSandboxLockedClick: () => void
   onSwitchModel: (modelId: string) => void
   onSummarizeContext: () => void
 }
@@ -185,11 +138,6 @@ export function ChatInputSection({
   showCompletionNotice,
   settingsPopover,
   interactionMode,
-  effectiveSandbox,
-  effectivePermissionMode,
-  sandboxLockedToView,
-  permissionDisabledByReadOnlySandbox,
-  permissionLockedToVerifyFirst,
   modelConfig,
   providerAuthByName,
   providerVerifiedByName,
@@ -210,9 +158,6 @@ export function ChatInputSection({
   onRemoveAttachment,
   setSettingsPopover,
   onSetInteractionMode,
-  onSetPanelSandbox,
-  onSetPanelPermission,
-  onSandboxLockedClick,
   onSwitchModel,
   onSummarizeContext,
 }: ChatInputSectionProps) {
@@ -262,7 +207,7 @@ export function ChatInputSection({
           </span>
           <button
             type="button"
-            className="rounded border border-blue-300/80 px-1.5 py-0.5 text-[10px] hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed dark:border-blue-700 dark:hover:bg-blue-900/50"
+            className="rounded border-0 px-1.5 py-0.5 text-[10px] hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed dark:border-0 dark:hover:bg-blue-900/50"
             onClick={onCancelDraftEdit}
             disabled={inputLocked}
           >
@@ -314,7 +259,7 @@ export function ChatInputSection({
           )}
           <button
             className={[
-              'h-8 w-8 inline-flex items-center justify-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+              'h-8 w-8 inline-flex items-center justify-center rounded-full border-0 transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
               isBusy
                 ? hasInput
                   ? 'bg-neutral-200 text-neutral-700 hover:bg-neutral-300 dark:bg-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-600'
@@ -409,7 +354,7 @@ export function ChatInputSection({
         <div className="min-w-0 flex flex-wrap items-center justify-end gap-1.5">
           <button
             type="button"
-            className="h-7 inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 text-[11px] text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+            className="h-7 inline-flex items-center gap-1.5 rounded-md border-0 bg-white px-2 text-[11px] text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-0 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
             title={
               inputLocked
                 ? lockTitle
@@ -426,7 +371,7 @@ export function ChatInputSection({
             <button
               type="button"
               className={[
-                'h-7 w-7 inline-flex items-center justify-center rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                'h-7 w-7 inline-flex items-center justify-center rounded-md border-0 transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                 settingsPopover === 'mode'
                   ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
                   : 'bg-transparent text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700',
@@ -458,123 +403,6 @@ export function ChatInputSection({
                     {INTERACTION_MODE_META[mode].label}
                   </button>
                 ))}
-              </div>
-            )}
-          </div>
-          <div className="relative" data-settings-popover-root="true">
-            <button
-              type="button"
-              className={[
-                'h-7 w-7 inline-flex items-center justify-center rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-                settingsPopover === 'sandbox'
-                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
-                  : 'bg-transparent text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700',
-              ].join(' ')}
-              title={
-                inputLocked
-                  ? lockTitle
-                  : sandboxLockedToView
-                    ? 'Sandbox: View only (locked by Workspace settings)'
-                    : `Sandbox: ${effectiveSandbox}`
-              }
-              onClick={() => {
-                if (sandboxLockedToView) {
-                  onSandboxLockedClick()
-                }
-                setSettingsPopover(settingsPopover === 'sandbox' ? null : 'sandbox')
-              }}
-              disabled={inputLocked}
-            >
-              {renderSandboxSymbol(effectiveSandbox)}
-            </button>
-            {settingsPopover === 'sandbox' && (
-              <div className="absolute right-0 bottom-[calc(100%+6px)] z-[120] w-48 rounded-lg border border-neutral-300/90 bg-neutral-50/95 p-1.5 text-neutral-800 shadow-2xl ring-1 ring-black/10 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:ring-white/10">
-                {sandboxLockedToView ? (
-                  <>
-                    <div className="w-full text-left text-[11px] px-2 py-1.5 rounded bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200">
-                      View
-                    </div>
-                    <div className="px-2 pt-1 pb-1 text-[10px] text-neutral-500 dark:text-neutral-400">
-                      Expand sandbox in Workspace settings.
-                    </div>
-                  </>
-                ) : (
-                  ([
-                    ['read-only', 'Read only'],
-                    ['workspace-write', 'Workspace write'],
-                  ] as const).map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={[
-                        'w-full appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded',
-                        effectiveSandbox === value
-                          ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
-                          : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
-                      ].join(' ')}
-                      onClick={() => onSetPanelSandbox(value)}
-                    >
-                      {label}
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-          <div className="relative" data-settings-popover-root="true">
-            <button
-              type="button"
-              className={[
-                'h-7 w-7 inline-flex items-center justify-center rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-                settingsPopover === 'permission'
-                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
-                  : 'bg-transparent text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700',
-              ].join(' ')}
-              title={
-                inputLocked
-                  ? lockTitle
-                  : permissionDisabledByReadOnlySandbox
-                    ? 'Permissions disabled while workspace sandbox is Read only'
-                    : permissionLockedToVerifyFirst
-                      ? 'Permissions: Verify first (locked by Workspace settings)'
-                      : `Permissions: ${effectivePermissionMode}`
-              }
-              disabled={inputLocked || permissionDisabledByReadOnlySandbox}
-              onClick={() => setSettingsPopover(settingsPopover === 'permission' ? null : 'permission')}
-            >
-              {renderPermissionSymbol(effectivePermissionMode)}
-            </button>
-            {settingsPopover === 'permission' && !permissionDisabledByReadOnlySandbox && (
-              <div className="absolute right-0 bottom-[calc(100%+6px)] z-[120] w-52 rounded-lg border border-neutral-300/90 bg-neutral-50/95 p-1.5 text-neutral-800 shadow-2xl ring-1 ring-black/10 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:ring-white/10">
-                {permissionLockedToVerifyFirst ? (
-                  <>
-                    <div className="w-full text-left text-[11px] px-2 py-1.5 rounded bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200">
-                      Verify first
-                    </div>
-                    <div className="px-2 pt-1 pb-1 text-[10px] text-neutral-500 dark:text-neutral-400">
-                      Locked by Workspace settings.
-                    </div>
-                  </>
-                ) : (
-                  ([
-                    ['verify-first', 'Verify first'],
-                    ['proceed-always', 'Proceed always'],
-                  ] as const).map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={[
-                        'w-full appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded',
-                        effectivePermissionMode === value
-                          ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
-                          : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
-                      ].join(' ')}
-                      onClick={() => onSetPanelPermission(value)}
-                    >
-                      {label}
-                    </button>
-                  ))
-                )}
               </div>
             )}
           </div>

@@ -7,17 +7,23 @@ export type Theme = 'light' | 'dark'
 export type StandaloneTheme = {
   id: string
   name: string
-  mode: Theme
-  accent500: string
-  accent600: string
-  accent700: string
-  accentText: string
-  accentSoft: string
-  accentSoftDark: string
-  assistantBubbleBgLight: string
-  assistantBubbleBgDark: string
-  dark950: string
-  dark900: string
+  accent: string
+  accentStrong: string
+  accentMuted: string
+  accentOnPrimary: string
+  accentTint: string
+  bgBase: string
+  bgSurface: string
+  bgElevated: string
+  textPrimary: string
+  textSecondary: string
+  textTertiary: string
+  borderDefault: string
+  borderStrong: string
+  assistantBubbleBg: string
+  codeSyntax: Theme
+  scrollbarThumb: string
+  scrollbarTrack: string
   debugNotes: string
   activityUpdates: string
   reasoningUpdates: string
@@ -130,6 +136,7 @@ export type WorkspaceSettings = {
   allowedAutoWritePrefixes: string[]
   deniedAutoReadPrefixes: string[]
   deniedAutoWritePrefixes: string[]
+  cursorAllowBuilds?: boolean
 }
 
 export type WorkspaceSettingsTextDraft = {
@@ -487,16 +494,22 @@ export type WorkspaceApplyFailure =
   }
 
 export type ThemeEditableField =
-  | 'accent500'
-  | 'accent600'
-  | 'accent700'
-  | 'accentText'
-  | 'accentSoft'
-  | 'accentSoftDark'
-  | 'assistantBubbleBgLight'
-  | 'assistantBubbleBgDark'
-  | 'dark950'
-  | 'dark900'
+  | 'accent'
+  | 'accentStrong'
+  | 'accentMuted'
+  | 'accentOnPrimary'
+  | 'accentTint'
+  | 'bgBase'
+  | 'bgSurface'
+  | 'bgElevated'
+  | 'textPrimary'
+  | 'textSecondary'
+  | 'textTertiary'
+  | 'borderDefault'
+  | 'borderStrong'
+  | 'assistantBubbleBg'
+  | 'scrollbarThumb'
+  | 'scrollbarTrack'
   | 'debugNotes'
   | 'activityUpdates'
   | 'reasoningUpdates'

@@ -54,7 +54,8 @@ function workspaceFormsEqual(a: WorkspaceSettings, b: WorkspaceSettings): boolea
     left.allowedAutoReadPrefixes.join('\n') === right.allowedAutoReadPrefixes.join('\n') &&
     left.allowedAutoWritePrefixes.join('\n') === right.allowedAutoWritePrefixes.join('\n') &&
     left.deniedAutoReadPrefixes.join('\n') === right.deniedAutoReadPrefixes.join('\n') &&
-    left.deniedAutoWritePrefixes.join('\n') === right.deniedAutoWritePrefixes.join('\n')
+    left.deniedAutoWritePrefixes.join('\n') === right.deniedAutoWritePrefixes.join('\n') &&
+    (left.cursorAllowBuilds ?? false) === (right.cursorAllowBuilds ?? false)
   )
 }
 
@@ -166,6 +167,7 @@ export function createWorkspaceSettingsController(
         allowedAutoWritePrefixes: writePrefixes,
         deniedAutoReadPrefixes: deniedRead,
         deniedAutoWritePrefixes: deniedWrite,
+        cursorAllowBuilds: current?.cursorAllowBuilds ?? false,
       } satisfies WorkspaceSettings
     }
 
@@ -182,6 +184,7 @@ export function createWorkspaceSettingsController(
       allowedAutoWritePrefixes: writePrefixes,
       deniedAutoReadPrefixes: deniedRead,
       deniedAutoWritePrefixes: deniedWrite,
+      cursorAllowBuilds: current.cursorAllowBuilds ?? false,
     } satisfies WorkspaceSettings
   }
 

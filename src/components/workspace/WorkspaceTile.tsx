@@ -145,10 +145,10 @@ export function WorkspaceTile({
           type="button"
           title="Close workspace window"
           aria-label="Close workspace window"
-          className="h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
+          className="h-9 w-9 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-xs font-medium text-neutral-600 hover:bg-transparent active:bg-transparent dark:text-neutral-300 dark:hover:bg-transparent dark:active:bg-transparent"
           onClick={onClose}
         >
-          <CloseIcon size={12} />
+          <CloseIcon size={16} />
         </button>
       </div>
       <div className="flex-1 min-h-0">{dockContent}</div>

@@ -175,8 +175,8 @@ export function ChatInputSection({
 
   const isReadOnly = inputLocked
   const containerClass = isReadOnly
-    ? "relative z-10 border-t border-neutral-200/80 p-2.5 bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-800"
-    : "relative z-10 border-t border-neutral-200/80 dark:border-neutral-800 p-2.5 bg-white dark:bg-neutral-950"
+    ? "relative z-10 border-t border-neutral-200/80 px-[15px] py-2.5 bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-800"
+    : "relative z-10 border-t border-neutral-200/80 dark:border-neutral-800 px-[15px] py-2.5 bg-white dark:bg-neutral-950"
 
   return (
     <div className={containerClass}>

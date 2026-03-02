@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(npm)",
+      "Shell(node)",
+      "Shell(node.exe)",
+      "Shell(esbuild)",
+      "Shell(esbuild.exe)",
+      "Shell(vite)",
+      "Shell(cmd)",
+      "Shell(cmd.exe)",
+      "Shell(npx)",
+      "Shell(tsc)",
+      "Shell(git)",
+      "Shell(electron-builder)",
+      "Shell(*)",
+      "Read(**)",
+      "Write(**)"
+    ],
+    "deny": [
+      "Read(../**)",
+      "Read(.env**)",
+      "Write(../**)",
+      "Write(.env**)"
+    ]
+  }
+}

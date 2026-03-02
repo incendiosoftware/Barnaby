@@ -103,15 +103,15 @@ export function AgentPanelHeader({
         </button>
         <button
           className={[
-            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',
-            'bg-transparent text-neutral-700 hover:bg-red-50 hover:text-red-700 active:bg-red-100',
-            'dark:text-neutral-300 dark:hover:bg-red-950/60 dark:hover:text-red-300 dark:active:bg-red-900/70',
+            'h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',
+            'bg-transparent text-neutral-700 hover:bg-transparent hover:text-red-700 active:bg-transparent',
+            'dark:text-neutral-300 dark:hover:bg-transparent dark:hover:text-red-300 dark:active:bg-transparent',
           ].join(' ')}
           onClick={onClose}
           title="Close"
         >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
+            <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
           </svg>
         </button>
       </div>

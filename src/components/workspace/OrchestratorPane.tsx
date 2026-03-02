@@ -119,7 +119,7 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
                     </div>
 
                     {/* Input */}
-                    <div className="shrink-0 px-3 py-2.5 border-t border-neutral-200/80 dark:border-neutral-800">
+                    <div className="shrink-0 px-[17px] py-2.5 border-t border-neutral-200/80 dark:border-neutral-800">
                         <div className="flex gap-2">
                             <textarea
                                 className="flex-1 min-h-[36px] max-h-[120px] resize-none rounded-lg border border-neutral-300 bg-white px-3 py-2 text-xs text-neutral-800 placeholder:text-neutral-400 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder:text-neutral-500 focus:outline-none focus:ring-1 focus:ring-blue-500"

@@ -167,12 +167,12 @@ export function CodeWindowTile({
           type="button"
           title={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
           aria-label={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
-          className="h-8 w-8 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-xs font-medium text-neutral-600 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80"
+          className="h-9 w-9 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-xs font-medium text-neutral-600 transition-colors focus:outline-none hover:bg-transparent active:bg-transparent dark:text-neutral-300 dark:hover:bg-transparent dark:active:bg-transparent"
           onClick={onCloseCodeWindow}
         >
-          <svg width="14" height="14" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-            <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-            <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          <svg width="16" height="16" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M2 2L8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <path d="M8 2L2 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </button>
       </div>

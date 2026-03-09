@@ -26,7 +26,10 @@ export interface ContextUsageInfo {
   outputReserveTokens: number
   safeInputBudgetTokens: number
   estimatedInputTokens: number
+  /** Tokens used for percent (backend input_tokens when available, else estimate) */
+  inputTokensForPercent: number
   usedPercent: number
+  fromBackend?: boolean
 }
 
 function renderInteractionModeSymbol(mode: AgentInteractionMode) {
@@ -115,6 +118,7 @@ export interface ChatInputSectionProps {
   onSetInteractionMode: (mode: AgentInteractionMode) => void
   onSwitchModel: (modelId: string) => void
   onSummarizeContext: () => void
+  onDownloadTranscriptAndRemember?: () => void
 }
 
 export function ChatInputSection({
@@ -160,6 +164,7 @@ export function ChatInputSection({
   onSetInteractionMode,
   onSwitchModel,
   onSummarizeContext,
+  onDownloadTranscriptAndRemember,
 }: ChatInputSectionProps) {
   const lockTitle = 'This chat is read-only. Start a new chat to continue.'
   const sendButtonDisabled = inputLocked || (!isBusy && !hasInput)
@@ -217,10 +222,113 @@ export function ChatInputSection({
       )}
       <div className="mb-1.5 flex items-center gap-2 text-[11px]">
         <span className="text-neutral-500 dark:text-neutral-400">Mode</span>
-        <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-medium ${interactionModeBadgeClass}`}>
+        <button
+          type="button"
+          className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-medium transition-colors ${interactionModeBadgeClass} ${
+            inputLocked ? 'cursor-not-allowed opacity-50' : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
+          }`}
+          title={inputLocked ? lockTitle : `Mode: ${INTERACTION_MODE_META[interactionMode].label}`}
+          onClick={() => setSettingsPopover(settingsPopover === 'mode' ? null : 'mode')}
+          disabled={inputLocked}
+        >
           {renderInteractionModeSymbol(interactionMode)}
           {INTERACTION_MODE_META[interactionMode].label}
-        </span>
+        </button>
+        <span className="text-neutral-500 dark:text-neutral-400">Model</span>
+        <div className="relative" data-settings-popover-root="true">
+            {(() => {
+              const renderModelStatusDot = (modelId: string) => {
+                const prov = getModelProvider(modelId)
+                const key = getModelPingKey(prov, modelId)
+                const pending = modelPingPending.has(key)
+                const ping = modelPingResults[key]
+                if (pending) {
+                  return (
+                    <svg className="h-2 w-2 shrink-0 animate-spin text-neutral-400" viewBox="0 0 16 16" fill="none" aria-label="Testing...">
+                      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2" />
+                      <path d="M8 2a6 6 0 0 1 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  )
+                }
+                if (ping) {
+                  return (
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full shrink-0 ${ping.ok ? 'bg-emerald-500' : 'bg-red-500'}`}
+                      title={ping.ok ? `Working (${ping.durationMs}ms)` : (ping.error ?? 'Failed')}
+                    />
+                  )
+                }
+                const pStatus = providerAuthByName[prov]
+                const pVerified = providerVerifiedByName[prov]
+                const dotCls = !pStatus
+                  ? 'bg-neutral-400 dark:bg-neutral-500'
+                  : !pStatus.installed
+                    ? 'bg-red-500'
+                    : pStatus.authenticated
+                      ? (pVerified ? 'bg-emerald-500' : 'bg-amber-500')
+                      : 'bg-amber-500'
+                const dotTitle = !pStatus
+                  ? 'Checking provider status...'
+                  : !pStatus.installed
+                    ? pStatus.detail ?? 'CLI not found'
+                    : pStatus.authenticated
+                      ? (pVerified ? pStatus.detail ?? 'Connected' : 'Authenticated. Waiting for first response to verify.')
+                      : pStatus.detail ?? 'Login required'
+                return (
+                  <span
+                    className={`inline-block w-2 h-2 rounded-full shrink-0 ${dotCls}`}
+                    title={dotTitle}
+                  />
+                )
+              }
+              return (
+                <>
+                  <button
+                    type="button"
+                    className={[
+                      'h-7 inline-flex items-center gap-1.5 rounded-md border px-1.5 text-[11px] transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                      settingsPopover === 'model'
+                        ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
+                        : 'border-neutral-200/70 bg-neutral-50/75 text-neutral-700 hover:bg-neutral-100 dark:border-neutral-800 dark:bg-neutral-900/60 dark:text-neutral-200 dark:hover:bg-neutral-800',
+                    ].join(' ')}
+                    title={inputLocked ? lockTitle : `Model: ${panel.model}`}
+                    onClick={() => setSettingsPopover(settingsPopover === 'model' ? null : 'model')}
+                    disabled={inputLocked}
+                  >
+                    {renderModelStatusDot(panel.model)}
+                    <span className="max-w-[160px] truncate">{panel.model}</span>
+                  </button>
+                  {settingsPopover === 'model' && (
+                    <div className="absolute right-0 bottom-[calc(100%+6px)] z-[120] w-72 max-h-64 overflow-y-auto rounded-lg border border-neutral-300/90 bg-neutral-50/95 p-1.5 text-neutral-800 shadow-2xl ring-1 ring-black/10 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:ring-white/10">
+                      {getModelOptions(panel.model, panel.provider).filter((id) => {
+                        if (!showOnlyResponsiveModels) return true
+                        const modelPingKey = getModelPingKey(panel.provider, id)
+                        const ping = modelPingResults[modelPingKey]
+                        const pending = modelPingPending.has(modelPingKey)
+                        // Show if not pending and (no ping yet or ping is ok)
+                        return !pending && (ping === null || ping === undefined || ping.ok === true)
+                      }).map((id) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className={[
+                            'w-full flex items-center gap-2 appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded',
+                            id === panel.model
+                              ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
+                              : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
+                          ].join(' ')}
+                          onClick={() => { onSwitchModel(id); setSettingsPopover(null) }}
+                        >
+                          {renderModelStatusDot(id)}
+                          <span className="truncate">{id}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )
+            })()}
+          </div>
       </div>
       <div className="flex items-end gap-2 min-w-0">
         <textarea
@@ -297,24 +405,7 @@ export function ChatInputSection({
               {panel.status}
             </span>
           )}
-          {contextUsage && contextUsagePercent !== null && (
-            <div
-              className="inline-flex items-center gap-1"
-              title={`${contextUsagePercent.toFixed(1)}% used\nEstimated context usage\nModel window: ${contextUsage.modelContextTokens.toLocaleString()} tokens\nReserved output: ${contextUsage.outputReserveTokens.toLocaleString()} tokens\nSafe input budget: ${contextUsage.safeInputBudgetTokens.toLocaleString()} tokens\nEstimated input: ${contextUsage.estimatedInputTokens.toLocaleString()} tokens`}
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" className="shrink-0 -rotate-90">
-                <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.15" strokeWidth="2" />
-                <circle
-                  cx="8" cy="8" r="6" fill="none"
-                  stroke={contextUsageStrokeColor}
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeDasharray={`${2 * Math.PI * 6}`}
-                  strokeDashoffset={`${2 * Math.PI * 6 * (1 - Math.max(0, Math.min(100, contextUsagePercent)) / 100)}`}
-                />
-              </svg>
-            </div>
-          )}
+
           <span
             className="inline-flex items-center gap-1 text-[11px] text-neutral-500 dark:text-neutral-300"
             title={activityTitle}
@@ -352,60 +443,43 @@ export function ChatInputSection({
           })()}
         </div>
         <div className="min-w-0 flex flex-wrap items-center justify-end gap-1.5">
-          <button
-            type="button"
-            className="h-7 inline-flex items-center gap-1.5 rounded-md border-0 bg-white px-2 text-[11px] text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-0 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-            title={
-              inputLocked
-                ? lockTitle
-                : isBusy
-                  ? 'Wait for the current turn to finish before summarizing context.'
-                  : 'Compress this session into a checkpoint summary and reset context.'
-            }
-            onClick={onSummarizeContext}
-            disabled={summarizeDisabled}
-          >
-            Summarize Session
-          </button>
-          <div className="relative" data-settings-popover-root="true">
+          {onDownloadTranscriptAndRemember && (
             <button
               type="button"
-              className={[
-                'h-7 w-7 inline-flex items-center justify-center rounded-md border-0 transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-                settingsPopover === 'mode'
-                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
-                  : 'bg-transparent text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700',
-              ].join(' ')}
-              title={inputLocked ? lockTitle : `Mode: ${INTERACTION_MODE_META[interactionMode].label}`}
-              onClick={() => setSettingsPopover(settingsPopover === 'mode' ? null : 'mode')}
-              disabled={inputLocked}
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Save chat history and prompt the agent to review it"
+              onClick={onDownloadTranscriptAndRemember}
+              disabled={inputLocked || isBusy}
             >
-              {renderInteractionModeSymbol(interactionMode)}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+              </svg>
+              Remember
             </button>
-            {settingsPopover === 'mode' && (
-              <div className="absolute right-0 bottom-[calc(100%+6px)] z-[120] w-48 rounded-lg border border-neutral-300/90 bg-neutral-50/95 p-1.5 text-neutral-800 shadow-2xl ring-1 ring-black/10 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:ring-white/10">
-                {PANEL_INTERACTION_MODES.map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={[
-                      'w-full appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded',
-                      interactionMode === mode
-                        ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200'
-                        : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800',
-                    ].join(' ')}
-                    title={INTERACTION_MODE_META[mode].hint}
-                    onClick={() => {
-                      onSetInteractionMode(mode)
-                      setSettingsPopover(null)
-                    }}
-                  >
-                    {INTERACTION_MODE_META[mode].label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          )}
+
+          {contextUsage && contextUsagePercent !== null && (
+            <div
+              className="inline-flex items-center gap-1 text-[11px] text-neutral-500 dark:text-neutral-400"
+              title={`${contextUsagePercent.toFixed(1)}% used\n${contextUsage.fromBackend ? 'Reported' : 'Estimated'} context usage\nModel window: ${contextUsage.modelContextTokens.toLocaleString()} tokens\nReserved output: ${contextUsage.outputReserveTokens.toLocaleString()} tokens\nSafe input budget: ${contextUsage.safeInputBudgetTokens.toLocaleString()} tokens\nInput tokens: ${contextUsage.inputTokensForPercent.toLocaleString()} tokens`}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" className="shrink-0 -rotate-90">
+                <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.15" strokeWidth="2" />
+                <circle
+                  cx="8" cy="8" r="6" fill="none"
+                  stroke={contextUsageStrokeColor}
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeDasharray={`${2 * Math.PI * 6}`}
+                  strokeDashoffset={`${2 * Math.PI * 6 * (1 - Math.max(0, Math.min(100, contextUsagePercent)) / 100)}`}
+                />
+              </svg>
+              <span>{contextUsagePercent.toFixed(0)}%</span>
+            </div>
+          )}
+
           <div className="relative" data-settings-popover-root="true">
             {(() => {
               const renderModelStatusDot = (modelId: string) => {
@@ -500,8 +574,7 @@ export function ChatInputSection({
               )
             })()}
           </div>
-        </div>
-      </div>
+        </div>      </div>
     </div>
   )
 }

@@ -5,6 +5,7 @@ import {
   CONTEXT_OUTPUT_RESERVE_RATIO,
   DEFAULT_GPT_CONTEXT_TOKENS,
   TOKEN_ESTIMATE_CHARS_PER_TOKEN,
+  TOKEN_ESTIMATE_CODEX_SYSTEM_OVERHEAD,
   TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS,
   TOKEN_ESTIMATE_MESSAGE_OVERHEAD,
   TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS,
@@ -33,15 +34,55 @@ function getKnownContextTokensForModel(model: string, provider: ModelProvider): 
   return null
 }
 
+/** Optional workspace settings to include workspace context and system prompt in the estimate. */
+export type WorkspaceContextEstimate = {
+  workspaceContext: string
+  systemPrompt: string
+  showWorkspaceContextInPrompt: boolean
+}
+
+/** Resolve workspace context estimate for a panel's cwd. */
+export function getWorkspaceContextEstimateForPanel(
+  cwd: string,
+  workspaceSettingsByPath: Record<string, WorkspaceSettings>,
+  workspaceRoot: string,
+): WorkspaceContextEstimate | null {
+  const ws = resolveWorkspaceSettingsForPath(cwd, workspaceSettingsByPath, workspaceRoot)
+  if (!ws) return null
+  return {
+    workspaceContext: ws.workspaceContext ?? '',
+    systemPrompt: ws.systemPrompt ?? '',
+    showWorkspaceContextInPrompt: ws.showWorkspaceContextInPrompt === true,
+  }
+}
+
 export function estimatePanelContextUsage(
   panel: AgentPanelState,
   getModelProvider: (model: string) => ModelProvider,
+  workspaceContextEstimate?: WorkspaceContextEstimate | null,
+  backendUsage?: Pick<NonNullable<AgentPanelState['usage']>, 'input_tokens' | 'output_tokens'> | null,
 ) {
   const provider = getModelProvider(panel.model)
   const modelContextTokens = getKnownContextTokensForModel(panel.model, provider)
   if (!modelContextTokens) return null
 
-  let estimatedInputTokens = TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS
+  const threadOverhead =
+    provider === 'codex' ? TOKEN_ESTIMATE_CODEX_SYSTEM_OVERHEAD : TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS
+  let estimatedInputTokens = threadOverhead
+
+  const userMessageCount = panel.messages.filter((m) => m.role === 'user').length
+  if (
+    userMessageCount > 0 &&
+    workspaceContextEstimate?.showWorkspaceContextInPrompt &&
+    (workspaceContextEstimate.workspaceContext || workspaceContextEstimate.systemPrompt)
+  ) {
+    const wsBlock =
+      estimateTokenCountFromText(workspaceContextEstimate.workspaceContext) +
+      estimateTokenCountFromText(workspaceContextEstimate.systemPrompt) +
+      25
+    estimatedInputTokens += wsBlock * userMessageCount
+  }
+
   for (const message of panel.messages) {
     estimatedInputTokens += TOKEN_ESTIMATE_MESSAGE_OVERHEAD
     estimatedInputTokens += estimateTokenCountFromText(message.content)
@@ -63,13 +104,19 @@ export function estimatePanelContextUsage(
     Math.max(CONTEXT_MIN_OUTPUT_RESERVE_TOKENS, Math.round(modelContextTokens * CONTEXT_OUTPUT_RESERVE_RATIO)),
   )
   const safeInputBudgetTokens = Math.max(1, modelContextTokens - outputReserveTokens)
-  const usedPercent = (estimatedInputTokens / safeInputBudgetTokens) * 100
+  const inputTokensForPercent =
+    typeof backendUsage?.input_tokens === 'number' && backendUsage.input_tokens >= 0
+      ? backendUsage.input_tokens
+      : estimatedInputTokens
+  const usedPercent = (inputTokensForPercent / safeInputBudgetTokens) * 100
   return {
     estimatedInputTokens,
+    inputTokensForPercent,
     safeInputBudgetTokens,
     modelContextTokens,
     outputReserveTokens,
     usedPercent,
+    fromBackend: typeof backendUsage?.input_tokens === 'number',
   }
 }
 

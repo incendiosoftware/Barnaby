@@ -6,7 +6,6 @@ import React from 'react'
 import type { GitOperation, GitStatusEntry, GitStatusState } from '../types'
 import {
   BuildIcon,
-  CloseIcon,
   CommitIcon,
   DeployIcon,
   PushIcon,
@@ -14,6 +13,7 @@ import {
   ReleaseIcon,
   SpinnerIcon,
 } from './icons'
+import { UI_CLOSE_ICON_BUTTON_CLASS } from '../constants'
 
 function gitStatusText(entry: GitStatusEntry): string {
   if (entry.untracked) return '??'
@@ -83,17 +83,6 @@ export function GitPane({
       <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs flex items-center justify-between gap-2">
         <span className="font-medium text-neutral-700 dark:text-neutral-300 truncate">Git</span>
         <div className="flex items-center gap-1 shrink-0">
-          {onClose && (
-            <button
-              type="button"
-              className="h-6 w-6 inline-flex items-center justify-center rounded border-0 text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
-              onClick={onClose}
-              title="Close"
-              aria-label="Close"
-            >
-              <CloseIcon size={12} />
-            </button>
-          )}
           <button
             type="button"
             className={iconBtnClass}
@@ -154,6 +143,19 @@ export function GitPane({
           >
             <RefreshIcon size={18} />
           </button>
+          {onClose && (
+            <button
+              type="button"
+              className={UI_CLOSE_ICON_BUTTON_CLASS}
+              onClick={onClose}
+              title="Close"
+              aria-label="Close"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
       {(gitOperationPending || gitOperationSuccess) && (

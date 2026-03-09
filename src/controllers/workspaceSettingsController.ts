@@ -22,12 +22,15 @@ import {
 
 function normalizeWorkspaceSettingsForm(form: WorkspaceSettings): WorkspaceSettings {
   const sandbox = form.sandbox
-  const permissionMode = sandbox === 'read-only' ? 'verify-first' : form.permissionMode
+  const restrictAgentAccess = form.restrictAgentAccess === true
+  const permissionMode =
+    sandbox === 'read-only' ? 'verify-first' : restrictAgentAccess ? 'verify-first' : form.permissionMode
   return {
     path: form.path.trim(),
     defaultModel: form.defaultModel.trim() || DEFAULT_MODEL,
     permissionMode,
     sandbox,
+    restrictAgentAccess,
     workspaceContext: typeof form.workspaceContext === 'string' ? form.workspaceContext.trim() : '',
     showWorkspaceContextInPrompt: form.showWorkspaceContextInPrompt === true,
     systemPrompt: typeof form.systemPrompt === 'string' ? form.systemPrompt.trim() : '',
@@ -48,6 +51,7 @@ function workspaceFormsEqual(a: WorkspaceSettings, b: WorkspaceSettings): boolea
     left.defaultModel === right.defaultModel &&
     left.permissionMode === right.permissionMode &&
     left.sandbox === right.sandbox &&
+    left.restrictAgentAccess === right.restrictAgentAccess &&
     left.workspaceContext === right.workspaceContext &&
     left.showWorkspaceContextInPrompt === right.showWorkspaceContextInPrompt &&
     left.systemPrompt === right.systemPrompt &&
@@ -95,7 +99,10 @@ export interface WorkspaceSettingsController {
     next: WorkspaceSettings,
     options?: { closeModal?: boolean; requestSwitch?: boolean },
   ) => Promise<void>
-  updateDockedWorkspaceForm: (updater: (prev: WorkspaceSettings) => WorkspaceSettings) => void
+  updateDockedWorkspaceForm: (
+    updater: (prev: WorkspaceSettings) => WorkspaceSettings,
+    opts?: { syncTextDraft?: boolean },
+  ) => void
   updateWorkspaceModalForm: (
     updater: (prev: WorkspaceSettings) => WorkspaceSettings,
     options?: { requestSwitch?: boolean },
@@ -136,8 +143,9 @@ export function createWorkspaceSettingsController(
       ({
         path: resolvedPath || workspaceRoot,
         defaultModel: DEFAULT_MODEL,
-        permissionMode: 'verify-first',
+        permissionMode: 'proceed-always',
         sandbox: 'workspace-write',
+        restrictAgentAccess: false,
         workspaceContext: '',
         showWorkspaceContextInPrompt: false,
         systemPrompt: '',
@@ -146,6 +154,7 @@ export function createWorkspaceSettingsController(
         allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
         deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
         deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
+        cursorAllowBuilds: true,
       } as WorkspaceSettings)
 
     const cmdPrefixes = normalizeAllowedCommandPrefixes(current.allowedCommandPrefixes)
@@ -158,8 +167,9 @@ export function createWorkspaceSettingsController(
       return {
         path: resolvedPath || workspaceRoot,
         defaultModel: current.defaultModel ?? DEFAULT_MODEL,
-        permissionMode: current.permissionMode ?? 'verify-first',
+        permissionMode: current.permissionMode ?? 'proceed-always',
         sandbox: current.sandbox ?? 'workspace-write',
+        restrictAgentAccess: current.restrictAgentAccess ?? false,
         workspaceContext: current.workspaceContext ?? '',
         showWorkspaceContextInPrompt: current.showWorkspaceContextInPrompt === true,
         systemPrompt: current.systemPrompt ?? '',
@@ -168,15 +178,16 @@ export function createWorkspaceSettingsController(
         allowedAutoWritePrefixes: writePrefixes,
         deniedAutoReadPrefixes: deniedRead,
         deniedAutoWritePrefixes: deniedWrite,
-        cursorAllowBuilds: current?.cursorAllowBuilds ?? false,
+        cursorAllowBuilds: current?.cursorAllowBuilds ?? true,
       } satisfies WorkspaceSettings
     }
 
     return {
       path: current.path || resolvedPath || workspaceRoot,
       defaultModel: current.defaultModel ?? DEFAULT_MODEL,
-      permissionMode: current.permissionMode ?? 'verify-first',
+      permissionMode: current.permissionMode ?? 'proceed-always',
       sandbox: current.sandbox ?? 'workspace-write',
+      restrictAgentAccess: current.restrictAgentAccess ?? false,
       workspaceContext: current.workspaceContext ?? '',
       showWorkspaceContextInPrompt: current.showWorkspaceContextInPrompt === true,
       systemPrompt: current.systemPrompt ?? '',
@@ -185,7 +196,7 @@ export function createWorkspaceSettingsController(
       allowedAutoWritePrefixes: writePrefixes,
       deniedAutoReadPrefixes: deniedRead,
       deniedAutoWritePrefixes: deniedWrite,
-      cursorAllowBuilds: current.cursorAllowBuilds ?? false,
+      cursorAllowBuilds: current.cursorAllowBuilds ?? true,
     } satisfies WorkspaceSettings
   }
 
@@ -217,10 +228,16 @@ export function createWorkspaceSettingsController(
     }
   }
 
-  function updateDockedWorkspaceForm(updater: (prev: WorkspaceSettings) => WorkspaceSettings) {
+  function updateDockedWorkspaceForm(
+    updater: (prev: WorkspaceSettings) => WorkspaceSettings,
+    opts?: { syncTextDraft?: boolean },
+  ) {
     setWorkspaceForm((prev) => {
       const nextForm = updater(prev)
       const normalized = normalizeWorkspaceSettingsForm(nextForm)
+      if (opts?.syncTextDraft) {
+        setWorkspaceFormTextDraft(workspaceSettingsToTextDraft(nextForm))
+      }
       queueMicrotask(() => {
         const normalizedCurrentRoot = normalizeWorkspacePathForCompare(workspaceRootRef.current || '')
         const normalizedFormPath = normalizeWorkspacePathForCompare(normalized.path)

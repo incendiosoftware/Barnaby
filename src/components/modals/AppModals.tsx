@@ -19,6 +19,9 @@ import {
   DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES,
   DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES,
   DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES,
+  RESTRICTED_WORKSPACE_ALLOWED_COMMAND_PREFIXES,
+  RESTRICTED_WORKSPACE_DENIED_AUTO_READ_PREFIXES,
+  RESTRICTED_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES,
   PROVIDER_SUBSCRIPTION_URLS,
 } from '../../constants'
 import { PROVIDERS_WITH_DEDICATED_PING } from '../../controllers/providerConnectivityController'
@@ -167,8 +170,9 @@ export function AppModals(props: AppModalsProps) {
   const buildDefaultWorkspaceSettings = (selected: string): WorkspaceSettingsType => ({
     path: selected,
     defaultModel: DEFAULT_MODEL,
-    permissionMode: 'verify-first',
+    permissionMode: 'proceed-always',
     sandbox: 'workspace-write',
+    restrictAgentAccess: false,
     workspaceContext: '',
     showWorkspaceContextInPrompt: false,
     systemPrompt: '',
@@ -177,7 +181,7 @@ export function AppModals(props: AppModalsProps) {
     allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
     deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
     deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
-    cursorAllowBuilds: false,
+    cursorAllowBuilds: true,
   })
 
   const workspaceManagerRows = workspaceList.map((workspacePath) => ({
@@ -888,6 +892,57 @@ export function AppModals(props: AppModalsProps) {
                   }
                   placeholder="Additional system prompt text sent with workspace context."
                 />
+              </div>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2">
+                <span className="text-neutral-600 dark:text-neutral-300">Agent access</span>
+                <label className="inline-flex items-center gap-2 text-neutral-600 dark:text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={workspaceForm.restrictAgentAccess === true}
+                    onChange={(e) => {
+                      const value = e.target.checked
+                      workspaceSettings.updateWorkspaceModalForm((prev: any) => {
+                        if (value) {
+                          return {
+                            ...prev,
+                            restrictAgentAccess: true,
+                            permissionMode: 'verify-first',
+                            allowedCommandPrefixes: [...RESTRICTED_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+                            deniedAutoReadPrefixes: [...RESTRICTED_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+                            deniedAutoWritePrefixes: [...RESTRICTED_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
+                          }
+                        }
+                        return {
+                          ...prev,
+                          restrictAgentAccess: false,
+                          permissionMode: 'proceed-always',
+                          allowedCommandPrefixes: [],
+                          deniedAutoReadPrefixes: [],
+                          deniedAutoWritePrefixes: [],
+                        }
+                      })
+                      if (value) {
+                        workspaceSettings.updateWorkspaceModalTextDraft(
+                          'allowedCommandPrefixes',
+                          RESTRICTED_WORKSPACE_ALLOWED_COMMAND_PREFIXES.join('\n'),
+                        )
+                        workspaceSettings.updateWorkspaceModalTextDraft(
+                          'deniedAutoReadPrefixes',
+                          RESTRICTED_WORKSPACE_DENIED_AUTO_READ_PREFIXES.join('\n'),
+                        )
+                        workspaceSettings.updateWorkspaceModalTextDraft(
+                          'deniedAutoWritePrefixes',
+                          RESTRICTED_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES.join('\n'),
+                        )
+                      } else {
+                        workspaceSettings.updateWorkspaceModalTextDraft('allowedCommandPrefixes', '')
+                        workspaceSettings.updateWorkspaceModalTextDraft('deniedAutoReadPrefixes', '')
+                        workspaceSettings.updateWorkspaceModalTextDraft('deniedAutoWritePrefixes', '')
+                      }
+                    }}
+                  />
+                  Restrict agent access (verify-first, limited commands)
+                </label>
               </div>
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <span className="text-neutral-600 dark:text-neutral-300">Sandbox</span>

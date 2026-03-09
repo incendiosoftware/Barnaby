@@ -120,6 +120,10 @@ export type AgentPanelState = {
     kind?: string
     primary?: { usedPercent?: number; windowMinutes?: number; resetsAt?: number } | null
     secondary?: { usedPercent?: number; windowMinutes?: number; resetsAt?: number } | null
+    /** From thread/tokenUsage/updated – actual input tokens in context. */
+    input_tokens?: number
+    output_tokens?: number
+    total_tokens?: number
   }
 }
 
@@ -128,6 +132,8 @@ export type WorkspaceSettings = {
   defaultModel: string
   permissionMode: PermissionMode
   sandbox: SandboxMode
+  /** When true, agent access is restricted (verify-first, limited commands). Default false = full access. */
+  restrictAgentAccess?: boolean
   workspaceContext: string
   showWorkspaceContextInPrompt: boolean
   systemPrompt: string

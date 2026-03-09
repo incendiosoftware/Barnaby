@@ -108,24 +108,101 @@ export function buildTimelineForPanel(input: BuildTimelineInput): TimelineUnit[]
 
   for (let i = 0; i < input.messages.length; i += 1) {
     const message = input.messages[i]
-    const kind = messageKind(message)
     const messageCreatedAt = typeof message.createdAt === 'number' && Number.isFinite(message.createdAt) ? message.createdAt : i
-    units.push({
-      id: `msg-${message.id}`,
-      panelId: input.panelId,
-      sourceMessageIds: [message.id],
-      kind,
-      title: kind === 'thinking' ? 'Thinking' : undefined,
-      body: message.content,
-      interactionMode: message.interactionMode,
-      markdown: (message.format ?? 'markdown') === 'markdown',
-      attachments: message.attachments,
-      createdAt: messageCreatedAt,
-      updatedAt: messageCreatedAt,
-      status: 'completed',
-      collapsible: kind === 'thinking' || kind === 'activity' || kind === 'code',
-      defaultOpen: kind !== 'thinking' && kind !== 'code',
-    })
+    
+    if (message.role === 'assistant' && /<(?:think|thought)>[\s\S]*?/i.test(message.content)) {
+      const thoughtRegex = /<(?:think|thought)>([\s\S]*?)(?:<\/(?:think|thought)>|$)/gi
+      let match
+      let lastIndex = 0
+      let segmentIndex = 0
+      let attachmentsAttached = false
+
+      while ((match = thoughtRegex.exec(message.content)) !== null) {
+        const prefix = message.content.slice(lastIndex, match.index).trim()
+        if (prefix) {
+          const kind = prefix.includes('```') ? 'code' : 'assistant'
+          units.push({
+            id: `msg-${message.id}-${String(segmentIndex++).padStart(3, '0')}`,
+            panelId: input.panelId,
+            sourceMessageIds: [message.id],
+            kind,
+            title: undefined,
+            body: prefix,
+            interactionMode: message.interactionMode,
+            markdown: (message.format ?? 'markdown') === 'markdown',
+            attachments: !attachmentsAttached ? (attachmentsAttached = true, message.attachments) : undefined,
+            createdAt: messageCreatedAt,
+            updatedAt: messageCreatedAt,
+            status: 'completed',
+            collapsible: kind === 'code',
+            defaultOpen: kind !== 'code',
+          })
+        }
+
+        const thoughtContent = match[1].trim()
+        const isClosed = match[0].toLowerCase().endsWith('</think>') || match[0].toLowerCase().endsWith('</thought>')
+        
+        if (thoughtContent || !isClosed) {
+          units.push({
+            id: `msg-${message.id}-${String(segmentIndex++).padStart(3, '0')}-thought`,
+            panelId: input.panelId,
+            sourceMessageIds: [message.id],
+            kind: 'thinking',
+            title: 'Thinking',
+            body: thoughtContent || 'Thinking...',
+            interactionMode: message.interactionMode,
+            markdown: (message.format ?? 'markdown') === 'markdown',
+            attachments: undefined,
+            createdAt: messageCreatedAt,
+            updatedAt: messageCreatedAt,
+            status: isClosed ? 'completed' : (input.streaming && i === input.messages.length - 1 ? 'in_progress' : 'completed'),
+            collapsible: true,
+            defaultOpen: false,
+          })
+        }
+        lastIndex = thoughtRegex.lastIndex
+      }
+
+      const suffix = message.content.slice(lastIndex).trim()
+      if (suffix || lastIndex === 0) {
+        const contentToUse = suffix || message.content
+        const kind = suffix ? (suffix.includes('```') ? 'code' : 'assistant') : messageKind({ ...message, content: contentToUse })
+        units.push({
+          id: `msg-${message.id}-${String(segmentIndex++).padStart(3, '0')}`,
+          panelId: input.panelId,
+          sourceMessageIds: [message.id],
+          kind,
+          title: kind === 'thinking' ? 'Thinking' : undefined,
+          body: contentToUse,
+          interactionMode: message.interactionMode,
+          markdown: (message.format ?? 'markdown') === 'markdown',
+          attachments: !attachmentsAttached ? (attachmentsAttached = true, message.attachments) : undefined,
+          createdAt: messageCreatedAt,
+          updatedAt: messageCreatedAt,
+          status: 'completed',
+          collapsible: kind === 'thinking' || kind === 'activity' || kind === 'code',
+          defaultOpen: kind !== 'thinking' && kind !== 'code',
+        })
+      }
+    } else {
+      const kind = messageKind(message)
+      units.push({
+        id: `msg-${message.id}`,
+        panelId: input.panelId,
+        sourceMessageIds: [message.id],
+        kind,
+        title: kind === 'thinking' ? 'Thinking' : undefined,
+        body: message.content,
+        interactionMode: message.interactionMode,
+        markdown: (message.format ?? 'markdown') === 'markdown',
+        attachments: message.attachments,
+        createdAt: messageCreatedAt,
+        updatedAt: messageCreatedAt,
+        status: 'completed',
+        collapsible: kind === 'thinking' || kind === 'activity' || kind === 'code',
+        defaultOpen: kind !== 'thinking' && kind !== 'code',
+      })
+    }
   }
 
   const orderedActivity = mergeActivityItems(input.activityItems)

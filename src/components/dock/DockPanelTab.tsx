@@ -1,10 +1,9 @@
 /**
- * Dock panel tab - shaded name bar, flat X close button, draggable.
+ * Dock panel tab - shaded name bar, draggable.
  * Used for all dockable panels (orchestrator, workspace-folder, etc.).
  */
 
 import React from 'react'
-import { CloseIcon } from '../icons'
 
 export interface DockPanelTabProps {
   id: string
@@ -26,8 +25,6 @@ export function DockPanelTab({
   icon,
   isActive,
   onSelect,
-  onClose,
-  showCloseButton = true,
   onDragStart,
   onDragEnd,
   isDragging,
@@ -53,20 +50,6 @@ export function DockPanelTab({
     >
       {icon && <span className="shrink-0 flex text-neutral-500 dark:text-neutral-400">{icon}</span>}
       <span className="truncate">{label}</span>
-      {showCloseButton && (
-        <button
-          type="button"
-          className="ml-0.5 h-5 w-5 shrink-0 inline-flex items-center justify-center rounded border-0 text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 hover:bg-neutral-400/40 dark:hover:bg-neutral-600/50 transition-colors"
-          onClick={(e) => {
-            e.stopPropagation()
-            onClose()
-          }}
-          title="Close"
-          aria-label="Close"
-        >
-          <CloseIcon size={10} />
-        </button>
-      )}
     </div>
   )
 }

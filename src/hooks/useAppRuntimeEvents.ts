@@ -299,10 +299,10 @@ export function useAppRuntimeEvents(ctx: any) {
             w.id === agentWindowId
               ? {
                 ...w,
-                usage: evt.usage,
+                usage: { ...w.usage, ...evt.usage },
                 messages:
                   getModelProvider(w.model) === 'codex'
-                    ? withExhaustedRateLimitWarning(w.messages, evt.usage)
+                    ? withExhaustedRateLimitWarning(w.messages, { ...w.usage, ...evt.usage })
                     : w.messages,
               }
               : w,

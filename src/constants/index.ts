@@ -78,15 +78,11 @@ export const DOCK_PANEL_LABELS: Record<DockPanelId, string> = {
 export const DEFAULT_DOCK_LAYOUT: DockLayoutState = {
   zones: {
     'left-top': ['orchestrator'],
-    'left-bottom': ['workspace-folder', 'workspace-settings'],
-    right: ['application-settings', 'source-control'],
-    bottom: ['terminal', 'debug-output'],
+    right: ['application-settings', 'workspace-settings'],
   },
   activeTab: {
     'left-top': 'orchestrator',
-    'left-bottom': 'workspace-folder',
     right: 'application-settings',
-    bottom: 'terminal',
   },
 }
 
@@ -216,6 +212,8 @@ export const TOKEN_ESTIMATE_WORDS_MULTIPLIER = 1.35
 export const TOKEN_ESTIMATE_MESSAGE_OVERHEAD = 8
 export const TOKEN_ESTIMATE_IMAGE_ATTACHMENT_TOKENS = 850
 export const TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS = 700
+/** Codex/Codex-style providers: system prompt, tool definitions, file-tree RAG, etc. */
+export const TOKEN_ESTIMATE_CODEX_SYSTEM_OVERHEAD = 3500
 export const APP_STATE_AUTOSAVE_MS = 800
 export const DEFAULT_THEME_ID = 'default-dark'
 export const DEFAULT_FONT_FAMILY = 'inter'
@@ -254,7 +252,16 @@ export const FONT_SIZE_OPTIONS: Array<{ value: number; label: string }> = [
 
 export const THINKING_MAX_CHARS = 180
 
-export const DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES = [
+/** Full-access defaults: empty = allow all. Used when restrictAgentAccess is false. */
+export const DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES: string[] = []
+export const DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES: string[] = []
+export const DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES: string[] = []
+export const DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES: string[] = []
+export const DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES: string[] = []
+export const DEFAULT_WORKSPACE_CURSOR_ALLOW_BUILDS = true
+
+/** Restrictive defaults when user opts to restrict access. */
+export const RESTRICTED_WORKSPACE_ALLOWED_COMMAND_PREFIXES = [
   'npm',
   'npx',
   'tsc',
@@ -262,11 +269,8 @@ export const DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES = [
   'node',
   'electron-builder',
 ]
-export const DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES = []
-export const DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES = []
-export const DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES = ['../', '.env']
-export const DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES = ['../', '.env']
-export const DEFAULT_WORKSPACE_CURSOR_ALLOW_BUILDS = false
+export const RESTRICTED_WORKSPACE_DENIED_AUTO_READ_PREFIXES = ['../', '.env']
+export const RESTRICTED_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES = ['../', '.env']
 
 export const THEME_EDITABLE_FIELDS: Array<{ key: ThemeEditableField; label: string; group?: string }> = [
   { key: 'accent', label: 'Primary interactive color', group: 'Accent' },

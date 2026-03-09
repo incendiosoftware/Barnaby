@@ -103,4 +103,28 @@ describe('timelineParser', () => {
     expect(activities).toHaveLength(1)
     expect(activities[0].body).toContain('Running command')
   })
+
+  it('extracts <thought> blocks from assistant messages into thinking units', () => {
+    const timeline = buildTimelineForPanel({
+      panelId: 'p1',
+      messages: [
+        { id: 'm1', role: 'assistant', content: 'Sure. <thought>First I should do this\nAnd then this</thought> Here is the answer.', format: 'markdown' },
+      ],
+      activityItems: [],
+      streaming: false,
+      retrospectiveWindow: 20,
+    })
+
+    expect(timeline).toHaveLength(3)
+    
+    expect(timeline[0].kind).toBe('assistant')
+    expect(timeline[0].body).toBe('Sure.')
+    
+    expect(timeline[1].kind).toBe('thinking')
+    expect(timeline[1].body).toBe('First I should do this\nAnd then this')
+    expect(timeline[1].defaultOpen).toBe(false)
+    
+    expect(timeline[2].kind).toBe('assistant')
+    expect(timeline[2].body).toBe('Here is the answer.')
+  })
 })

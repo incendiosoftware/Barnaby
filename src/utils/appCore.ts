@@ -50,6 +50,9 @@ import {
   DEFAULT_WORKSPACE_CURSOR_ALLOW_BUILDS,
   DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES,
   DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES,
+  RESTRICTED_WORKSPACE_ALLOWED_COMMAND_PREFIXES,
+  RESTRICTED_WORKSPACE_DENIED_AUTO_READ_PREFIXES,
+  RESTRICTED_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES,
   DEFAULT_FONT_CODE,
   DEFAULT_FONT_EDITOR,
   DEFAULT_FONT_FAMILY,
@@ -92,8 +95,8 @@ export function getModelProvider(modelId: string): ConnectivityProvider {
 }
 
 export const LIMIT_WARNING_PREFIX = 'Warning (Limits):'
-export const OUTSIDE_WORKSPACE_BUILD_WARNING_PREFIX = 'Warning (Outside Workspace Builds):'
-export const OUTSIDE_WORKSPACE_BUILD_WARNING = `${OUTSIDE_WORKSPACE_BUILD_WARNING_PREFIX} "Allow build commands outside workspace" is enabled for this chat. Build commands may run outside the workspace folder.`
+export const OUTSIDE_WORKSPACE_BUILD_WARNING_PREFIX = 'Warning: "Build commands are permitted to run outside the workspace folder."'
+export const OUTSIDE_WORKSPACE_BUILD_WARNING = OUTSIDE_WORKSPACE_BUILD_WARNING_PREFIX
 export const TRANSCRIPT_SAVED_PREFIX = '📄 Transcript saved:'
 export const CONTEXT_COMPACTION_NOTICE_PREFIX = '⚙️ System Notice: The conversation history was getting too long.'
 export const CONTEXT_COMPACTION_NOTICE = `${CONTEXT_COMPACTION_NOTICE_PREFIX} Older messages have been compacted into a summary to save memory.`
@@ -140,6 +143,10 @@ export function syncModelConfigWithCatalog(
   prev: ModelConfig,
   available: AvailableCatalogModels,
   providerRegistry: ProviderRegistry,
+  options?: {
+    pruneMissingFromCatalog?: boolean
+    providers?: ModelProvider[]
+  },
 ): ModelConfig {
   const enabledProviders = new Set<ModelProvider>(
     resolveProviderConfigs(providerRegistry)
@@ -162,15 +169,41 @@ export function syncModelConfigWithCatalog(
     gemini: [...(available.gemini ?? []), ...defaultModelsByProvider.gemini],
     openrouter: [...(available.openrouter ?? []), ...defaultModelsByProvider.openrouter],
   }
+  const pruneMissingFromCatalog = options?.pruneMissingFromCatalog === true
+  const providersToSync = new Set<ModelProvider>(
+    (options?.providers && options.providers.length > 0
+      ? options.providers
+      : CONNECTIVITY_PROVIDERS
+    ).filter((provider): provider is ModelProvider => enabledProviders.has(provider)),
+  )
+  const catalogIdsByProvider: Record<ModelProvider, Set<string>> = {
+    codex: new Set(catalogModelsByProvider.codex.map((m) => String(m.id ?? '').trim()).filter(Boolean)),
+    claude: new Set(catalogModelsByProvider.claude.map((m) => String(m.id ?? '').trim()).filter(Boolean)),
+    gemini: new Set(catalogModelsByProvider.gemini.map((m) => String(m.id ?? '').trim()).filter(Boolean)),
+    openrouter: new Set(catalogModelsByProvider.openrouter.map((m) => String(m.id ?? '').trim()).filter(Boolean)),
+  }
+  const catalogDisplayNameByProvider: Record<ModelProvider, Record<string, string>> = {
+    codex: Object.fromEntries(catalogModelsByProvider.codex.map((m) => [String(m.id ?? '').trim(), String(m.displayName ?? '').trim() || String(m.id ?? '').trim()])),
+    claude: Object.fromEntries(catalogModelsByProvider.claude.map((m) => [String(m.id ?? '').trim(), String(m.displayName ?? '').trim() || String(m.id ?? '').trim()])),
+    gemini: Object.fromEntries(catalogModelsByProvider.gemini.map((m) => [String(m.id ?? '').trim(), String(m.displayName ?? '').trim() || String(m.id ?? '').trim()])),
+    openrouter: Object.fromEntries(catalogModelsByProvider.openrouter.map((m) => [String(m.id ?? '').trim(), String(m.displayName ?? '').trim() || String(m.id ?? '').trim()])),
+  }
   const keptById = new Map<string, ModelInterface>()
   for (const model of prev.interfaces) {
     if (!enabledProviders.has(model.provider)) continue
     const id = String(model.id ?? '').trim()
     if (!id) continue
+    if (
+      pruneMissingFromCatalog &&
+      providersToSync.has(model.provider) &&
+      !catalogIdsByProvider[model.provider].has(id)
+    ) {
+      continue
+    }
     const normalized: ModelInterface = {
       ...model,
       id,
-      displayName: id,
+      displayName: catalogDisplayNameByProvider[model.provider][id] || String(model.displayName ?? '').trim() || id,
     }
     const existing = keptById.get(id)
     if (!existing) {
@@ -182,11 +215,12 @@ export function syncModelConfigWithCatalog(
   const nextInterfaces = [...keptById.values()]
   const existingIds = new Set(nextInterfaces.map((m) => m.id))
   for (const provider of CONNECTIVITY_PROVIDERS) {
-    if (!enabledProviders.has(provider)) continue
+    if (!enabledProviders.has(provider) || !providersToSync.has(provider)) continue
     for (const model of catalogModelsByProvider[provider]) {
       const id = String(model.id ?? '').trim()
       if (!id || existingIds.has(id)) continue
-      nextInterfaces.push({ id, displayName: id, provider, enabled: true })
+      const displayName = String(model.displayName ?? '').trim() || id
+      nextInterfaces.push({ id, displayName, provider, enabled: true })
       existingIds.add(id)
     }
   }
@@ -1669,6 +1703,54 @@ function isOutsideWorkspaceBuildWarningMessage(message: ChatMessage | undefined)
   )
 }
 
+export function classifyTerminalProviderFailure(message: string): { reason: string; userMessage: string } | null {
+  const trimmed = message.trim()
+  if (!trimmed) return null
+  const lower = trimmed.toLowerCase()
+
+  const isCodex403 =
+    lower.includes('403 forbidden') &&
+    (lower.includes('responses_websocket') ||
+      lower.includes('backend-api/codex/responses') ||
+      lower.includes('failed to connect to websocket') ||
+      lower.includes('chatgpt.com/backend-api/codex/responses'))
+  if (isCodex403) {
+    return {
+      reason: 'provider-forbidden',
+      userMessage:
+        'Provider access was denied (403 Forbidden). This session has expired and is now read-only. Re-authenticate Codex/ChatGPT, then start a new chat.',
+    }
+  }
+
+  const authDenied =
+    (lower.includes('forbidden') ||
+      lower.includes('unauthorized') ||
+      lower.includes('access denied') ||
+      lower.includes('authentication failed') ||
+      lower.includes('not authenticated') ||
+      lower.includes('invalid api key') ||
+      lower.includes('api key is invalid') ||
+      lower.includes('api key missing')) &&
+    (lower.includes('api key') ||
+      lower.includes('auth') ||
+      lower.includes('login') ||
+      lower.includes('provider') ||
+      lower.includes('codex') ||
+      lower.includes('openai') ||
+      lower.includes('openrouter') ||
+      lower.includes('claude') ||
+      lower.includes('gemini'))
+  if (authDenied) {
+    return {
+      reason: 'provider-auth',
+      userMessage:
+        'Provider authentication failed. This session has expired and is now read-only. Fix the provider login/API key, then start a new chat.',
+    }
+  }
+
+  return null
+}
+
 export function withOutsideWorkspaceBuildWarning(messages: ChatMessage[]): ChatMessage[] {
   const existingIdx = messages.findIndex((message) => isOutsideWorkspaceBuildWarningMessage(message))
   const existing = existingIdx >= 0 ? messages[existingIdx] : null
@@ -1689,6 +1771,12 @@ export function withOutsideWorkspaceBuildWarning(messages: ChatMessage[]): ChatM
   return [warning, ...messages]
 }
 
+export function syncOutsideWorkspaceBuildWarning(messages: ChatMessage[], enabled: boolean): ChatMessage[] {
+  if (enabled) return withOutsideWorkspaceBuildWarning(messages)
+  const next = messages.filter((message) => !isOutsideWorkspaceBuildWarningMessage(message))
+  return next.length === messages.length ? messages : next
+}
+
 export function makeDefaultPanel(
   id: string,
   cwd: string,
@@ -1707,7 +1795,7 @@ export function makeDefaultPanel(
       createdAt: Date.now(),
     },
   ]
-  const messages = cursorAllowBuilds ? withOutsideWorkspaceBuildWarning(baseMessages) : baseMessages
+  const messages = syncOutsideWorkspaceBuildWarning(baseMessages, cursorAllowBuilds)
 
   return {
     id,
@@ -1718,7 +1806,7 @@ export function makeDefaultPanel(
     provider,
     model: model,
     interactionMode: 'agent',
-    permissionMode: 'verify-first',
+    permissionMode: 'proceed-always',
     sandbox: 'workspace-write',
     status: 'Not connected',
     connected: false,
@@ -1757,8 +1845,9 @@ function buildDefaultWorkspaceSettings(path: string): WorkspaceSettings {
   return {
     path,
     defaultModel: DEFAULT_MODEL,
-    permissionMode: 'verify-first',
+    permissionMode: 'proceed-always',
     sandbox: 'workspace-write',
+    restrictAgentAccess: false,
     workspaceContext: '',
     showWorkspaceContextInPrompt: false,
     systemPrompt: '',
@@ -1780,13 +1869,17 @@ export function normalizeWorkspaceSettingsFromPartial(
   const v = value ?? {}
   const path =
     typeof v.path === 'string' && v.path.trim() ? v.path.trim() : normalizedFallbackPath || defaults.path
+  const restrictAgentAccess = v?.restrictAgentAccess === true
+
   const sandbox: SandboxMode = v?.sandbox === 'read-only' ? 'read-only' : 'workspace-write'
   const permissionMode: PermissionMode =
     sandbox === 'read-only'
       ? 'verify-first'
-      : v?.permissionMode === 'proceed-always'
-        ? 'proceed-always'
-        : 'verify-first'
+      : restrictAgentAccess
+        ? 'verify-first'
+        : v?.permissionMode === 'verify-first'
+          ? 'verify-first'
+          : 'proceed-always'
 
   const hasAllowedCommandPrefixes = Array.isArray(v?.allowedCommandPrefixes)
   const hasAllowedAutoReadPrefixes = Array.isArray(v?.allowedAutoReadPrefixes)
@@ -1799,22 +1892,32 @@ export function normalizeWorkspaceSettingsFromPartial(
   const deniedAutoReadPrefixes = normalizeAllowedCommandPrefixes(v?.deniedAutoReadPrefixes)
   const deniedAutoWritePrefixes = normalizeAllowedCommandPrefixes(v?.deniedAutoWritePrefixes)
 
+  const restrictiveDefaults = {
+    allowedCommandPrefixes: [...RESTRICTED_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+    allowedAutoReadPrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES],
+    allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
+    deniedAutoReadPrefixes: [...RESTRICTED_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+    deniedAutoWritePrefixes: [...RESTRICTED_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
+  }
+  const effectiveDefaults = restrictAgentAccess ? restrictiveDefaults : defaults
+
   const cursorAllowBuilds =
-    typeof v?.cursorAllowBuilds === 'boolean' ? v.cursorAllowBuilds : defaults.cursorAllowBuilds ?? false
+    typeof v?.cursorAllowBuilds === 'boolean' ? v.cursorAllowBuilds : defaults.cursorAllowBuilds ?? true
 
   return {
     path,
     defaultModel: typeof v?.defaultModel === 'string' && v.defaultModel ? v.defaultModel : defaults.defaultModel,
     permissionMode,
     sandbox,
+    restrictAgentAccess,
     workspaceContext: typeof v?.workspaceContext === 'string' ? v.workspaceContext : defaults.workspaceContext,
     showWorkspaceContextInPrompt: v?.showWorkspaceContextInPrompt === true,
     systemPrompt: typeof v?.systemPrompt === 'string' ? v.systemPrompt : defaults.systemPrompt,
-    allowedCommandPrefixes: hasAllowedCommandPrefixes ? allowedCommandPrefixes : defaults.allowedCommandPrefixes,
-    allowedAutoReadPrefixes: hasAllowedAutoReadPrefixes ? allowedAutoReadPrefixes : defaults.allowedAutoReadPrefixes,
-    allowedAutoWritePrefixes: hasAllowedAutoWritePrefixes ? allowedAutoWritePrefixes : defaults.allowedAutoWritePrefixes,
-    deniedAutoReadPrefixes: hasDeniedAutoReadPrefixes ? deniedAutoReadPrefixes : defaults.deniedAutoReadPrefixes,
-    deniedAutoWritePrefixes: hasDeniedAutoWritePrefixes ? deniedAutoWritePrefixes : defaults.deniedAutoWritePrefixes,
+    allowedCommandPrefixes: hasAllowedCommandPrefixes ? allowedCommandPrefixes : effectiveDefaults.allowedCommandPrefixes,
+    allowedAutoReadPrefixes: hasAllowedAutoReadPrefixes ? allowedAutoReadPrefixes : effectiveDefaults.allowedAutoReadPrefixes,
+    allowedAutoWritePrefixes: hasAllowedAutoWritePrefixes ? allowedAutoWritePrefixes : effectiveDefaults.allowedAutoWritePrefixes,
+    deniedAutoReadPrefixes: hasDeniedAutoReadPrefixes ? deniedAutoReadPrefixes : effectiveDefaults.deniedAutoReadPrefixes,
+    deniedAutoWritePrefixes: hasDeniedAutoWritePrefixes ? deniedAutoWritePrefixes : effectiveDefaults.deniedAutoWritePrefixes,
     cursorAllowBuilds,
   }
 }

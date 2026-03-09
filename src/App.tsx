@@ -155,6 +155,9 @@ import {
   DEFAULT_WORKSPACE_ALLOWED_COMMAND_PREFIXES,
   DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES,
   DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES,
+  RESTRICTED_WORKSPACE_ALLOWED_COMMAND_PREFIXES,
+  RESTRICTED_WORKSPACE_DENIED_AUTO_READ_PREFIXES,
+  RESTRICTED_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES,
   FONT_SCALE_STEP,
   INPUT_MAX_HEIGHT_PX,
   MAX_AUTO_CONTINUE,
@@ -295,6 +298,7 @@ import {
   toShortJson,
   toWorkspaceRelativePathIfInsideRoot,
   truncateText,
+  syncOutsideWorkspaceBuildWarning,
   withExhaustedRateLimitWarning,
   withLimitWarningMessage,
   withModelBanner,
@@ -307,6 +311,7 @@ import {
 } from './utils/appCore'
 import {
   estimatePanelContextUsage as estimatePanelContextUsageUtil,
+  getWorkspaceContextEstimateForPanel,
   sandboxModeDescription as describeSandboxMode,
   getWorkspaceSecurityLimitsForPath as getWorkspaceSecurityLimitsForPathUtil,
   clampPanelSecurityForWorkspace as clampPanelSecurityForWorkspaceUtil,
@@ -336,8 +341,9 @@ export default function App() {
   const [workspaceForm, setWorkspaceForm] = useState<WorkspaceSettings>({
     path: getInitialWorkspaceRoot(),
     defaultModel: DEFAULT_MODEL,
-    permissionMode: 'verify-first',
+    permissionMode: 'proceed-always',
     sandbox: 'workspace-write',
+    restrictAgentAccess: false,
     workspaceContext: '',
     showWorkspaceContextInPrompt: false,
     systemPrompt: '',
@@ -346,12 +352,13 @@ export default function App() {
     allowedAutoWritePrefixes: [...DEFAULT_WORKSPACE_ALLOWED_AUTO_WRITE_PREFIXES],
     deniedAutoReadPrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
     deniedAutoWritePrefixes: [...DEFAULT_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
+    cursorAllowBuilds: true,
   })
   const [workspaceFormTextDraft, setWorkspaceFormTextDraft] = useState<WorkspaceSettingsTextDraft>(() =>
     workspaceSettingsToTextDraft({
       path: getInitialWorkspaceRoot(),
       defaultModel: DEFAULT_MODEL,
-      permissionMode: 'verify-first',
+      permissionMode: 'proceed-always',
       sandbox: 'workspace-write',
       workspaceContext: '',
       showWorkspaceContextInPrompt: false,
@@ -1591,14 +1598,22 @@ export default function App() {
         const wsSandbox = ws?.sandbox ?? panel.sandbox
         const wsPermission = ws?.permissionMode ?? panel.permissionMode
         const clamped = clampPanelSecurityForWorkspace(panel.cwd, wsSandbox, wsPermission)
-        if (clamped.sandbox === panel.sandbox && clamped.permissionMode === panel.permissionMode) return panel
+        const nextMessages = syncOutsideWorkspaceBuildWarning(panel.messages, ws?.cursorAllowBuilds === true)
+        const securityChanged = clamped.sandbox !== panel.sandbox || clamped.permissionMode !== panel.permissionMode
+        if (
+          !securityChanged &&
+          nextMessages === panel.messages
+        ) {
+          return panel
+        }
         changed = true
         return {
           ...panel,
           sandbox: clamped.sandbox,
           permissionMode: clamped.permissionMode,
-          connected: false,
-          status: 'Workspace limits changed. Reconnect on next send.',
+          messages: nextMessages,
+          connected: securityChanged ? false : panel.connected,
+          status: securityChanged ? 'Workspace limits changed. Reconnect on next send.' : panel.status,
         }
       })
       return changed ? next : prev
@@ -2049,7 +2064,7 @@ export default function App() {
     }
   }
 
-  async function downloadPanelTranscript(panelId: string) {
+  async function downloadPanelTranscript(panelId: string, andRemember?: boolean) {
     const panel = panelsRef.current.find((p) => p.id === panelId)
     if (!panel) return
     if (!api.saveTranscriptDirect) {
@@ -2105,6 +2120,9 @@ export default function App() {
               },
           ),
         )
+        if (andRemember) {
+          void sendToAgent(panelId, `Please review chat history: ${result.path}`)
+        }
       } else {
         alert(result?.error ? `Could not save transcript: ${result.error}` : 'Could not save transcript.')
       }
@@ -2490,6 +2508,39 @@ export default function App() {
       async interruptPanel(panelId) {
         try { await api.interrupt(panelId) } catch { /* best-effort */ }
       },
+      async getPanelInfo(panelId) {
+        const panel = panelsRef.current.find((w) => w.id === panelId)
+        if (!panel) return null
+        return {
+          id: panel.id,
+          status: panel.streaming ? 'busy' : panel.connected ? 'idle' : 'error',
+          model: panel.model,
+          provider: panel.provider,
+          streaming: panel.streaming,
+          messageCount: panel.messages.length,
+        }
+      },
+      async getPanelMessages(panelId) {
+        const panel = panelsRef.current.find((w) => w.id === panelId)
+        if (!panel) return []
+        return panel.messages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          format: message.format,
+          createdAt: message.createdAt,
+        }))
+      },
+      async listPanels() {
+        return panelsRef.current.map((panel) => ({
+          id: panel.id,
+          status: panel.streaming ? 'busy' : panel.connected ? 'idle' : 'error',
+          model: panel.model,
+          provider: panel.provider,
+          streaming: panel.streaming,
+          messageCount: panel.messages.length,
+        }))
+      },
       async listFiles(options) {
         const tree = await api.listWorkspaceTree(workspaceRoot, { includeHidden: options.includeHidden })
         return tree
@@ -2515,7 +2566,16 @@ export default function App() {
   }, [dockTab, api])
 
   function estimatePanelContextUsage(panel: AgentPanelState) {
-    return estimatePanelContextUsageUtil(panel, getModelProvider)
+    const wsEstimate = getWorkspaceContextEstimateForPanel(
+      panel.cwd,
+      workspaceSettingsByPath,
+      workspaceRoot ?? '',
+    )
+    const backendUsage =
+      panel.usage && (typeof panel.usage.input_tokens === 'number' || typeof panel.usage.output_tokens === 'number')
+        ? panel.usage
+        : null
+    return estimatePanelContextUsageUtil(panel, getModelProvider, wsEstimate, backendUsage)
   }
 
   function sandboxModeDescription(mode: SandboxMode) {
@@ -2943,7 +3003,7 @@ export default function App() {
   function renderDockPanelContent(panelId: DockPanelId) {
     switch (panelId) {
       case 'orchestrator':
-        return renderAgentOrchestratorPane()
+        return renderAgentOrchestratorPane(() => closeDockPanel('orchestrator'))
       case 'workspace-folder':
         return (
           <ExplorerPane
@@ -2965,6 +3025,7 @@ export default function App() {
             onOpenFile={(relativePath) => void openEditorForRelativePath(relativePath)}
             onOpenContextMenu={openExplorerContextMenu}
             onCloseGitContextMenu={() => setGitContextMenu(null)}
+            onClose={() => closeDockPanel('workspace-folder')}
           />
         )
       case 'workspace-settings':
@@ -2993,6 +3054,31 @@ export default function App() {
             onPermissionModeChange={(value) =>
               workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, permissionMode: value }))
             }
+            onRestrictAgentAccessChange={(value) =>
+              workspaceSettings.updateDockedWorkspaceForm(
+                (prev) => {
+                  if (value) {
+                    return {
+                      ...prev,
+                      restrictAgentAccess: true,
+                      permissionMode: 'verify-first',
+                      allowedCommandPrefixes: [...RESTRICTED_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+                      deniedAutoReadPrefixes: [...RESTRICTED_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+                      deniedAutoWritePrefixes: [...RESTRICTED_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
+                    }
+                  }
+                  return {
+                    ...prev,
+                    restrictAgentAccess: false,
+                    permissionMode: 'proceed-always',
+                    allowedCommandPrefixes: [],
+                    deniedAutoReadPrefixes: [],
+                    deniedAutoWritePrefixes: [],
+                  }
+                },
+                { syncTextDraft: true },
+              )
+            }
             onCursorAllowBuildsChange={(value) =>
               workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, cursorAllowBuilds: value }))
             }
@@ -3006,6 +3092,7 @@ export default function App() {
               workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, systemPrompt: value }))
             }
             onTextDraftChange={workspaceSettings.updateDockedWorkspaceTextDraft}
+            onClose={() => closeDockPanel('workspace-settings')}
           />
         )
       case 'application-settings':
@@ -3029,6 +3116,7 @@ export default function App() {
             onEntryClick={handleGitEntryClick}
             onEntryDoubleClick={(relativePath) => void openEditorForRelativePath(relativePath)}
             onEntryContextMenu={openGitContextMenu}
+            onClose={() => closeDockPanel('source-control')}
           />
         )
       case 'terminal':
@@ -3043,7 +3131,7 @@ export default function App() {
           <div className="h-full flex items-center justify-center text-neutral-500 text-sm">Terminal requires Electron</div>
         )
       case 'debug-output':
-        return <DebugOutputPanel api={api} />
+        return <DebugOutputPanel api={api} onClose={() => closeDockPanel('debug-output')} />
       default:
         return null
     }
@@ -3362,7 +3450,7 @@ export default function App() {
   function renderWorkspaceTile() {
     const dockContent =
       dockTab === 'orchestrator'
-        ? renderAgentOrchestratorPane()
+        ? renderAgentOrchestratorPane(() => setShowWorkspaceWindow(false))
         : dockTab === 'explorer'
           ? (
             <ExplorerPane
@@ -3384,6 +3472,7 @@ export default function App() {
               onOpenFile={(relativePath) => void openEditorForRelativePath(relativePath)}
               onOpenContextMenu={openExplorerContextMenu}
               onCloseGitContextMenu={() => setGitContextMenu(null)}
+              onClose={() => setShowWorkspaceWindow(false)}
             />
           )
           : dockTab === 'git'
@@ -3401,6 +3490,7 @@ export default function App() {
                 onEntryClick={handleGitEntryClick}
                 onEntryDoubleClick={(relativePath) => void openEditorForRelativePath(relativePath)}
                 onEntryContextMenu={openGitContextMenu}
+                onClose={() => setShowWorkspaceWindow(false)}
               />
             )
             : (
@@ -3428,6 +3518,31 @@ export default function App() {
                 onPermissionModeChange={(value) =>
                   workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, permissionMode: value }))
                 }
+                onRestrictAgentAccessChange={(value) =>
+                  workspaceSettings.updateDockedWorkspaceForm(
+                    (prev) => {
+                      if (value) {
+                        return {
+                          ...prev,
+                          restrictAgentAccess: true,
+                          permissionMode: 'verify-first',
+                          allowedCommandPrefixes: [...RESTRICTED_WORKSPACE_ALLOWED_COMMAND_PREFIXES],
+                          deniedAutoReadPrefixes: [...RESTRICTED_WORKSPACE_DENIED_AUTO_READ_PREFIXES],
+                          deniedAutoWritePrefixes: [...RESTRICTED_WORKSPACE_DENIED_AUTO_WRITE_PREFIXES],
+                        }
+                      }
+                      return {
+                        ...prev,
+                        restrictAgentAccess: false,
+                        permissionMode: 'proceed-always',
+                        allowedCommandPrefixes: [],
+                        deniedAutoReadPrefixes: [],
+                        deniedAutoWritePrefixes: [],
+                      }
+                    },
+                    { syncTextDraft: true },
+                  )
+                }
                 onCursorAllowBuildsChange={(value) =>
                   workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, cursorAllowBuilds: value }))
                 }
@@ -3441,6 +3556,7 @@ export default function App() {
                   workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, systemPrompt: value }))
                 }
                 onTextDraftChange={workspaceSettings.updateDockedWorkspaceTextDraft}
+                onClose={() => setShowWorkspaceWindow(false)}
               />
             )
     return (
@@ -3451,7 +3567,11 @@ export default function App() {
         draggingPanelId={draggingPanelId}
         dragOverTarget={dragOverTarget}
         dockContent={dockContent}
-        onMouseDownCapture={() => setFocusedEditorId(null)}
+        onMouseDown={(e) => {
+          const target = e.target as HTMLElement | null
+          if (target?.closest('[data-workspace-title-bar="true"]') || target?.closest('[data-workspace-dock-tab-bar="true"]')) return
+          setFocusedEditorId(null)
+        }}
         onDragOver={(e) => showSettingsWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
         onDrop={(e) => showSettingsWindow && handleDockDrop(e, dragOverTarget)}
         onDragStart={(e) => showSettingsWindow && handleDragStart(e, 'workspace', 'workspace-window')}
@@ -3483,6 +3603,11 @@ export default function App() {
         applicationSettings={applicationSettings}
         activeTheme={activeTheme}
         onFocus={() => setFocusedEditorId(panel.id)}
+        onMouseDown={(e) => {
+          const target = e.target as HTMLElement | null
+          if (target?.closest('[data-editor-toolbar="true"]')) return
+          setFocusedEditorId(panel.id)
+        }}
         onWheel={(e) => {
           if (!isZoomWheelGesture(e)) return
           e.preventDefault()
@@ -3542,7 +3667,11 @@ export default function App() {
             onEntryContextMenu={openGitContextMenu}
           />
         }
-        onMouseDownCapture={() => setFocusedEditorId(null)}
+        onMouseDown={(e) => {
+          const target = e.target as HTMLElement | null
+          if (target?.closest('[data-workspace-title-bar="true"]') || target?.closest('[data-workspace-dock-tab-bar="true"]')) return
+          setFocusedEditorId(null)
+        }}
         onDragOver={(e) => showSettingsWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
         onDrop={(e) => showSettingsWindow && handleDockDrop(e, dragOverTarget)}
         onDragStart={(e) => showSettingsWindow && handleDragStart(e, 'workspace', 'git-window')}
@@ -3569,7 +3698,11 @@ export default function App() {
             <div ref={codeWindowSettingsHostRef} className="flex-1 min-h-0" />
           </div>
         }
-        onMouseDownCapture={() => setFocusedEditorId(null)}
+        onMouseDown={(e) => {
+          const target = e.target as HTMLElement | null
+          if (target?.closest('[data-workspace-title-bar="true"]') || target?.closest('[data-workspace-dock-tab-bar="true"]')) return
+          setFocusedEditorId(null)
+        }}
         onDragOver={(e) => showSettingsWindow && handleDragOver(e, { acceptDock: true, targetId: 'dock-workspace' })}
         onDrop={(e) => showSettingsWindow && handleDockDrop(e, dragOverTarget)}
         onDragStart={(e) => showSettingsWindow && handleDragStart(e, 'workspace', 'settings-window')}
@@ -3748,7 +3881,7 @@ export default function App() {
     setInteractionMode,
   } = panelInputCtrl
 
-  function renderAgentOrchestratorPane() {
+  function renderAgentOrchestratorPane(onClose?: () => void) {
     const orchestratorPlugin = loadedPlugins?.find((p) => p.pluginId === 'orchestrator')
     const pluginInstalled = Boolean(orchestratorPlugin?.active)
 
@@ -3760,6 +3893,7 @@ export default function App() {
           pluginVersion={orchestratorPlugin.version ?? '?'}
           licensed={orchestratorPlugin.licensed ?? false}
           onOpenSettings={() => openAppSettingsInRightDock('orchestrator')}
+          onClose={onClose}
         />
       )
     }
@@ -3767,21 +3901,34 @@ export default function App() {
     // Fallback: plugin not installed
     return (
       <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
-        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs">
+        <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800">
           <div className="flex items-center justify-between gap-2">
-            <div className="font-medium text-neutral-700 dark:text-neutral-300">Agent Orchestrator</div>
-            <button
-              type="button"
-              className={UI_TOOLBAR_ICON_BUTTON_CLASS}
-              title="Orchestrator settings"
-              aria-label="Orchestrator settings"
-              onClick={() => openAppSettingsInRightDock('orchestrator')}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-            </button>
+            <div className="text-base font-medium text-neutral-700 dark:text-neutral-300">Agent Orchestrator</div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                className={UI_TOOLBAR_ICON_BUTTON_CLASS}
+                title="Orchestrator settings"
+                aria-label="Orchestrator settings"
+                onClick={() => openAppSettingsInRightDock('orchestrator')}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
+              {onClose && (
+                <button
+                  type="button"
+                  className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded border-0 text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
+                  onClick={onClose}
+                  title="Close"
+                  aria-label="Close"
+                >
+                  <CloseIcon size={12} />
+                </button>
+              )}
+            </div>
           </div>
           <p className="mt-1.5 text-neutral-500 dark:text-neutral-400 leading-relaxed">
             Persistent goal-driven orchestration for multi-agent workflows. Install the orchestrator plugin to enable.

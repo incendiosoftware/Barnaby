@@ -4,8 +4,7 @@
 
 import React from 'react'
 import type { PermissionMode, SandboxMode, WorkspaceSettings, WorkspaceSettingsTextDraft } from '../types'
-import { UI_INPUT_CLASS, UI_SELECT_CLASS } from '../constants'
-import { CloseIcon } from './icons'
+import { UI_CLOSE_ICON_BUTTON_CLASS, UI_INPUT_CLASS, UI_SELECT_CLASS } from '../constants'
 
 function sandboxModeDescription(mode: SandboxMode): string {
   if (mode === 'read-only') return 'Read project files only; no file edits or shell writes.'
@@ -22,6 +21,7 @@ export interface WorkspaceSettingsPaneProps {
   onDefaultModelChange: (value: string) => void
   onSandboxChange: (value: SandboxMode) => void
   onPermissionModeChange: (value: PermissionMode) => void
+  onRestrictAgentAccessChange: (value: boolean) => void
   onCursorAllowBuildsChange: (value: boolean) => void
   onWorkspaceContextChange: (value: string) => void
   onShowWorkspaceContextInPromptChange: (value: boolean) => void
@@ -40,6 +40,7 @@ export function WorkspaceSettingsPane({
   onDefaultModelChange,
   onSandboxChange,
   onPermissionModeChange,
+  onRestrictAgentAccessChange,
   onCursorAllowBuildsChange,
   onWorkspaceContextChange,
   onShowWorkspaceContextInPromptChange,
@@ -49,17 +50,19 @@ export function WorkspaceSettingsPane({
 }: WorkspaceSettingsPaneProps) {
   return (
     <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
-      <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 text-xs flex items-center justify-between gap-2">
-        <span className="font-medium text-neutral-700 dark:text-neutral-300">Workspace settings</span>
+      <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center justify-between gap-2">
+        <span className="text-base font-medium text-neutral-700 dark:text-neutral-300">Workspace settings</span>
         {onClose && (
           <button
             type="button"
-            className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded border-0 text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
+            className={UI_CLOSE_ICON_BUTTON_CLASS}
             onClick={onClose}
             title="Close"
             aria-label="Close"
           >
-            <CloseIcon size={12} />
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            </svg>
           </button>
         )}
       </div>
@@ -127,6 +130,19 @@ export function WorkspaceSettingsPane({
               onChange={(e) => onSystemPromptChange(e.target.value)}
               placeholder="Additional system instructions for agents in this workspace."
             />
+          </div>
+          <div className="min-w-0 space-y-1.5">
+            <label className="inline-flex items-center gap-2 text-neutral-600 dark:text-neutral-300">
+              <input
+                type="checkbox"
+                checked={workspaceForm.restrictAgentAccess === true}
+                onChange={(e) => onRestrictAgentAccessChange(e.target.checked)}
+              />
+              Restrict agent access (verify-first, limited commands)
+            </label>
+            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+              By default agents have full access. Enable this to require approval for edits/commands and limit shell access.
+            </p>
           </div>
           <div className="min-w-0 space-y-1.5">
             <label className="text-neutral-600 dark:text-neutral-300">Sandbox</label>

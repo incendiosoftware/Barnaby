@@ -4,7 +4,9 @@
 
 import React from 'react'
 import type { ExplorerPrefs, WorkspaceTreeNode } from '../types'
-import { CloseIcon, CollapseAllIcon, ExpandAllIcon, RefreshIcon } from './icons'
+import { UI_CLOSE_ICON_BUTTON_CLASS } from '../constants'
+import { CollapseAllIcon, ExpandAllIcon, RefreshIcon } from './icons'
+
 
 export interface ExplorerPaneProps {
   workspaceTree: WorkspaceTreeNode[]
@@ -109,18 +111,16 @@ export function ExplorerPane({
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
-      <div className="px-3 py-2.5 text-xs">
+      <div className="px-3 py-2.5">
         <div className="flex items-center justify-between gap-2">
-          <span className="font-medium text-neutral-700 dark:text-neutral-300">Workspace folder</span>
+          <span className="text-base font-medium text-neutral-700 dark:text-neutral-300">Workspace folder</span>
           {onClose && (
             <button
-              type="button"
-              className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded border-0 text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700"
+              className={UI_CLOSE_ICON_BUTTON_CLASS}
               onClick={onClose}
               title="Close"
-              aria-label="Close"
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                 <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
               </svg>
             </button>

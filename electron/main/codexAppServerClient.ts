@@ -452,9 +452,17 @@ export class CodexAppServerClient extends EventEmitter {
       return
     }
 
-    // Optional: usage and plan surfaces
+    // Optional: usage and plan surfaces – actual context token counts for the thread
     if (method === 'thread/tokenUsage/updated') {
-      this.emitEvent({ type: 'usageUpdated', usage: params })
+      const p = params as Record<string, unknown> | undefined
+      const usage = (p?.usage ?? p) as Record<string, unknown> | undefined
+      const input = typeof usage?.input_tokens === 'number' ? usage.input_tokens : typeof p?.input_tokens === 'number' ? p.input_tokens : undefined
+      const output = typeof usage?.output_tokens === 'number' ? usage.output_tokens : typeof p?.output_tokens === 'number' ? p.output_tokens : undefined
+      const total = typeof usage?.total_tokens === 'number' ? usage.total_tokens : typeof p?.total_tokens === 'number' ? p.total_tokens : undefined
+      this.emitEvent({
+        type: 'usageUpdated',
+        usage: { input_tokens: input, output_tokens: output, total_tokens: total },
+      })
       return
     }
 

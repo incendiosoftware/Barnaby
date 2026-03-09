@@ -248,6 +248,7 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
           if (inputLocked) return
           ctx.summarizeSessionContext(w.id)
         }}
+        onDownloadTranscriptAndRemember={() => ctx.downloadPanelTranscript(w.id, true)}
       />
     </AgentPanelShell>
   )

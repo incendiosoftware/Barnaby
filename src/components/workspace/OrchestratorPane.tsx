@@ -10,12 +10,14 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react'
+import { UI_CLOSE_ICON_BUTTON_CLASS } from '../../constants'
 
 export interface OrchestratorPaneProps {
     pluginDisplayName: string
     pluginVersion: string
     licensed: boolean
     onOpenSettings: () => void
+    onClose?: () => void
 }
 
 interface ChatMessage {
@@ -25,7 +27,7 @@ interface ChatMessage {
     timestamp: number
 }
 
-export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, onOpenSettings }: OrchestratorPaneProps) {
+export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, onOpenSettings, onClose }: OrchestratorPaneProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([
         {
             id: 'welcome',
@@ -62,25 +64,38 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
     return (
         <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
             {/* Header */}
-            <div className="px-3 py-2.5 border-b border-neutral-200/80 dark:border-neutral-800 text-xs flex items-center justify-between shrink-0">
+            <div className="px-3 py-2.5 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2">
                     <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${licensed ? 'bg-green-500 dark:bg-green-600' : 'bg-amber-500 dark:bg-amber-600'}`} />
-                    <span className="font-medium text-neutral-700 dark:text-neutral-300">
+                    <span className="text-base font-medium text-neutral-700 dark:text-neutral-300">
                         {pluginDisplayName} <span className="text-neutral-400 dark:text-neutral-500 font-normal">v{pluginVersion}</span>
                     </span>
                 </div>
-                <button
-                    type="button"
-                    className="h-7 w-7 inline-flex items-center justify-center rounded-md border-0 bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
-                    title="Orchestrator settings"
-                    aria-label="Orchestrator settings"
-                    onClick={onOpenSettings}
-                >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                    </svg>
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                        type="button"
+                        className="h-7 w-7 inline-flex items-center justify-center rounded-md border-0 bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
+                        title="Orchestrator settings"
+                        aria-label="Orchestrator settings"
+                        onClick={onOpenSettings}
+                    >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                        </svg>
+                    </button>
+                    {onClose && (
+                        <button
+                            className={UI_CLOSE_ICON_BUTTON_CLASS}
+                            onClick={onClose}
+                            title="Close"
+                        >
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                            </svg>
+                        </button>
+                    )}
+                </div>
             </div>
 
             {/* License gate */}

@@ -53,6 +53,7 @@ export function useAppRuntimeEvents(ctx: any) {
     findInPageFromMenu,
     findInFilesFromMenu,
     openAppSettingsInRightDock,
+    openOrchestratorSettingsModal,
     focusedEditorIdRef,
     saveEditorPanel,
     saveEditorPanelAs,
@@ -505,7 +506,7 @@ export function useAppRuntimeEvents(ctx: any) {
         return
       }
       if (action === 'openOrchestrator') {
-        openAppSettingsInRightDock('orchestrator')
+        openOrchestratorSettingsModal?.()
         return
       }
       if (action === 'openMcpServers') {

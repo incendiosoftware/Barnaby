@@ -64,7 +64,7 @@ export const PROVIDER_SUBSCRIPTION_URLS: Record<string, string> = {
 
 export const PANEL_INTERACTION_MODES: AgentInteractionMode[] = ['agent', 'plan', 'debug', 'ask']
 export const CONNECTIVITY_PROVIDERS: ConnectivityProvider[] = ['codex', 'claude', 'gemini', 'openrouter']
-export const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'preferences', 'agents', 'orchestrator', 'mcp-servers', 'diagnostics']
+export const APP_SETTINGS_VIEWS: AppSettingsView[] = ['connectivity', 'preferences', 'agents', 'mcp-servers', 'diagnostics']
 
 export const DOCK_PANEL_LABELS: Record<DockPanelId, string> = {
   orchestrator: 'Orchestrator',

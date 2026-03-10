@@ -173,9 +173,22 @@ interface Window {
     repairStartMenuShortcut(): Promise<{ ok: boolean; error?: string }>
     openPluginsFolder(): Promise<{ ok: boolean; error?: string }>
     reloadLocalPlugins(): Promise<{ ok: boolean; error?: string }>
-    syncOrchestratorSettings(settings: { orchestratorModel?: string; workerProvider?: string; workerModel?: string; maxParallelPanels?: number; maxTaskAttempts?: number }): Promise<void>
+    syncOrchestratorSettings(settings: {
+      orchestratorModel?: string
+      workerProvider?: string
+      workerModel?: string
+      maxParallelPanels?: number
+      maxTaskAttempts?: number
+      orchestratorPool?: Array<{ id: string; label: string; provider: string; model: string }>
+      workerPool?: Array<{ id: string; label: string; provider: string; model: string }>
+      comparativeReviewerAId?: string
+      comparativeReviewerBId?: string
+    }): Promise<void>
     getLoadedPlugins(): Promise<Array<{ pluginId: string; displayName: string; version: string; active: boolean; licensed: boolean }>>
-    startOrchestratorComparativeReview(goal: string): Promise<{ ok: boolean; runId?: string; error?: string }>
+    startOrchestratorComparativeReview(goal: string, options?: {
+      reviewerA?: { id?: string; label?: string; provider?: string; model?: string }
+      reviewerB?: { id?: string; label?: string; provider?: string; model?: string }
+    }): Promise<{ ok: boolean; runId?: string; error?: string }>
     startOrchestratorGoalRun(goal: string): Promise<{ ok: boolean; runId?: string; error?: string }>
     pauseOrchestratorRun(): Promise<{ ok: boolean; error?: string }>
     cancelOrchestratorRun(): Promise<{ ok: boolean; error?: string }>

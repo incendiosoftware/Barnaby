@@ -1,192 +1,21 @@
 {
   "version": 3,
-  "phase": "complete",
-  "goal": {
-    "text": "what did you do?",
-    "sourceFile": null,
-    "createdAt": 1773126903722
-  },
+  "phase": "idle",
+  "goal": null,
   "tasks": [],
   "activePanels": [],
   "config": {
-    "orchestratorModel": "claude-sonnet-4-20250514",
-    "workerModel": "claude-sonnet-4-20250514",
+    "orchestratorModel": "claude-opus-4-6",
+    "workerModel": "gpt-5.4",
     "workerProvider": "codex",
     "maxParallelPanels": 2,
     "maxTaskAttempts": 3
   },
-  "lastHeartbeat": 1773134512885,
-  "startedAt": 1773126903722,
-  "completedAt": 1773126910327,
+  "lastHeartbeat": 1773135072448,
+  "startedAt": null,
+  "completedAt": null,
   "error": null,
   "currentRun": null,
-  "goalRun": {
-    "id": "mmk9z73e-a2dxih",
-    "goal": "what did you do?",
-    "status": "completed",
-    "tasks": [
-      {
-        "id": "mmk9z9lx-oy85hi",
-        "title": "Implement goal",
-        "description": "what did you do?",
-        "role": "builder",
-        "status": "completed",
-        "dependsOn": [],
-        "panelId": "1773126907033-5a8fe976e36b3",
-        "attempts": 1,
-        "createdAt": 1773126906981,
-        "startedAt": 1773126907025,
-        "completedAt": 1773126910282
-      }
-    ],
-    "createdAt": 1773126903722,
-    "completedAt": 1773126910327,
-    "summary": "Goal run completed. 1 tasks finished successfully."
-  },
-  "log": [
-    {
-      "id": "mmk9y35m-udi18o",
-      "actor": "user",
-      "kind": "goal",
-      "text": "complete the full implementaion of the orchestrator",
-      "panelId": null,
-      "createdAt": 1773126851962
-    },
-    {
-      "id": "mmk9y35m-n5bfcn",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Goal run mmk9y35m-zlkzbk started.",
-      "panelId": null,
-      "createdAt": 1773126851962
-    },
-    {
-      "id": "mmk9y35o-9fj6ff",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Spawning planner agent for task decomposition.",
-      "panelId": null,
-      "createdAt": 1773126851964
-    },
-    {
-      "id": "mmk9yc0u-ekpt1e",
-      "actor": "orchestrator",
-      "kind": "response",
-      "text": "Planner output:\nI'll analyze the current state of the orchestrator implementation to break down the remaining tasks. Let me start by examining the key orchestrator files to understand what's been implemented and what's missing.",
-      "panelId": null,
-      "createdAt": 1773126863454
-    },
-    {
-      "id": "mmk9yc0u-xzgmnl",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Planner did not produce a task list. Using single-task fallback.",
-      "panelId": null,
-      "createdAt": 1773126863454
-    },
-    {
-      "id": "mmk9yc0u-06fvij",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Decomposed into 1 tasks.",
-      "panelId": null,
-      "createdAt": 1773126863454
-    },
-    {
-      "id": "mmk9yc29-zlb7hs",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Launching \"Implement goal\" (builder, attempt 1).",
-      "panelId": null,
-      "createdAt": 1773126863505
-    },
-    {
-      "id": "mmk9yefs-vfa6e7",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Task \"Implement goal\" completed (no explicit signal).",
-      "panelId": null,
-      "createdAt": 1773126866584
-    },
-    {
-      "id": "mmk9yeh6-cnlwt0",
-      "actor": "orchestrator",
-      "kind": "result",
-      "text": "Goal run completed. 1 tasks finished successfully.",
-      "panelId": null,
-      "createdAt": 1773126866634
-    },
-    {
-      "id": "mmk9z73e-nb1j7i",
-      "actor": "user",
-      "kind": "goal",
-      "text": "what did you do?",
-      "panelId": null,
-      "createdAt": 1773126903722
-    },
-    {
-      "id": "mmk9z73e-wkeomx",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Goal run mmk9z73e-a2dxih started.",
-      "panelId": null,
-      "createdAt": 1773126903722
-    },
-    {
-      "id": "mmk9z73f-nidw9c",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Spawning planner agent for task decomposition.",
-      "panelId": null,
-      "createdAt": 1773126903723
-    },
-    {
-      "id": "mmk9z9lw-v7euzg",
-      "actor": "orchestrator",
-      "kind": "response",
-      "text": "Planner output:\nYou've hit your limit · resets 10pm (Pacific/Auckland)",
-      "panelId": null,
-      "createdAt": 1773126906980
-    },
-    {
-      "id": "mmk9z9lx-xfhkb1",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Planner did not produce a task list. Using single-task fallback.",
-      "panelId": null,
-      "createdAt": 1773126906981
-    },
-    {
-      "id": "mmk9z9lx-iqgz54",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Decomposed into 1 tasks.",
-      "panelId": null,
-      "createdAt": 1773126906981
-    },
-    {
-      "id": "mmk9z9n5-mahkq5",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Launching \"Implement goal\" (builder, attempt 1).",
-      "panelId": null,
-      "createdAt": 1773126907025
-    },
-    {
-      "id": "mmk9zc5m-u9t5g4",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Task \"Implement goal\" completed (no explicit signal).",
-      "panelId": null,
-      "createdAt": 1773126910282
-    },
-    {
-      "id": "mmk9zc6v-1ibt3l",
-      "actor": "orchestrator",
-      "kind": "result",
-      "text": "Goal run completed. 1 tasks finished successfully.",
-      "panelId": null,
-      "createdAt": 1773126910327
-    }
-  ]
+  "goalRun": null,
+  "log": []
 }

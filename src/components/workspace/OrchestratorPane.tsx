@@ -13,12 +13,17 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { UI_CLOSE_ICON_BUTTON_CLASS } from '../../constants'
+import type { OrchestratorSettings } from '../../types'
 
 export interface OrchestratorPaneProps {
   pluginDisplayName: string
   pluginVersion: string
   licensed: boolean
+  workspaceRoot: string
   onOpenSettings: () => void
+  onOpenAgentPanel?: (panelId: string) => void
+  orchestratorSettings: OrchestratorSettings
+  setOrchestratorSettings: React.Dispatch<React.SetStateAction<OrchestratorSettings>>
   onClose?: () => void
 }
 
@@ -52,8 +57,8 @@ interface ComparativeReviewRunSummary {
   id: string
   goal: string
   status: string
-  workerA: { panelId: string | null }
-  workerB: { panelId: string | null }
+  workerA: { panelId: string | null; summary?: string | null }
+  workerB: { panelId: string | null; summary?: string | null }
   finalReport: string | null
   error: string | null
 }
@@ -80,12 +85,23 @@ interface OrchestratorStateSnapshot {
 type OrchestratorMode = 'goal-run' | 'review'
 
 type OrchestratorApi = {
-  startOrchestratorComparativeReview?: (goal: string) => Promise<{ ok: boolean; runId?: string; error?: string }>
+  startOrchestratorComparativeReview?: (
+    goal: string,
+    options?: {
+      reviewerA?: { id?: string; label?: string; provider?: string; model?: string }
+      reviewerB?: { id?: string; label?: string; provider?: string; model?: string }
+    },
+  ) => Promise<{ ok: boolean; runId?: string; error?: string }>
   startOrchestratorGoalRun?: (goal: string) => Promise<{ ok: boolean; runId?: string; error?: string }>
   pauseOrchestratorRun?: () => Promise<{ ok: boolean; error?: string }>
   cancelOrchestratorRun?: () => Promise<{ ok: boolean; error?: string }>
   getOrchestratorState?: () => Promise<OrchestratorStateSnapshot | null>
   browseMarkdownFile?: () => Promise<{ filePath: string; content: string } | null>
+  saveTranscriptFile?: (
+    workspaceRoot: string,
+    suggestedFileName: string,
+    content: string,
+  ) => Promise<{ ok: boolean; canceled?: boolean; path?: string; error?: string }>
 }
 
 const MODE_LABELS: Record<OrchestratorMode, { label: string; placeholder: string; button: string; importLabel: string }> = {
@@ -144,6 +160,27 @@ function formatDuration(ms: number): string {
   if (s < 60) return `${s}s`
   const m = Math.floor(s / 60)
   return `${m}m ${s % 60}s`
+}
+
+function deriveReviewerSummaryFromLog(
+  log: OrchestratorLogEntry[],
+  reviewer: 'A' | 'B',
+): string | null {
+  const needle = reviewer === 'A' ? 'reviewer a' : 'reviewer b'
+  for (let i = log.length - 1; i >= 0; i -= 1) {
+    const entry = log[i]
+    const actor = entry.actor.toLowerCase()
+    const text = entry.text.toLowerCase()
+    if (
+      actor.includes(needle) ||
+      actor.includes(`reviewer-${reviewer.toLowerCase()}`) ||
+      text.includes(needle)
+    ) {
+      const raw = entry.text.trim()
+      if (raw) return raw
+    }
+  }
+  return null
 }
 
 // ── Sub-components ───────────────────────────────────────────────────
@@ -260,13 +297,27 @@ function ActivityLog({ log }: { log: OrchestratorLogEntry[] }) {
 
 // ── Main component ───────────────────────────────────────────────────
 
-export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, onOpenSettings, onClose }: OrchestratorPaneProps) {
+export function OrchestratorPane({
+  pluginDisplayName,
+  pluginVersion,
+  licensed,
+  workspaceRoot,
+  onOpenSettings,
+  onOpenAgentPanel,
+  orchestratorSettings,
+  setOrchestratorSettings,
+  onClose,
+}: OrchestratorPaneProps) {
   const [inputValue, setInputValue] = useState('')
   const [snapshot, setSnapshot] = useState<OrchestratorStateSnapshot | null>(null)
+  const [archivedComparativeRun, setArchivedComparativeRun] = useState<ComparativeReviewRunSummary | null>(null)
+  const [archivedGoalRun, setArchivedGoalRun] = useState<GoalRunSnapshot | null>(null)
+  const [closedWorkKey, setClosedWorkKey] = useState<string | null>(null)
   const [startingRun, setStartingRun] = useState(false)
   const [stoppingRun, setStoppingRun] = useState(false)
   const [mode, setMode] = useState<OrchestratorMode>('goal-run')
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
+  const summaryRef = useRef<HTMLDivElement>(null)
   const modeConfig = MODE_LABELS[mode]
 
   // Poll orchestrator state
@@ -291,6 +342,17 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
     return () => { disposed = true; window.clearInterval(intervalId) }
   }, [licensed])
 
+  useEffect(() => {
+    if (snapshot?.currentRun) {
+      setArchivedComparativeRun(snapshot.currentRun)
+      setClosedWorkKey((prev) => (prev === `review:${snapshot.currentRun?.id}` ? null : prev))
+    }
+    if (snapshot?.goalRun) {
+      setArchivedGoalRun(snapshot.goalRun)
+      setClosedWorkKey((prev) => (prev === `goal:${snapshot.goalRun?.id}` ? null : prev))
+    }
+  }, [snapshot?.currentRun, snapshot?.goalRun])
+
   const handleSend = useCallback(async (goalOverride?: string) => {
     const trimmed = (goalOverride ?? inputValue).trim()
     if (!trimmed || startingRun) return
@@ -310,19 +372,32 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
         return
       }
 
-      const result = await startFn(trimmed)
+      const reviewerA = orchestratorSettings.workerPool.find((worker) => worker.id === orchestratorSettings.comparativeReviewerAId)
+      const reviewerB = orchestratorSettings.workerPool.find((worker) => worker.id === orchestratorSettings.comparativeReviewerBId)
+      if (mode === 'review' && reviewerA?.provider && reviewerB?.provider && reviewerA.provider === reviewerB.provider) {
+        setStatusMessage('Comparative reviewers must use different providers. Update reviewer profiles or selection.')
+        return
+      }
+
+      const result = mode === 'review'
+        ? await startFn(trimmed, {
+          reviewerA,
+          reviewerB,
+        })
+        : await startFn(trimmed)
       if (!result?.ok) {
         setStatusMessage(result?.error || `Unable to start ${modeConfig.label.toLowerCase()}.`)
         return
       }
 
       setStatusMessage(`${modeConfig.label} started.`)
+      setClosedWorkKey(null)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : String(error))
     } finally {
       setStartingRun(false)
     }
-  }, [inputValue, startingRun, mode, modeConfig])
+  }, [inputValue, startingRun, mode, modeConfig, orchestratorSettings])
 
   const handleImportMarkdown = useCallback(async () => {
     const api = getOrchestratorApi()
@@ -384,27 +459,85 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
     }
   }
 
+  function buildWorkSummaryMarkdown(params: {
+    goalRun: GoalRunSnapshot | null
+    comparativeRun: ComparativeReviewRunSummary | null
+    goalText: string | null
+    phase: string
+    log: OrchestratorLogEntry[]
+  }): string {
+    const { goalRun, comparativeRun, goalText, phase, log } = params
+    const lines: string[] = []
+    lines.push(`# ${modeConfig.label} Work`)
+    lines.push('')
+    lines.push(`- Plugin: ${pluginDisplayName} v${pluginVersion}`)
+    lines.push(`- Phase: ${phase}`)
+    lines.push(`- Saved: ${new Date().toISOString()}`)
+    lines.push('')
+    if (goalText) {
+      lines.push('## Goal')
+      lines.push(goalText)
+      lines.push('')
+    }
+    if (goalRun) {
+      lines.push('## Goal Run Summary')
+      if (goalRun.summary) lines.push(goalRun.summary)
+      lines.push('')
+    }
+    if (comparativeRun) {
+      const reviewerASummary = (comparativeRun.workerA.summary ?? '').trim() || deriveReviewerSummaryFromLog(log, 'A') || ''
+      const reviewerBSummary = (comparativeRun.workerB.summary ?? '').trim() || deriveReviewerSummaryFromLog(log, 'B') || ''
+      lines.push('## Reviewer A Summary')
+      lines.push(reviewerASummary || '_No reviewer summary available in run payload._')
+      lines.push('')
+      lines.push('## Reviewer B Summary')
+      lines.push(reviewerBSummary || '_No reviewer summary available in run payload._')
+      lines.push('')
+      lines.push('## Orchestrator Final Summary')
+      lines.push((comparativeRun.finalReport ?? '').trim() || '_No final report available._')
+      lines.push('')
+    }
+    if (log.length > 0) {
+      lines.push('## Activity Log')
+      lines.push('')
+      for (const entry of log.slice(-50)) {
+        lines.push(`- ${new Date(entry.createdAt).toISOString()} [${entry.actor}/${entry.kind}] ${entry.text}`)
+      }
+      lines.push('')
+    }
+    return lines.join('\n')
+  }
+
   // Derived state
-  const goalRun = snapshot?.goalRun ?? null
-  const comparativeRun = snapshot?.currentRun ?? null
+  const snapshotGoalRun = snapshot?.goalRun ?? null
+  const snapshotComparativeRun = snapshot?.currentRun ?? null
+  const goalRun = snapshotGoalRun ?? archivedGoalRun
+  const comparativeRun = snapshotComparativeRun ?? archivedComparativeRun
   const phase = snapshot?.phase ?? 'idle'
   const log = snapshot?.log ?? []
   const activePanels = snapshot?.activePanels ?? []
 
   const isRunning = phase === 'planning' || phase === 'executing' || phase === 'verifying'
-  const goalText = goalRun?.goal ?? comparativeRun?.goal ?? snapshot?.goal?.text ?? null
+  const goalWorkKey = goalRun?.id ? `goal:${goalRun.id}` : null
+  const reviewWorkKey = comparativeRun?.id ? `review:${comparativeRun.id}` : null
+  const isGoalClosed = Boolean(goalWorkKey && closedWorkKey === goalWorkKey)
+  const isReviewClosed = Boolean(reviewWorkKey && closedWorkKey === reviewWorkKey)
+  const effectiveGoalRun = isGoalClosed ? null : goalRun
+  const effectiveComparativeRun = isReviewClosed ? null : comparativeRun
+  const hasWork = Boolean(effectiveGoalRun || effectiveComparativeRun || (isRunning && snapshot?.goal?.text))
+  const goalText = effectiveGoalRun?.goal ?? effectiveComparativeRun?.goal ?? (isRunning ? snapshot?.goal?.text ?? null : null)
   const canStopRun = Boolean(goalText) && (isRunning || phase === 'paused')
 
-  const taskCounts = goalRun ? {
-    total: goalRun.tasks.length,
-    completed: goalRun.tasks.filter(t => t.status === 'completed').length,
-    running: goalRun.tasks.filter(t => t.status === 'running').length,
-    failed: goalRun.tasks.filter(t => t.status === 'failed').length,
-    pending: goalRun.tasks.filter(t => t.status === 'pending' || t.status === 'blocked').length,
+  const taskCounts = effectiveGoalRun ? {
+    total: effectiveGoalRun.tasks.length,
+    completed: effectiveGoalRun.tasks.filter(t => t.status === 'completed').length,
+    running: effectiveGoalRun.tasks.filter(t => t.status === 'running').length,
+    failed: effectiveGoalRun.tasks.filter(t => t.status === 'failed').length,
+    pending: effectiveGoalRun.tasks.filter(t => t.status === 'pending' || t.status === 'blocked').length,
   } : null
 
-  const elapsed = goalRun
-    ? (goalRun.completedAt ?? Date.now()) - goalRun.createdAt
+  const elapsed = effectiveGoalRun
+    ? (effectiveGoalRun.completedAt ?? Date.now()) - effectiveGoalRun.createdAt
     : null
 
   return (
@@ -457,14 +590,93 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
               type="button"
               className="inline-flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 text-xs px-2.5 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-700"
               onClick={() => { void handleImportMarkdown() }}
-              title={`Import a markdown file as the ${modeConfig.label.toLowerCase()} prompt`}
+              title={`Open a markdown file as the ${modeConfig.label.toLowerCase()} prompt`}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <polyline points="14 2 14 8 20 8" />
               </svg>
-              {modeConfig.importLabel}
+              Open
             </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 text-xs px-2.5 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-50"
+              disabled={!hasWork}
+              onClick={async () => {
+                if (!hasWork || !workspaceRoot) return
+                const api = getOrchestratorApi()
+                if (typeof api.saveTranscriptFile !== 'function') return
+                const content = buildWorkSummaryMarkdown({
+                  goalRun: effectiveGoalRun,
+                  comparativeRun: effectiveComparativeRun,
+                  goalText,
+                  phase,
+                  log,
+                })
+                const suggestedFileName = `orchestrator-${mode === 'review' ? 'comparative' : 'goal'}-${new Date().toISOString().slice(0, 10)}.md`
+                const result = await api.saveTranscriptFile(workspaceRoot, suggestedFileName, content)
+                if (!result?.ok) {
+                  setStatusMessage(result?.error || 'Unable to save orchestrator work.')
+                  return
+                }
+                if (!result?.canceled) setStatusMessage(`Work saved: ${result?.path ?? suggestedFileName}`)
+              }}
+            >
+              Save
+            </button>
+            {!isRunning && hasWork && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 text-xs px-2.5 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                onClick={() => {
+                  if (mode === 'review' && reviewWorkKey) setClosedWorkKey(reviewWorkKey)
+                  else if (mode === 'goal-run' && goalWorkKey) setClosedWorkKey(goalWorkKey)
+                  else setClosedWorkKey('__closed__')
+                  setStatusMessage('Work closed. Panel reset to default view.')
+                }}
+              >
+                Close Work
+              </button>
+            )}
+            {mode === 'review' && effectiveComparativeRun && (
+              <>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 text-xs px-2.5 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                  onClick={() => {
+                    const panelId = effectiveComparativeRun.workerA.panelId
+                    if (!panelId) {
+                      setStatusMessage('Reviewer A panel is not available.')
+                      return
+                    }
+                    onOpenAgentPanel?.(panelId)
+                  }}
+                >
+                  Open Reviewer A
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 text-xs px-2.5 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                  onClick={() => {
+                    const panelId = effectiveComparativeRun.workerB.panelId
+                    if (!panelId) {
+                      setStatusMessage('Reviewer B panel is not available.')
+                      return
+                    }
+                    onOpenAgentPanel?.(panelId)
+                  }}
+                >
+                  Open Reviewer B
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 text-xs px-2.5 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                  onClick={() => summaryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                >
+                  Open Orchestrator Summary
+                </button>
+              </>
+            )}
             {canStopRun && (
               <>
                 {isRunning && (
@@ -496,7 +708,7 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center px-6 py-8 text-center">
           <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">License Required</div>
           <p className="text-xs text-neutral-500 dark:text-neutral-400 leading-relaxed mb-4">
-            Enter your orchestrator license key in Settings to enable goal-driven multi-agent workflows.
+            Enter your orchestrator license key in Orchestrator Settings to enable goal-driven multi-agent workflows.
           </p>
           <button
             type="button"
@@ -529,6 +741,41 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
               </div>
             )}
 
+            {mode === 'review' && !isRunning && (
+              <DashboardRow label="Reviewers">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-medium text-neutral-600 dark:text-neutral-300 mb-1">Reviewer A</label>
+                    <select
+                      className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 text-xs px-2 py-1.5"
+                      value={orchestratorSettings.comparativeReviewerAId}
+                      onChange={(e) => setOrchestratorSettings((prev) => ({ ...prev, comparativeReviewerAId: e.target.value }))}
+                    >
+                      {orchestratorSettings.workerPool.map((worker) => (
+                        <option key={worker.id} value={worker.id}>
+                          {worker.label} ({worker.provider}{worker.model ? ` / ${worker.model}` : ''})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-neutral-600 dark:text-neutral-300 mb-1">Reviewer B</label>
+                    <select
+                      className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 text-xs px-2 py-1.5"
+                      value={orchestratorSettings.comparativeReviewerBId}
+                      onChange={(e) => setOrchestratorSettings((prev) => ({ ...prev, comparativeReviewerBId: e.target.value }))}
+                    >
+                      {orchestratorSettings.workerPool.map((worker) => (
+                        <option key={worker.id} value={worker.id}>
+                          {worker.label} ({worker.provider}{worker.model ? ` / ${worker.model}` : ''})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </DashboardRow>
+            )}
+
             {/* Goal display */}
             {goalText && (
               <DashboardRow label="Goal">
@@ -537,7 +784,7 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
             )}
 
             {/* Goal Run dashboard */}
-            {goalRun && (
+            {effectiveGoalRun && (
               <>
                 {/* Tasks summary */}
                 {taskCounts && taskCounts.total > 0 && (
@@ -550,15 +797,15 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
                       {taskCounts.pending > 0 && <span className="text-neutral-400">{taskCounts.pending} pending</span>}
                     </div>
                     <div className="mt-2">
-                      <TaskList tasks={goalRun.tasks} />
+                      <TaskList tasks={effectiveGoalRun.tasks} />
                     </div>
                   </DashboardRow>
                 )}
 
                 {/* Agents table */}
-                {goalRun.tasks.some(t => t.status !== 'pending' && t.status !== 'blocked') && (
+                {effectiveGoalRun.tasks.some(t => t.status !== 'pending' && t.status !== 'blocked') && (
                   <DashboardRow label="Agents">
-                    <AgentTable tasks={goalRun.tasks} activePanels={activePanels} />
+                    <AgentTable tasks={effectiveGoalRun.tasks} activePanels={activePanels} />
                   </DashboardRow>
                 )}
 
@@ -575,36 +822,59 @@ export function OrchestratorPane({ pluginDisplayName, pluginVersion, licensed, o
                 </DashboardRow>
 
                 {/* Summary (when complete) */}
-                {goalRun.summary && (
+                {effectiveGoalRun.summary && (
                   <DashboardRow label="Summary">
-                    <p className="whitespace-pre-wrap leading-relaxed">{goalRun.summary}</p>
+                    <p className="whitespace-pre-wrap leading-relaxed">{effectiveGoalRun.summary}</p>
                   </DashboardRow>
                 )}
               </>
             )}
 
             {/* Comparative review dashboard */}
-            {comparativeRun && mode === 'review' && (
+            {effectiveComparativeRun && mode === 'review' && (
               <>
                 <DashboardRow label="Status">
-                  <span className="font-medium">{comparativeRun.status}</span>
+                  <span className="font-medium">{effectiveComparativeRun.status}</span>
                 </DashboardRow>
-                <DashboardRow label="Agents">
-                  <div className="space-y-1 text-[11px]">
-                    <div>Reviewer A: {comparativeRun.workerA.panelId ?? 'launching...'}</div>
-                    <div>Reviewer B: {comparativeRun.workerB.panelId ?? 'launching...'}</div>
-                  </div>
-                </DashboardRow>
-                {comparativeRun.error && (
+                {effectiveComparativeRun.status !== 'complete' && (
+                  <DashboardRow label="Agents">
+                    <div className="space-y-1 text-[11px]">
+                      <div>Reviewer A: {effectiveComparativeRun.workerA.panelId ?? 'launching...'}</div>
+                      <div>Reviewer B: {effectiveComparativeRun.workerB.panelId ?? 'launching...'}</div>
+                    </div>
+                  </DashboardRow>
+                )}
+                {effectiveComparativeRun.status === 'complete' && (
+                  <>
+                    <DashboardRow label="Reviewer A">
+                      <p className="whitespace-pre-wrap leading-relaxed text-xs">
+                        {(effectiveComparativeRun.workerA.summary ?? '').trim() || deriveReviewerSummaryFromLog(log, 'A') || 'Reviewer A summary is not available in the current plugin payload.'}
+                      </p>
+                    </DashboardRow>
+                    <DashboardRow label="Reviewer B">
+                      <p className="whitespace-pre-wrap leading-relaxed text-xs">
+                        {(effectiveComparativeRun.workerB.summary ?? '').trim() || deriveReviewerSummaryFromLog(log, 'B') || 'Reviewer B summary is not available in the current plugin payload.'}
+                      </p>
+                    </DashboardRow>
+                  </>
+                )}
+                <div ref={summaryRef}>
+                  <DashboardRow label="Orchestrator Summary">
+                    <p className="whitespace-pre-wrap leading-relaxed text-xs">
+                      {(effectiveComparativeRun.finalReport ?? '').trim() || 'Final orchestrator report is not available yet.'}
+                    </p>
+                  </DashboardRow>
+                </div>
+                {effectiveComparativeRun.error && (
                   <DashboardRow label="Error">
-                    <span className="text-red-600 dark:text-red-400">{comparativeRun.error}</span>
+                    <span className="text-red-600 dark:text-red-400">{effectiveComparativeRun.error}</span>
                   </DashboardRow>
                 )}
               </>
             )}
 
             {/* Error display */}
-            {snapshot?.error && !goalRun?.summary && (
+            {snapshot?.error && !effectiveGoalRun?.summary && (
               <DashboardRow label="Error">
                 <span className="text-red-600 dark:text-red-400">{snapshot.error}</span>
               </DashboardRow>

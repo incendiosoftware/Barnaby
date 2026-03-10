@@ -265,6 +265,20 @@ export type OrchestratorSettings = {
   workerModel: string
   maxParallelPanels: number
   maxTaskAttempts: number
+  orchestratorPool: Array<{
+    id: string
+    label: string
+    provider: string
+    model: string
+  }>
+  workerPool: Array<{
+    id: string
+    label: string
+    provider: string
+    model: string
+  }>
+  comparativeReviewerAId: string
+  comparativeReviewerBId: string
 }
 
 export type PersistedEditorPanelState = {
@@ -414,7 +428,7 @@ export type AvailableCatalogModels = {
   openrouter: { id: string; displayName: string }[]
 }
 
-export type AppSettingsView = 'connectivity' | 'preferences' | 'agents' | 'orchestrator' | 'mcp-servers' | 'diagnostics'
+export type AppSettingsView = 'connectivity' | 'preferences' | 'agents' | 'mcp-servers' | 'diagnostics'
 
 export type ModelCatalogRefreshStatus = {
   kind: 'success' | 'error'

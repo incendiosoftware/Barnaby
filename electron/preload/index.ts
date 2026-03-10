@@ -240,7 +240,17 @@ const api = {
   reloadLocalPlugins() {
     return ipcRenderer.invoke('agentorchestrator:reloadLocalPlugins') as Promise<{ ok: boolean; error?: string }>
   },
-  syncOrchestratorSettings(settings: { orchestratorModel?: string; workerProvider?: string; workerModel?: string; maxParallelPanels?: number; maxTaskAttempts?: number }) {
+  syncOrchestratorSettings(settings: {
+    orchestratorModel?: string
+    workerProvider?: string
+    workerModel?: string
+    maxParallelPanels?: number
+    maxTaskAttempts?: number
+    orchestratorPool?: Array<{ id: string; label: string; provider: string; model: string }>
+    workerPool?: Array<{ id: string; label: string; provider: string; model: string }>
+    comparativeReviewerAId?: string
+    comparativeReviewerBId?: string
+  }) {
     return ipcRenderer.invoke('agentorchestrator:syncOrchestratorSettings', settings)
   },
   interrupt(agentWindowId: string) {
@@ -490,8 +500,11 @@ const api = {
       Array<{ pluginId: string; displayName: string; version: string; active: boolean; licensed: boolean }>
     >
   },
-  startOrchestratorComparativeReview(goal: string) {
-    return ipcRenderer.invoke('agentorchestrator:startOrchestratorComparativeReview', goal) as Promise<{ ok: boolean; runId?: string; error?: string }>
+  startOrchestratorComparativeReview(goal: string, options?: {
+    reviewerA?: { id?: string; label?: string; provider?: string; model?: string }
+    reviewerB?: { id?: string; label?: string; provider?: string; model?: string }
+  }) {
+    return ipcRenderer.invoke('agentorchestrator:startOrchestratorComparativeReview', goal, options) as Promise<{ ok: boolean; runId?: string; error?: string }>
   },
   startOrchestratorGoalRun(goal: string) {
     return ipcRenderer.invoke('agentorchestrator:startOrchestratorGoalRun', goal) as Promise<{ ok: boolean; runId?: string; error?: string }>

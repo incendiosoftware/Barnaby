@@ -222,6 +222,7 @@ import { AgentPanelHeader } from './components/panels/AgentPanelHeader'
 import { EditorPanel } from './components/panels/EditorPanel'
 import { WorkspaceTile } from './components/workspace/WorkspaceTile'
 import { OrchestratorPane } from './components/workspace/OrchestratorPane'
+import { OrchestratorSettingsModal } from './components/workspace/OrchestratorSettingsModal'
 import { AgentPanelShell } from './components/panels/AgentPanelShell'
 import { CodeWindowTile } from './components/panels/CodeWindowTile'
 import { PanelContentRenderer } from './components/panels/PanelContentRenderer'
@@ -374,6 +375,7 @@ export default function App() {
     }),
   )
   const [showThemeModal, setShowThemeModal] = useState(false)
+  const [showOrchestratorSettingsModal, setShowOrchestratorSettingsModal] = useState(false)
   const [appSettingsView, setAppSettingsView] = useState<AppSettingsView>('connectivity')
   const [applicationSettings, setApplicationSettings] = useState<ApplicationSettings>(() => getInitialApplicationSettings())
   const [themeOverrides, setThemeOverrides] = useState<ThemeOverrides>(() => getInitialThemeOverrides())
@@ -1424,9 +1426,9 @@ export default function App() {
   }, [api, appSettingsView, showDockedAppSettings, resolvedProviderConfigs])
 
   useEffect(() => {
-    if (!showDockedAppSettings || appSettingsView !== 'orchestrator') return
+    if (!showOrchestratorSettingsModal) return
     void api.getOrchestratorLicenseKeyState?.().then((s) => setOrchestratorLicenseKeyState(s ?? null))
-  }, [api, appSettingsView, showDockedAppSettings])
+  }, [api, showOrchestratorSettingsModal])
 
   useEffect(() => {
     const liveCodeUnitIds = new Set<string>()
@@ -3085,6 +3087,7 @@ export default function App() {
     findInPageFromMenu,
     findInFilesFromMenu,
     openAppSettingsInRightDock,
+    openOrchestratorSettingsModal,
     focusedEditorIdRef,
     saveEditorPanel,
     setLayoutMode: (mode: string) => {
@@ -3163,6 +3166,10 @@ export default function App() {
       }
       return { ...p, zones: z, activeTab: { ...layout.activeTab, [key]: 'application-settings' } }
     })
+  }
+
+  function openOrchestratorSettingsModal() {
+    setShowOrchestratorSettingsModal(true)
   }
 
   const leftDockRef = useRef<HTMLDivElement>(null)
@@ -4059,7 +4066,15 @@ export default function App() {
           pluginDisplayName={orchestratorPlugin.displayName ?? 'Orchestrator'}
           pluginVersion={orchestratorPlugin.version ?? '?'}
           licensed={orchestratorPlugin.licensed ?? false}
-          onOpenSettings={() => openAppSettingsInRightDock('orchestrator')}
+          workspaceRoot={workspaceRoot}
+          onOpenSettings={openOrchestratorSettingsModal}
+          onOpenAgentPanel={(panelId) => {
+            setShowWorkspaceWindow(true)
+            setFocusedEditorId(null)
+            setActivePanelId(panelId)
+          }}
+          orchestratorSettings={orchestratorSettings}
+          setOrchestratorSettings={setOrchestratorSettings}
           onClose={onClose}
         />
       )
@@ -4077,7 +4092,7 @@ export default function App() {
                 className={UI_TOOLBAR_ICON_BUTTON_CLASS}
                 title="Orchestrator settings"
                 aria-label="Orchestrator settings"
-                onClick={() => openAppSettingsInRightDock('orchestrator')}
+                onClick={openOrchestratorSettingsModal}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
@@ -4598,6 +4613,22 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <OrchestratorSettingsModal
+        visible={showOrchestratorSettingsModal}
+        onClose={() => setShowOrchestratorSettingsModal(false)}
+        api={api}
+        loadedPlugins={loadedPlugins ?? []}
+        orchestratorSettings={orchestratorSettings}
+        setOrchestratorSettings={setOrchestratorSettings}
+        orchestratorLicenseKeyState={orchestratorLicenseKeyState}
+        setOrchestratorLicenseKeyState={setOrchestratorLicenseKeyState}
+        orchestratorLicenseKeyDraft={orchestratorLicenseKeyDraft}
+        setOrchestratorLicenseKeyDraft={setOrchestratorLicenseKeyDraft}
+        orchestratorInstallStatus={orchestratorInstallStatus}
+        setOrchestratorInstallStatus={setOrchestratorInstallStatus}
+        getModelOptions={getModelOptions}
+      />
 
       <DockedAppSettings
         portalTarget={codeWindowSettingsHostRef.current}

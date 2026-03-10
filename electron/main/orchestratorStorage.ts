@@ -34,6 +34,20 @@ export type OrchestratorSettingsData = {
   workerModel?: string
   maxParallelPanels?: number
   maxTaskAttempts?: number
+  orchestratorPool?: Array<{
+    id: string
+    label: string
+    provider: string
+    model: string
+  }>
+  workerPool?: Array<{
+    id: string
+    label: string
+    provider: string
+    model: string
+  }>
+  comparativeReviewerAId?: string
+  comparativeReviewerBId?: string
 }
 
 export function readOrchestratorSettings(getAppStorageDir: () => string): OrchestratorSettingsData {

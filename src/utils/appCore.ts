@@ -2000,17 +2000,49 @@ export function getInitialExplorerPrefsByWorkspace(): Record<string, ExplorerPre
 }
 
 export function getInitialOrchestratorSettings(): OrchestratorSettings {
+  const sanitizePool = (
+    value: unknown,
+    fallback: Array<{ id: string; label: string; provider: string; model: string }>,
+  ): Array<{ id: string; label: string; provider: string; model: string }> => {
+    if (!Array.isArray(value)) return fallback
+    const next: Array<{ id: string; label: string; provider: string; model: string }> = []
+    for (const entry of value) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+      const row = entry as Record<string, unknown>
+      const id = typeof row.id === 'string' ? row.id.trim() : ''
+      const label = typeof row.label === 'string' ? row.label.trim() : ''
+      const provider = typeof row.provider === 'string' ? row.provider.trim() : ''
+      const model = typeof row.model === 'string' ? row.model.trim() : ''
+      if (!id || !label || !provider) continue
+      next.push({ id, label, provider, model })
+    }
+    return next.length > 0 ? next : fallback
+  }
+
   const defaults: OrchestratorSettings = {
     orchestratorModel: '',
     workerProvider: 'codex',
     workerModel: '',
     maxParallelPanels: 2,
     maxTaskAttempts: 3,
+    orchestratorPool: [
+      { id: 'orch-codex', label: 'Orchestrator Codex', provider: 'codex', model: '' },
+      { id: 'orch-claude', label: 'Orchestrator Claude', provider: 'claude', model: '' },
+    ],
+    workerPool: [
+      { id: 'worker-codex', label: 'Codex Reviewer', provider: 'codex', model: '' },
+      { id: 'worker-claude', label: 'Claude Reviewer', provider: 'claude', model: '' },
+      { id: 'worker-gemini', label: 'Gemini Reviewer', provider: 'gemini', model: '' },
+      { id: 'worker-openrouter', label: 'OpenRouter Reviewer', provider: 'openrouter', model: '' },
+    ],
+    comparativeReviewerAId: 'worker-codex',
+    comparativeReviewerBId: 'worker-claude',
   }
   try {
     const raw = globalThis.localStorage?.getItem(ORCHESTRATOR_SETTINGS_STORAGE_KEY)
     if (!raw) return defaults
     const parsed = JSON.parse(raw) as Partial<OrchestratorSettings>
+    const workerPool = sanitizePool(parsed?.workerPool, defaults.workerPool)
     return {
       orchestratorModel: typeof parsed?.orchestratorModel === 'string' ? parsed.orchestratorModel : defaults.orchestratorModel,
       workerProvider: typeof parsed?.workerProvider === 'string' ? parsed.workerProvider : defaults.workerProvider,
@@ -2023,6 +2055,16 @@ export function getInitialOrchestratorSettings(): OrchestratorSettings {
         typeof parsed?.maxTaskAttempts === 'number' && parsed.maxTaskAttempts >= 1 && parsed.maxTaskAttempts <= 10
           ? parsed.maxTaskAttempts
           : defaults.maxTaskAttempts,
+      orchestratorPool: sanitizePool(parsed?.orchestratorPool, defaults.orchestratorPool),
+      workerPool,
+      comparativeReviewerAId:
+        typeof parsed?.comparativeReviewerAId === 'string' && workerPool.some((p) => p.id === parsed.comparativeReviewerAId)
+          ? parsed.comparativeReviewerAId
+          : workerPool[0]?.id ?? defaults.comparativeReviewerAId,
+      comparativeReviewerBId:
+        typeof parsed?.comparativeReviewerBId === 'string' && workerPool.some((p) => p.id === parsed.comparativeReviewerBId)
+          ? parsed.comparativeReviewerBId
+          : workerPool[1]?.id ?? workerPool[0]?.id ?? defaults.comparativeReviewerBId,
     }
   } catch {
     return defaults

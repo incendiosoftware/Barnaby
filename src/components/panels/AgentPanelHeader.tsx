@@ -60,11 +60,6 @@ export function AgentPanelHeader({
   const iconButtonStyle: React.CSSProperties = {
     color: 'var(--theme-text-secondary)',
   }
-  const accentButtonStyle: React.CSSProperties = {
-    color: 'var(--theme-accent-muted)',
-    border: '1px solid color-mix(in srgb, var(--theme-accent-strong) 36%, var(--theme-border-default) 64%)',
-    backgroundColor: 'transparent',
-  }
   const closeButtonStyle: React.CSSProperties = {
     color: 'var(--theme-text-secondary)',
   }
@@ -126,7 +121,7 @@ export function AgentPanelHeader({
               'h-8 px-2.5 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none text-xs font-medium',
               'hover:opacity-90 active:opacity-80',
             ].join(' ')}
-            style={accentButtonStyle}
+            style={iconButtonStyle}
             onClick={onViewRawConversation}
             title="View raw conversation"
             aria-label="View raw conversation"
@@ -139,7 +134,7 @@ export function AgentPanelHeader({
             'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',
             'hover:opacity-90 active:opacity-80',
           ].join(' ')}
-          style={accentButtonStyle}
+          style={iconButtonStyle}
           onClick={onDownloadTranscript}
           title="Download transcript"
           aria-label="Download transcript"
@@ -153,7 +148,7 @@ export function AgentPanelHeader({
             'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',
             'hover:opacity-90 active:opacity-80',
           ].join(' ')}
-          style={accentButtonStyle}
+          style={iconButtonStyle}
           onClick={onRemember}
           title="Remember conversation"
           aria-label="Remember conversation"

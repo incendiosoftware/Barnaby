@@ -1,7 +1,7 @@
 /**
  * Docked app settings panel — renders inside the right-dock code window
- * via createPortal. Contains Models, Preferences, Connectivity, Agents,
- * Orchestrator, MCP Servers, and Diagnostics tabs.
+ * via createPortal. Contains Preferences, Connectivity, Agents,
+ * MCP Servers, and Diagnostics tabs.
  */
 import React, { useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -245,6 +245,11 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
   const themePreviewDraft = themeEditorDraft
   const customTheme = themeCatalog.find((theme) => theme.id === CUSTOM_THEME_ID) ?? null
   const isEditingCustomTheme = themeEditorDraft?.id === CUSTOM_THEME_ID
+  const showCustomThemeEditor =
+    Boolean(applicationSettings.customiseStandardThemes)
+    && applicationSettings.themeId === CUSTOM_THEME_ID
+    && Boolean(themeEditorDraft)
+    && isEditingCustomTheme
   const refreshModelsFromProviders = async (providers?: ModelProvider[]) => {
     if (!api.getAvailableModels) return
     setModelCatalogRefreshPending(true)
@@ -308,7 +313,6 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
             {view === 'connectivity' && 'Providers & Models'}
             {view === 'preferences' && 'Preferences'}
             {view === 'agents' && 'Agents'}
-            {view === 'orchestrator' && 'Orchestrator'}
             {view === 'mcp-servers' && 'MCP Servers'}
             {view === 'diagnostics' && 'Runtime Logs'}
           </button>
@@ -857,13 +861,26 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                   ))}
                 </div>
                 <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
-                  <div className="text-xs text-neutral-600 dark:text-neutral-400">
-                    Custom theme fields
-                  </div>
-                  <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                    Only <span className="font-medium">Custom</span> is editable. It starts as a copy of <span className="font-medium">Default</span>.
-                  </div>
-                  {themeEditorDraft && isEditingCustomTheme ? (
+                  <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(applicationSettings.customiseStandardThemes)}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        setApplicationSettings((prev) => ({
+                          ...prev,
+                          customiseStandardThemes: checked,
+                        }))
+                        if (checked && applicationSettings.themeId === CUSTOM_THEME_ID && customTheme) {
+                          setSelectedThemeEditorId(CUSTOM_THEME_ID)
+                          setThemeEditorDraft(cloneTheme(customTheme))
+                        }
+                        setThemeEditorStatus(null)
+                      }}
+                    />
+                    Show custom theme controls
+                  </label>
+                  {themeEditorDraft && showCustomThemeEditor ? (
                       <>
                         <div className="text-xs text-neutral-600 dark:text-neutral-400">
                           Editing <span className="font-medium text-neutral-800 dark:text-neutral-200">{themeEditorDraft.name}</span> ({themeEditorDraft.id})
@@ -1086,7 +1103,13 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                       </>
                     ) : (
                       <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                        {customTheme ? 'Select Custom above to edit its fields.' : 'Custom theme is unavailable.'}
+                        {!applicationSettings.customiseStandardThemes
+                          ? 'Enable custom theme controls to preview and edit the custom theme.'
+                          : applicationSettings.themeId !== CUSTOM_THEME_ID
+                            ? 'Select Custom above to preview and edit its fields.'
+                            : customTheme
+                              ? 'Custom theme controls are unavailable right now.'
+                              : 'Custom theme is unavailable.'}
                       </div>
                     )}
                 </div>
@@ -1726,181 +1749,6 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
             </section>
           </>
         )}
-
-        {appSettingsView === 'orchestrator' && (
-          <>
-            <section className="space-y-3">
-              <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Installation</div>
-              <div className="space-y-2 text-sm text-neutral-700 dark:text-neutral-300">
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={`inline-block w-2 h-2 rounded-full shrink-0 ${loadedPlugins?.some((p) => p.pluginId === 'orchestrator' && p.active)
-                      ? 'bg-green-500 dark:bg-green-600'
-                      : 'bg-neutral-300 dark:bg-neutral-600'
-                      }`}
-                  />
-                  <span className="text-neutral-500 dark:text-neutral-400">
-                    {loadedPlugins?.some((p) => p.pluginId === 'orchestrator' && p.active)
-                      ? `Plugin: ${loadedPlugins.find((p) => p.pluginId === 'orchestrator')?.displayName ?? 'Orchestrator'} v${loadedPlugins.find((p) => p.pluginId === 'orchestrator')?.version ?? '?'}`
-                      : 'Plugin: not installed'}
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                    onClick={async () => {
-                      setOrchestratorInstallStatus('Reloading local plugins...')
-                      try {
-                        const result = await api.reloadLocalPlugins?.()
-                        setOrchestratorInstallStatus(result?.ok ? 'Local plugins reloaded' : result?.error ?? 'Reload failed')
-                      } catch (e) {
-                        setOrchestratorInstallStatus(String(e))
-                      }
-                      setTimeout(() => setOrchestratorInstallStatus(null), 4000)
-                    }}
-                  >
-                    Reload local plugins
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                    onClick={async () => {
-                      const result = await api.openPluginsFolder?.()
-                      if (!result?.ok && result?.error) {
-                        setOrchestratorInstallStatus(result.error)
-                        setTimeout(() => setOrchestratorInstallStatus(null), 4000)
-                      }
-                    }}
-                  >
-                    Open plugins folder
-                  </button>
-                </div>
-                {orchestratorInstallStatus && (
-                  <div className="text-xs text-neutral-600 dark:text-neutral-400">{orchestratorInstallStatus}</div>
-                )}
-              </div>
-            </section>
-
-            <section className="space-y-3">
-              <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">License</div>
-              <p className="text-xs text-neutral-600 dark:text-neutral-400">
-                The Orchestrator is a paid add-on. Enter your license code to enable it.
-              </p>
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300">License code</label>
-                <input
-                  type="text"
-                  className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
-                  placeholder={orchestratorLicenseKeyState?.hasKey ? 'License entered' : 'Enter license code'}
-                  value={orchestratorLicenseKeyDraft}
-                  onChange={(e) => setOrchestratorLicenseKeyDraft(e.target.value)}
-                  onBlur={async () => {
-                    if (orchestratorLicenseKeyDraft.trim()) {
-                      await api.setOrchestratorLicenseKey?.(orchestratorLicenseKeyDraft.trim())
-                      setOrchestratorLicenseKeyState({ hasKey: true })
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  className={UI_BUTTON_PRIMARY_CLASS}
-                  onClick={async () => {
-                    await api.setOrchestratorLicenseKey?.(orchestratorLicenseKeyDraft.trim())
-                    const state = await api.getOrchestratorLicenseKeyState?.()
-                    setOrchestratorLicenseKeyState(state ?? null)
-                  }}
-                >
-                  Save license
-                </button>
-              </div>
-            </section>
-
-            <section className="space-y-3">
-              <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Models</div>
-              <div className="space-y-2 text-sm">
-                <div>
-                  <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">Orchestrator model</label>
-                  <select
-                    className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
-                    value={orchestratorSettings.orchestratorModel}
-                    onChange={(e) => setOrchestratorSettings((p) => ({ ...p, orchestratorModel: e.target.value }))}
-                  >
-                    <option value="">Default</option>
-                    {getModelOptions().map((id) => (
-                      <option key={id} value={id}>{id}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">Worker provider</label>
-                  <select
-                    className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
-                    value={orchestratorSettings.workerProvider}
-                    onChange={(e) => setOrchestratorSettings((p) => ({ ...p, workerProvider: e.target.value }))}
-                  >
-                    <option value="codex">Codex</option>
-                    <option value="claude">Claude</option>
-                    <option value="gemini">Gemini</option>
-                    <option value="openrouter">OpenRouter</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">Worker model</label>
-                  <select
-                    className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
-                    value={orchestratorSettings.workerModel}
-                    onChange={(e) => setOrchestratorSettings((p) => ({ ...p, workerModel: e.target.value }))}
-                  >
-                    <option value="">Default</option>
-                    {getModelOptions().map((id) => (
-                      <option key={id} value={id}>{id}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </section>
-
-            <section className="space-y-3">
-              <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">Execution</div>
-              <div className="space-y-2 text-sm">
-                <div>
-                  <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">Max parallel panels (1–8)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={8}
-                    className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
-                    value={orchestratorSettings.maxParallelPanels}
-                    onChange={(e) => {
-                      const v = parseInt(e.target.value, 10)
-                      if (!Number.isNaN(v) && v >= 1 && v <= 8) {
-                        setOrchestratorSettings((p) => ({ ...p, maxParallelPanels: v }))
-                      }
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">Max task attempts (1–10)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={10}
-                    className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
-                    value={orchestratorSettings.maxTaskAttempts}
-                    onChange={(e) => {
-                      const v = parseInt(e.target.value, 10)
-                      if (!Number.isNaN(v) && v >= 1 && v <= 10) {
-                        setOrchestratorSettings((p) => ({ ...p, maxTaskAttempts: v }))
-                      }
-                    }}
-                  />
-                </div>
-              </div>
-            </section>
-          </>
-        )}
-
         {appSettingsView === 'mcp-servers' && (
           <>
             <section className="space-y-4">
@@ -2319,3 +2167,4 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
     ? createPortal(settingsCard, codeWindowSettingsHostRef.current)
     : null
 }
+

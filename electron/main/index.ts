@@ -3292,7 +3292,7 @@ ipcMain.handle('agentorchestrator:getLoadedPlugins', async () => {
   }))
 })
 
-ipcMain.handle('agentorchestrator:startOrchestratorComparativeReview', async (_evt, goal: unknown) => {
+ipcMain.handle('agentorchestrator:startOrchestratorComparativeReview', async (_evt, goal: unknown, optionsRaw: unknown) => {
   const pluginEntry = getLoadedPlugins().get('orchestrator')
   if (!pluginEntry?.active) {
     return { ok: false, error: 'Orchestrator plugin is not active.' }
@@ -3304,8 +3304,15 @@ ipcMain.handle('agentorchestrator:startOrchestratorComparativeReview', async (_e
   if (typeof startRun !== 'function') {
     return { ok: false, error: 'Orchestrator plugin does not support comparative review yet.' }
   }
+  const options =
+    optionsRaw && typeof optionsRaw === 'object' && !Array.isArray(optionsRaw)
+      ? optionsRaw as {
+          reviewerA?: { id?: string; label?: string; provider?: string; model?: string }
+          reviewerB?: { id?: string; label?: string; provider?: string; model?: string }
+        }
+      : undefined
   try {
-    const result = await startRun(goal.trim())
+    const result = await startRun(goal.trim(), options)
     return { ok: true, ...(result && typeof result === 'object' ? result : {}) }
   } catch (err) {
     return { ok: false, error: errorMessage(err) }
@@ -3460,12 +3467,35 @@ ipcMain.handle('agentorchestrator:setOrchestratorLicenseKey', async (_evt, rawKe
 ipcMain.handle('agentorchestrator:syncOrchestratorSettings', async (_evt, raw: unknown) => {
   const data = raw as OrchestratorSettingsData
   if (!data || typeof data !== 'object' || Array.isArray(data)) return
+  const sanitizePool = (
+    value: unknown,
+  ): Array<{ id: string; label: string; provider: string; model: string }> | undefined => {
+    if (!Array.isArray(value)) return undefined
+    const next: Array<{ id: string; label: string; provider: string; model: string }> = []
+    for (const item of value) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      const row = item as Record<string, unknown>
+      const id = typeof row.id === 'string' ? row.id.trim() : ''
+      const label = typeof row.label === 'string' ? row.label.trim() : ''
+      const provider = typeof row.provider === 'string' ? row.provider.trim() : ''
+      const model = typeof row.model === 'string' ? row.model.trim() : ''
+      if (!id || !label || !provider) continue
+      next.push({ id, label, provider, model })
+    }
+    return next.length > 0 ? next : undefined
+  }
   const sanitized: OrchestratorSettingsData = {}
   if (typeof data.orchestratorModel === 'string') sanitized.orchestratorModel = data.orchestratorModel
   if (typeof data.workerProvider === 'string') sanitized.workerProvider = data.workerProvider
   if (typeof data.workerModel === 'string') sanitized.workerModel = data.workerModel
   if (typeof data.maxParallelPanels === 'number' && data.maxParallelPanels >= 1 && data.maxParallelPanels <= 8) sanitized.maxParallelPanels = data.maxParallelPanels
   if (typeof data.maxTaskAttempts === 'number' && data.maxTaskAttempts >= 1 && data.maxTaskAttempts <= 10) sanitized.maxTaskAttempts = data.maxTaskAttempts
+  const orchestratorPool = sanitizePool(data.orchestratorPool)
+  const workerPool = sanitizePool(data.workerPool)
+  if (orchestratorPool) sanitized.orchestratorPool = orchestratorPool
+  if (workerPool) sanitized.workerPool = workerPool
+  if (typeof data.comparativeReviewerAId === 'string' && data.comparativeReviewerAId.trim()) sanitized.comparativeReviewerAId = data.comparativeReviewerAId.trim()
+  if (typeof data.comparativeReviewerBId === 'string' && data.comparativeReviewerBId.trim()) sanitized.comparativeReviewerBId = data.comparativeReviewerBId.trim()
   writeOrchestratorSettings(getAppStorageDirPath, sanitized)
 })
 

@@ -178,6 +178,10 @@ function buildHostApi(): BarnabyPluginHostApi {
           'orchestrator.workerModel': 'workerModel',
           'orchestrator.maxParallelPanels': 'maxParallelPanels',
           'orchestrator.maxTaskAttempts': 'maxTaskAttempts',
+          'orchestrator.orchestratorPool': 'orchestratorPool',
+          'orchestrator.workerPool': 'workerPool',
+          'orchestrator.comparativeReviewerAId': 'comparativeReviewerAId',
+          'orchestrator.comparativeReviewerBId': 'comparativeReviewerBId',
         }
         const appKey = appKeyMap[key]
         if (appKey && appSettings[appKey] !== undefined) return appSettings[appKey]

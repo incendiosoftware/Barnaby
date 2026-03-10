@@ -22,19 +22,16 @@ export function usePanelStreaming(ctx: PanelStreamingContext) {
         const roles = msgs.map((m) => m.role)
         const lastAssistantIdx = roles.lastIndexOf('assistant')
         const lastUserIdx = roles.lastIndexOf('user')
-        if (w.streaming && lastAssistantIdx >= 0 && lastAssistantIdx > lastUserIdx) {
+        const lastSystemIdx = roles.lastIndexOf('system')
+
+        if (w.streaming && lastAssistantIdx >= 0 && lastAssistantIdx > lastUserIdx && lastAssistantIdx > lastSystemIdx) {
           const last = msgs[lastAssistantIdx]
           return {
             ...w,
             streaming: true,
             messages: [
               ...msgs.slice(0, lastAssistantIdx),
-              {
-                ...last,
-                format: 'markdown',
-                content: last.content + buf,
-                createdAt: last.createdAt ?? Date.now(),
-              },
+              { ...last, format: 'markdown', content: last.content + buf, createdAt: last.createdAt ?? Date.now() },
               ...msgs.slice(lastAssistantIdx + 1),
             ],
           }

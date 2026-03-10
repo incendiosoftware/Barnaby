@@ -10,6 +10,7 @@ export interface DiagnosticsImageApi {
 export interface DiagnosticsImageControllerContext {
   api: DiagnosticsImageApi
   workspaceRoot: string
+  getOpenContentPaneCount: () => number
   editorPanelsRef: React.MutableRefObject<EditorPanelState[]>
   setDiagnosticsActionStatus: React.Dispatch<React.SetStateAction<string | null>>
   setShowCodeWindow: React.Dispatch<React.SetStateAction<boolean>>
@@ -19,6 +20,7 @@ export interface DiagnosticsImageControllerContext {
   formatError: (err: unknown) => string
   fileNameFromRelativePath: (path: string) => string
   newId: () => string
+  MAX_CONTENT_PANES: number
   MAX_EDITOR_PANELS: number
 }
 
@@ -74,6 +76,10 @@ export function createDiagnosticsImageController(ctx: DiagnosticsImageController
             ),
           )
           ctx.setFocusedEditor(existing.id)
+          return
+        }
+        if (ctx.getOpenContentPaneCount() >= ctx.MAX_CONTENT_PANES) {
+          ctx.setDiagnosticsActionStatus(`Could not open ${label}: maximum ${ctx.MAX_CONTENT_PANES} content panes are already open.`)
           return
         }
         const panelId = `editor-${ctx.newId()}`

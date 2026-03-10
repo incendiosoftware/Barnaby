@@ -126,17 +126,17 @@ export function CodeMirrorEditor({
     () =>
       EditorView.theme({
         '&': {
-          backgroundColor: darkMode ? 'var(--theme-bg-surface, rgb(23 23 23))' : 'rgb(255 255 255)',
-          color: darkMode ? 'var(--theme-text-primary, rgb(245 245 245))' : 'rgb(23 23 23)',
+          backgroundColor: 'var(--theme-bg-surface, rgb(255 255 255))',
+          color: 'var(--theme-text-primary, rgb(23 23 23))',
         },
         '& .cm-content': {
-          caretColor: darkMode ? 'rgb(248 250 252)' : 'rgb(23 23 23)',
+          caretColor: 'var(--theme-text-primary, rgb(23 23 23))',
         },
         '& .cm-gutters': {
-          color: darkMode ? 'var(--theme-text-tertiary, rgb(163 163 163))' : 'rgb(115 115 115)',
+          color: 'var(--theme-text-tertiary, rgb(115 115 115))',
         },
       }),
-    [darkMode],
+    [],
   )
 
   const activeExtensions = useMemo(() => {

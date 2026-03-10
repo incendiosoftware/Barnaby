@@ -1,9 +1,12 @@
 import { useEffect } from 'react'
 import {
+  classifyTerminalProviderFailure,
   classifyContextCompactionNotification,
+  extractInteractionModeChange,
   getModelPingKey,
   withContextCompactionNotice,
 } from '../utils/appCore'
+import { INTERACTION_MODE_META } from '../constants'
 
 export function useAppRuntimeEvents(ctx: any) {
   const {
@@ -61,9 +64,49 @@ export function useAppRuntimeEvents(ctx: any) {
 
   useEffect(() => {
     const contextCompactingPanels = new Set<string>()
+    const expiredPanels = new Set<string>()
+
+    const syncInteractionMode = (
+      panelId: string,
+      nextMode: 'agent' | 'plan' | 'debug' | 'ask',
+      options?: { addChatNotice?: boolean },
+    ) => {
+      let snapshotForHistory: any = null
+      setPanels((prev: any[]) =>
+        prev.map((w) => {
+          if (w.id !== panelId || w.interactionMode === nextMode) return w
+          const label = INTERACTION_MODE_META[nextMode].label
+          const nextMessages = options?.addChatNotice === false
+            ? w.messages
+            : [
+                ...w.messages,
+                {
+                  id: newId(),
+                  role: 'system',
+                  content: `Mode switched to ${label}.`,
+                  format: 'text',
+                  createdAt: Date.now(),
+                },
+              ]
+          const updated = {
+            ...w,
+            interactionMode: nextMode,
+            status: `Mode set to ${label}.`,
+            messages: nextMessages,
+          }
+          snapshotForHistory = updated
+          return updated
+        }),
+      )
+      if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
+    }
 
     const unsubEvent = api.onEvent(({ agentWindowId, evt }: any) => {
       if (!agentWindowId) agentWindowId = 'default'
+      const detectedMode = extractInteractionModeChange(evt)
+      if (detectedMode) {
+        syncInteractionMode(agentWindowId, detectedMode, { addChatNotice: true })
+      }
       if (evt?.type === 'contextCompacting') {
         appendPanelDebug(agentWindowId, 'event:context', evt.detail ?? 'Compacting context')
         markPanelActivity(agentWindowId, evt)
@@ -142,6 +185,13 @@ export function useAppRuntimeEvents(ctx: any) {
         appendPanelDebug(agentWindowId, 'event:status', `${evt.status}${evt.message ? ` - ${evt.message}` : ''}`)
         const isRetryableError = evt.status === 'error' && typeof evt.message === 'string' &&
           /status 429|Retrying with backoff|Attempt \d+ failed(?!.*Max attempts)|Rate limited/i.test(evt.message)
+        const terminalFailure =
+          typeof evt.message === 'string' && !isRetryableError
+            ? classifyTerminalProviderFailure(evt.message)
+            : null
+        if (evt.status === 'ready') expiredPanels.delete(agentWindowId)
+        if (terminalFailure) expiredPanels.add(agentWindowId)
+        const panelExpired = Boolean(terminalFailure) || expiredPanels.has(agentWindowId)
         const holdCompactingStatus = contextCompactingPanels.has(agentWindowId) && evt.status === 'starting'
         let closedAfterStreaming = false
         setPanels((prev: any[]) =>
@@ -152,11 +202,17 @@ export function useAppRuntimeEvents(ctx: any) {
                 ...w,
                 status: holdCompactingStatus
                   ? 'Compacting context...'
-                  : isRetryableError
+                  : panelExpired
+                    ? 'Session expired'
+                    : isRetryableError
                     ? 'Rate limited — retrying...'
                     : (evt.message ?? evt.status),
                 connected: evt.status === 'ready',
                 streaming: isRetryableError ? w.streaming : (evt.status === 'closed' || evt.status === 'error' ? false : w.streaming),
+                historyLocked: panelExpired ? true : w.historyLocked,
+                input: panelExpired ? '' : w.input,
+                attachments: panelExpired ? [] : w.attachments,
+                pendingInputs: panelExpired ? [] : w.pendingInputs,
                 ...(evt.status === 'closed' && !isRetryableError && w.streaming
                   ? (() => {
                     closedAfterStreaming = true
@@ -164,14 +220,19 @@ export function useAppRuntimeEvents(ctx: any) {
                   })()
                   : {}),
                 messages:
-                  evt.status === 'error' && typeof evt.message === 'string' && !isRetryableError
+                  typeof evt.message === 'string' && !isRetryableError && (evt.status === 'error' || panelExpired)
                     ? (() => {
                       const withLimit = withLimitWarningMessage(w.messages, evt.message)
-                      const generic = `Provider error: ${evt.message.trim()}`
-                      const hasGeneric = withLimit.slice(-8).some((m: any) => m.role === 'system' && m.content === generic)
-                      return hasGeneric
-                        ? withLimit
-                        : [...withLimit, { id: newId(), role: 'system' as const, content: generic, format: 'text' as const, createdAt: Date.now() }]
+                      const nextMessages = [...withLimit]
+                      const notes = [`Provider error: ${evt.message.trim()}`]
+                      if (terminalFailure) notes.push(terminalFailure.userMessage)
+                      for (const note of notes) {
+                        const hasNote = nextMessages.slice(-8).some((m: any) => m.role === 'system' && m.content === note)
+                        if (!hasNote) {
+                          nextMessages.push({ id: newId(), role: 'system' as const, content: note, format: 'text' as const, createdAt: Date.now() })
+                        }
+                      }
+                      return nextMessages
                     })()
                     : w.messages,
               },
@@ -185,8 +246,10 @@ export function useAppRuntimeEvents(ctx: any) {
         if ((evt.status === 'closed' || evt.status === 'error') && !isRetryableError) {
           contextCompactingPanels.delete(agentWindowId)
           activePromptStartedAtRef.current.delete(agentWindowId)
-          queueMicrotask(() => kickQueuedMessage(agentWindowId))
-          if (evt.status === 'closed' && reconnectPanelRef?.current) {
+          if (!panelExpired) {
+            queueMicrotask(() => kickQueuedMessage(agentWindowId))
+          }
+          if (evt.status === 'closed' && reconnectPanelRef?.current && !panelExpired) {
             setTimeout(() => {
               if (panelsRef.current?.some((p: any) => p.id === agentWindowId)) {
                 reconnectPanelRef.current?.(agentWindowId, 'connection closed')
@@ -242,6 +305,7 @@ export function useAppRuntimeEvents(ctx: any) {
             const msgs = w.messages
             const lastAssistantIdx = msgs.map((m: any) => m.role).lastIndexOf('assistant')
             const lastAssistant = lastAssistantIdx >= 0 ? msgs[lastAssistantIdx] : null
+            const messageMode = lastAssistant ? extractInteractionModeChange(lastAssistant.content) : null
             if (!lastAssistant) {
               const updated = {
                 ...w,
@@ -269,10 +333,13 @@ export function useAppRuntimeEvents(ctx: any) {
             const updated = {
               ...w,
               streaming: false,
+              interactionMode: messageMode ?? w.interactionMode,
               pendingInputs,
               messages: nextMessages,
               status:
-                isTransientTurnStatus(w.status)
+                messageMode && messageMode !== w.interactionMode
+                  ? `Mode set to ${INTERACTION_MODE_META[messageMode].label}.`
+                  : isTransientTurnStatus(w.status)
                   ? ''
                   : w.status,
             }

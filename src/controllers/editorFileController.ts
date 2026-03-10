@@ -24,6 +24,7 @@ export interface EditorFileApi {
 
 export interface EditorFileControllerContext {
   workspaceRoot: string | null
+  getOpenContentPaneCount: () => number
   setShowCodeWindow: (v: boolean | ((prev: boolean) => boolean)) => void
   setCodeWindowTab: (tab: 'code' | 'settings') => void
   setEditorPanels: React.Dispatch<React.SetStateAction<EditorPanelState[]>>
@@ -36,6 +37,7 @@ export interface EditorFileControllerContext {
   fileNameFromRelativePath: (relativePath: string) => string
   formatError: (err: unknown) => string
   newId: () => string
+  MAX_CONTENT_PANES: number
   MAX_EDITOR_PANELS: number
   MAX_EDITOR_FILE_SIZE_BYTES: number
 }
@@ -65,6 +67,7 @@ export function createEditorFileController(ctx: EditorFileControllerContext): Ed
     fileNameFromRelativePath,
     formatError,
     newId,
+    MAX_CONTENT_PANES,
     MAX_EDITOR_PANELS,
     MAX_EDITOR_FILE_SIZE_BYTES,
   } = ctx
@@ -80,6 +83,10 @@ export function createEditorFileController(ctx: EditorFileControllerContext): Ed
     }
 
     const panels = editorPanelsRef.current
+    if (ctx.getOpenContentPaneCount() >= MAX_CONTENT_PANES) {
+      alert(`Maximum ${MAX_CONTENT_PANES} content panes open. Close an agent or source pane first.`)
+      return
+    }
     if (panels.length >= MAX_EDITOR_PANELS) {
       const hasUnedited = panels.some((p) => !p.dirty)
       if (!hasUnedited) {

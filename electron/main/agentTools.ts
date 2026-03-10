@@ -32,6 +32,8 @@ export type AgentToolRunnerOptions = {
   permissionMode: string
   allowedCommandPrefixes?: string[]
   mcpServerManager?: McpServerManager
+  /** Phase 6: Allowlist of tool names. Empty/undefined = all tools allowed. */
+  toolRestrictions?: string[]
 }
 
 export class AgentToolRunner {
@@ -40,6 +42,7 @@ export class AgentToolRunner {
   private permissionMode: string
   private allowedCommandPrefixes: string[]
   private mcpServerManager?: McpServerManager
+  private toolAllowlist: Set<string> | null = null
   private windowsRipgrepAvailable: boolean | null = null
 
   constructor(options: AgentToolRunnerOptions) {
@@ -50,6 +53,14 @@ export class AgentToolRunner {
       ? options.allowedCommandPrefixes.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
       : []
     this.mcpServerManager = options.mcpServerManager
+    this.toolAllowlist = Array.isArray(options.toolRestrictions) && options.toolRestrictions.length > 0
+      ? new Set(options.toolRestrictions.map((n) => String(n).trim()).filter(Boolean))
+      : null
+  }
+
+  private isToolAllowed(name: string): boolean {
+    if (!this.toolAllowlist) return true
+    return this.toolAllowlist.has(name)
   }
 
   getToolDefinitions(): ToolDefinition[] {
@@ -137,10 +148,16 @@ export class AgentToolRunner {
       defs.push(...this.mcpServerManager.getAggregatedToolDefinitions())
     }
 
+    if (this.toolAllowlist) {
+      return defs.filter((d) => d.type === 'function' && (d.function?.name ? this.isToolAllowed(d.function.name) : true))
+    }
     return defs
   }
 
   async executeTool(name: string, rawArgs: string | undefined): Promise<string> {
+    if (!name.startsWith('mcp__') && !this.isToolAllowed(name)) {
+      return `Tool "${name}" is not available for this agent (role restriction).`
+    }
     if (name.startsWith('mcp__') && this.mcpServerManager) {
       const result = await this.mcpServerManager.executeMcpTool(name, rawArgs)
       return this.limitOutput(result)

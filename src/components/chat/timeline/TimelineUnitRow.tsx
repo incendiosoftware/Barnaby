@@ -28,6 +28,8 @@ export interface TimelineUnitRowProps {
   showOperationTrace: boolean
   showReasoningUpdates: boolean
   showActivityUpdates: boolean
+  activityUpdateColor: string
+  reasoningUpdateColor: string
   operationTraceColor: string
   timelineMessageColor: string
   debugNoteColor: string
@@ -105,7 +107,7 @@ export const TimelineUnitRow = React.memo(function TimelineUnitRow(props: Timeli
         onToggle={(next) =>
           props.setTimelineOpenByUnitId((prev) => (prev[unit.id] === next ? prev : { ...prev, [unit.id]: next }))
         }
-        timelineMessageColor={props.timelineMessageColor}
+        timelineMessageColor={isReasoningActivity ? props.reasoningUpdateColor : props.activityUpdateColor}
       />
     )
   }

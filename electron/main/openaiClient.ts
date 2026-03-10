@@ -31,6 +31,7 @@ export type OpenAIConnectOptions = {
   allowedCommandPrefixes?: string[]
   initialHistory?: Array<{ role: 'user' | 'assistant'; text: string }>
   mcpServerManager?: McpServerManager
+  toolRestrictions?: string[]
 }
 
 const INITIAL_HISTORY_MAX_MESSAGES = 24
@@ -107,6 +108,7 @@ export class OpenAIClient extends EventEmitter {
       permissionMode: this.permissionMode,
       allowedCommandPrefixes: this.allowedCommandPrefixes,
       mcpServerManager: options.mcpServerManager,
+      toolRestrictions: options.toolRestrictions,
     })
     if (!this.apiKey) throw new Error('OpenAI API key is missing. Configure it in Settings -> Connectivity.')
     this.emitEvent({ type: 'status', status: 'ready', message: 'Connected' })
@@ -254,7 +256,10 @@ export class OpenAIClient extends EventEmitter {
       }
     }
 
-    return lastAssistantText || 'Stopped after too many tool steps without a final answer.'
+    const limitWarning = '[⚠️ Agent stopped: Maximum tool steps reached without a final answer.]'
+    const finalDelta = lastAssistantText ? `\n\n${limitWarning}` : limitWarning
+    this.emitEvent({ type: 'assistantDelta', delta: finalDelta })
+    return lastAssistantText + finalDelta
   }
 
   private async fetchStreamedCompletion(
@@ -277,6 +282,7 @@ export class OpenAIClient extends EventEmitter {
         tools,
         tool_choice: 'auto',
         temperature: 0.1,
+        max_tokens: 16_384,
         stream: true,
       }
       const serializedPayload = JSON.stringify(requestBody)
@@ -363,7 +369,18 @@ export class OpenAIClient extends EventEmitter {
 
           if (chunk.usage) this.emitEvent({ type: 'usageUpdated', usage: chunk.usage })
 
-          const delta = chunk.choices?.[0]?.delta
+          const choice = chunk.choices?.[0]
+          if (choice?.finish_reason === 'length') {
+            const warning = '\n\n[⚠️ Token limit reached. The response was cut off.]'
+            assistantText += warning
+            this.emitEvent({ type: 'assistantDelta', delta: warning })
+          } else if (choice?.finish_reason === 'content_filter') {
+            const warning = '\n\n[⚠️ Response stopped by content filter.]'
+            assistantText += warning
+            this.emitEvent({ type: 'assistantDelta', delta: warning })
+          }
+
+          const delta = choice?.delta
           if (!delta) continue
 
           if (delta.content) {

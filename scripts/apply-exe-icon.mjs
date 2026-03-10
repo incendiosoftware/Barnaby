@@ -26,9 +26,10 @@ if (!fs.existsSync(releaseDir)) {
   process.exit(0)
 }
 
+// Only patch win-unpacked and setup exe. Do NOT patch portable exe - it is a 7-Zip SFX
+// and rcedit corrupts it (replaces archive payload with resource data, shrinking to ~90KB).
 const targets = [
   path.join(releaseDir, 'win-unpacked', 'Barnaby.exe'),
-  path.join(releaseDir, `Barnaby_${version}_portable.exe`),
   path.join(releaseDir, `Barnaby_${version}_setup.exe`),
 ]
 

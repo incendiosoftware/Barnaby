@@ -14,6 +14,9 @@ const DROP_ZONE_OVERLAY_STYLE: React.CSSProperties = {
 export interface AgentPanelHeaderProps {
   panel: AgentPanelState
   panelsCount: number
+  splitDisabled?: boolean
+  splitTitle?: string
+  showRawConversationButton?: boolean
   draggingPanelId: string | null
   dragOverTarget: string | null
   onDragOver: (e: React.DragEvent) => void
@@ -21,13 +24,18 @@ export interface AgentPanelHeaderProps {
   onDragStart: (e: React.DragEvent) => void
   onDragEnd: () => void
   onSplit: () => void
+  onViewRawConversation?: () => void
   onDownloadTranscript: () => void
+  onRemember: () => void
   onClose: () => void
 }
 
 export function AgentPanelHeader({
   panel,
   panelsCount,
+  splitDisabled,
+  splitTitle,
+  showRawConversationButton,
   draggingPanelId,
   dragOverTarget,
   onDragOver,
@@ -35,15 +43,37 @@ export function AgentPanelHeader({
   onDragStart,
   onDragEnd,
   onSplit,
+  onViewRawConversation,
   onDownloadTranscript,
+  onRemember,
   onClose,
 }: AgentPanelHeaderProps) {
   const showDropZone = draggingPanelId && draggingPanelId !== panel.id && dragOverTarget === `agent-${panel.id}`
+  const headerStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-bg-surface)',
+    borderColor: 'var(--theme-border-default)',
+    color: 'var(--theme-text-primary)',
+  }
+  const dragDotsStyle: React.CSSProperties = {
+    color: 'var(--theme-text-tertiary)',
+  }
+  const iconButtonStyle: React.CSSProperties = {
+    color: 'var(--theme-text-secondary)',
+  }
+  const accentButtonStyle: React.CSSProperties = {
+    color: 'var(--theme-accent-muted)',
+    border: '1px solid color-mix(in srgb, var(--theme-accent-strong) 36%, var(--theme-border-default) 64%)',
+    backgroundColor: 'transparent',
+  }
+  const closeButtonStyle: React.CSSProperties = {
+    color: 'var(--theme-text-secondary)',
+  }
 
   return (
     <div
       data-agent-panel-header="true"
-      className="relative flex items-center justify-between gap-2 min-w-0 px-3 py-2.5 border-b border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-950 shrink-0"
+      className="relative flex items-center justify-between gap-2 min-w-0 px-3 py-2.5 border-b shrink-0"
+      style={headerStyle}
       onDragOver={(e) => panelsCount > 1 && onDragOver(e)}
       onDrop={(e) => panelsCount > 1 && onDrop(e)}
     >
@@ -58,7 +88,7 @@ export function AgentPanelHeader({
         onDragEnd={onDragEnd}
       >
         {panelsCount > 1 && (
-          <span className="shrink-0 flex text-neutral-400 dark:text-neutral-500 touch-none" aria-hidden="true">
+          <span className="shrink-0 flex touch-none" style={dragDotsStyle} aria-hidden="true">
             <svg width="14" height="14" viewBox="0 0 12 12" fill="currentColor">
               <circle cx="4" cy="3" r="1" /><circle cx="8" cy="3" r="1" />
               <circle cx="4" cy="6" r="1" /><circle cx="8" cy="6" r="1" />
@@ -72,27 +102,44 @@ export function AgentPanelHeader({
         <button
           className={[
             'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed',
-            'bg-transparent text-neutral-700 hover:bg-neutral-200/80 active:bg-neutral-300/80 hover:text-neutral-900',
-            'dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80 dark:hover:text-neutral-100',
+            'hover:opacity-90 active:opacity-80',
           ].join(' ')}
+          style={iconButtonStyle}
           onClick={onSplit}
-          disabled={panelsCount >= MAX_PANELS}
-          title={panelsCount >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'Split panel'}
+          disabled={Boolean(splitDisabled)}
+          title={splitTitle ?? (panelsCount >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'Split panel')}
           aria-label="Split panel"
         >
           <svg width="22" height="18" viewBox="0 0 22 18" fill="none" aria-label="Split Panel">
-            <rect x="2" y="2.5" width="7" height="13" rx="1.2" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M13 9h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            <path d="M17 5v8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <path d="M7 9H1.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <path d="M4.5 6 1.5 9l3 3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M15 9h5.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <path d="m17.5 6 3 3-3 3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M9.25 1.75v14.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="square" />
+            <path d="M12.75 1.75v14.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="square" />
           </svg>
         </button>
         <div className="w-1" />
+        {showRawConversationButton && onViewRawConversation && (
+          <button
+            className={[
+              'h-8 px-2.5 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none text-xs font-medium',
+              'hover:opacity-90 active:opacity-80',
+            ].join(' ')}
+            style={accentButtonStyle}
+            onClick={onViewRawConversation}
+            title="View raw conversation"
+            aria-label="View raw conversation"
+          >
+            Raw
+          </button>
+        )}
         <button
           className={[
             'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',
-            'bg-transparent text-neutral-700 hover:bg-emerald-100 hover:text-emerald-700 active:bg-emerald-200',
-            'dark:text-neutral-300 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 dark:active:bg-emerald-900/50',
+            'hover:opacity-90 active:opacity-80',
           ].join(' ')}
+          style={accentButtonStyle}
           onClick={onDownloadTranscript}
           title="Download transcript"
           aria-label="Download transcript"
@@ -103,10 +150,43 @@ export function AgentPanelHeader({
         </button>
         <button
           className={[
-            'h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',
-            'bg-transparent text-neutral-700 hover:bg-transparent hover:text-red-700 active:bg-transparent',
-            'dark:text-neutral-300 dark:hover:bg-transparent dark:hover:text-red-300 dark:active:bg-transparent',
+            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',
+            'hover:opacity-90 active:opacity-80',
           ].join(' ')}
+          style={accentButtonStyle}
+          onClick={onRemember}
+          title="Remember conversation"
+          aria-label="Remember conversation"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M8.7 2.1a4.2 4.2 0 0 0-4.2 4.2c0 .6.12 1.18.35 1.72L3 10.1c-.2.22-.26.52-.15.8.1.28.37.46.67.46h1.36l.38 2.02c.05.3.31.51.61.51h3.55a.63.63 0 0 0 .61-.79l-.72-2.55a4.2 4.2 0 0 0-.61-8.46Z"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M8.55 4.4a1.9 1.9 0 1 0 1.83 2.45"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              strokeLinecap="round"
+            />
+            <path
+              d="m11.05 4.55-.18 1.45-1.36-.27"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+        <button
+          className={[
+            'h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',
+            'hover:opacity-90 active:opacity-80',
+          ].join(' ')}
+          style={closeButtonStyle}
           onClick={onClose}
           title="Close"
         >

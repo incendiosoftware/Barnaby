@@ -49,6 +49,8 @@ export type CodexConnectOptions = {
   showWorkspaceContextInPrompt?: boolean
   systemPrompt?: string
   cursorAllowBuilds?: boolean
+  /** Phase 6: Allowlist of tool names for role-restricted agents (openai/openrouter). */
+  toolRestrictions?: string[]
 }
 
 export class CodexAppServerClient extends EventEmitter {
@@ -73,6 +75,7 @@ export class CodexAppServerClient extends EventEmitter {
 
   private static TURN_INACTIVITY_TIMEOUT_MS = 120_000
   private turnInactivityTimer: ReturnType<typeof setTimeout> | null = null
+  private agentMessageCompletionTimer: ReturnType<typeof setTimeout> | null = null
 
   emitEvent(evt: FireHarnessCodexEvent) {
     this.emit('event', evt)
@@ -102,6 +105,25 @@ export class CodexAppServerClient extends EventEmitter {
     if (this.turnInactivityTimer) {
       clearTimeout(this.turnInactivityTimer)
       this.turnInactivityTimer = null
+    }
+  }
+
+  private scheduleAgentMessageCompletionFallback() {
+    if (this.agentMessageCompletionTimer) clearTimeout(this.agentMessageCompletionTimer)
+    if (!this.activeTurnId) return
+    this.agentMessageCompletionTimer = setTimeout(() => {
+      this.agentMessageCompletionTimer = null
+      if (!this.activeTurnId) return
+      this.clearTurnInactivityTimer()
+      this.activeTurnId = null
+      this.emitEvent({ type: 'assistantCompleted' })
+    }, 750)
+  }
+
+  private clearAgentMessageCompletionFallback() {
+    if (this.agentMessageCompletionTimer) {
+      clearTimeout(this.agentMessageCompletionTimer)
+      this.agentMessageCompletionTimer = null
     }
   }
 
@@ -271,12 +293,14 @@ export class CodexAppServerClient extends EventEmitter {
 
   async interruptActiveTurn() {
     this.clearTurnInactivityTimer()
+    this.clearAgentMessageCompletionFallback()
     if (!this.threadId || !this.activeTurnId) return
     await this.sendRequest('turn/interrupt', { threadId: this.threadId, turnId: this.activeTurnId })
   }
 
   async close() {
     this.clearTurnInactivityTimer()
+    this.clearAgentMessageCompletionFallback()
     if (!this.proc) return
 
     // Best-effort: closing stdin usually tells the server to exit.
@@ -297,6 +321,7 @@ export class CodexAppServerClient extends EventEmitter {
 
   private cleanupAfterExit() {
     this.clearTurnInactivityTimer()
+    this.clearAgentMessageCompletionFallback()
     this.rl?.close()
     this.rl = null
     this.proc = null
@@ -403,7 +428,12 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private handleNotification(method: string, params: any) {
-    if (this.activeTurnId) this.resetTurnInactivityTimer()
+    if (this.activeTurnId) {
+      this.resetTurnInactivityTimer()
+      if (!(method === 'item/completed' && params?.item?.type === 'agentMessage')) {
+        this.clearAgentMessageCompletionFallback()
+      }
+    }
 
     if (method === 'item/agentMessage/delta') {
       const delta =
@@ -423,7 +453,13 @@ export class CodexAppServerClient extends EventEmitter {
     if (method === 'item/created' || method === 'item/completed') {
       const item = params?.item
       const itemType = item?.type
-      if (method === 'item/completed' && itemType === 'agentMessage') return
+      if (method === 'item/completed' && itemType === 'agentMessage') {
+        // Some Codex app-server turns do not send turn/completed after the final
+        // assistant message. Defer completion briefly so intermediate assistant
+        // messages inside a still-active turn do not end the turn too early.
+        this.scheduleAgentMessageCompletionFallback()
+        return
+      }
 
       if (itemType === 'function_call' || itemType === 'tool_call') {
         const name = item?.name ?? item?.function?.name ?? 'tool'
@@ -446,6 +482,7 @@ export class CodexAppServerClient extends EventEmitter {
     }
 
     if (method === 'turn/completed') {
+      this.clearAgentMessageCompletionFallback()
       this.clearTurnInactivityTimer()
       this.activeTurnId = null
       this.emitEvent({ type: 'assistantCompleted' })
@@ -629,4 +666,3 @@ export class CodexAppServerClient extends EventEmitter {
     return `${value.slice(0, maxLen)}...`
   }
 }
-

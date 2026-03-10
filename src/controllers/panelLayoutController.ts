@@ -8,9 +8,11 @@ export type DragOverTarget = DockDropTarget | string | null
 
 export interface PanelLayoutControllerContext {
   panelsRef: React.MutableRefObject<AgentPanelState[]>
+  getOpenContentPaneCount: () => number
   workspaceRoot: string
   workspaceSettingsByPath: Record<string, WorkspaceSettings>
   MAX_PANELS: number
+  MAX_CONTENT_PANES: number
   DEFAULT_MODEL: string
   newId: () => string
   makeDefaultPanel: (id: string, cwd: string, historyId?: string) => AgentPanelState
@@ -55,7 +57,14 @@ export function createPanelLayoutController(ctx: PanelLayoutControllerContext): 
   const DND_TYPE_AGENT = 'application/x-barnaby-agent-panel'
 
   function createAgentPanel(opts?: { sourcePanelId?: string; initialModel?: string }) {
-    if (ctx.panelsRef.current.length >= ctx.MAX_PANELS) return
+    if (ctx.panelsRef.current.length >= ctx.MAX_PANELS) {
+      alert(`Maximum ${ctx.MAX_PANELS} agent panels open. Close one panel first.`)
+      return
+    }
+    if (ctx.getOpenContentPaneCount() >= ctx.MAX_CONTENT_PANES) {
+      alert(`Maximum ${ctx.MAX_CONTENT_PANES} content panes open. Close an agent or source pane first.`)
+      return
+    }
     const sourcePanel = opts?.sourcePanelId ? ctx.panelsRef.current.find((panel) => panel.id === opts.sourcePanelId) : undefined
     const panelWorkspace = sourcePanel?.cwd || ctx.workspaceRoot
     const ws = ctx.workspaceSettingsByPath[panelWorkspace] ?? ctx.workspaceSettingsByPath[ctx.workspaceRoot]
@@ -78,6 +87,7 @@ export function createPanelLayoutController(ctx: PanelLayoutControllerContext): 
     const nextPanelCount = ctx.panelsRef.current.length + 1
     ctx.setPanels((prev) => {
       if (prev.length >= ctx.MAX_PANELS) return prev
+      if (ctx.getOpenContentPaneCount() >= ctx.MAX_CONTENT_PANES) return prev
       return [...prev, p]
     })
     if (nextPanelCount > 3) ctx.setLayoutMode('grid')

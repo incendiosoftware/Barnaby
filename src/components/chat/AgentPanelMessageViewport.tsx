@@ -25,7 +25,8 @@ export function AgentPanelMessageViewport({
       ref={registerRef}
       onScroll={onScroll}
       onContextMenu={onContextMenu}
-      className="flex-1 overflow-y-auto overflow-x-hidden pl-3 pr-4 py-3 space-y-2.5 bg-neutral-50 dark:bg-neutral-950 min-h-0"
+      className="theme-scrollable flex-1 overflow-y-auto overflow-x-hidden pl-3 pr-4 py-3 space-y-2.5 min-h-0"
+      data-theme-scrollable="true"
       style={{ scrollbarGutter: 'stable', ...panelTextStyle }}
     >
       {children}

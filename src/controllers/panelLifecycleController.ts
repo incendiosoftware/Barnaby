@@ -22,6 +22,7 @@ import {
   STALL_WATCHDOG_MS,
 } from '../constants'
 import {
+  classifyTerminalProviderFailure,
   newId,
   panelMessagesToInitialHistory,
   withTimeout,
@@ -93,8 +94,10 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
     const deniedAutoWritePrefixes = ws?.deniedAutoWritePrefixes ?? []
     const workspaceContext = ws?.workspaceContext ?? ''
     const showWorkspaceContextInPrompt = ws?.showWorkspaceContextInPrompt === true
-    const systemPrompt = ws?.systemPrompt ?? ''
+    const panel = ctx.panelsRef.current.find((p) => p.id === winId)
+    const systemPrompt = panel?.pluginSystemPrompt || ws?.systemPrompt || ''
     const cursorAllowBuilds = ws?.cursorAllowBuilds ?? false
+    const toolRestrictions = panel?.pluginToolRestrictions
 
     await withTimeout(
       ctx.api.connect(winId, {
@@ -116,6 +119,7 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
         provider,
         modelConfig: mi?.config,
         initialHistory,
+        toolRestrictions,
       }),
       CONNECT_TIMEOUT_MS,
       'connect',
@@ -200,6 +204,8 @@ export function createPanelLifecycleController(ctx: PanelLifecycleContext): Pane
 
   function formatConnectionError(e: unknown, provider?: string): string {
     const msg = e instanceof Error ? e.message : String(e)
+    const terminalFailure = classifyTerminalProviderFailure(msg)
+    if (terminalFailure) return terminalFailure.userMessage
 
     if (msg.includes('codex app-server closed') || msg.includes('codex app-server')) {
       return 'Codex disconnected. Run `codex app-server` in a terminal to debug, or `codex login` if needed. Send another message to reconnect.'

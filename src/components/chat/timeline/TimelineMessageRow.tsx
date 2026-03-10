@@ -95,6 +95,43 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
 
   const codeBlockIndexRef = useRef(0)
   codeBlockIndexRef.current = 0
+  const inlineCodeStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-accent-tint)',
+    color: 'var(--theme-accent-muted)',
+  }
+  const linkStyle: React.CSSProperties = {
+    color: 'var(--theme-accent-strong)',
+    textDecorationColor: 'var(--theme-accent)',
+  }
+  const pinButtonStyle: React.CSSProperties = {
+    borderColor: 'var(--theme-border-default)',
+    backgroundColor: 'color-mix(in srgb, var(--theme-bg-surface) 88%, var(--theme-bg-base) 12%)',
+    color: 'var(--theme-text-secondary)',
+  }
+  const accentButtonStyle: React.CSSProperties = {
+    borderColor: 'var(--theme-accent-strong)',
+    backgroundColor: 'var(--theme-accent-tint)',
+    color: 'var(--theme-accent-muted)',
+  }
+  const attachmentStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--theme-accent-strong) 45%, var(--theme-border-default) 55%)',
+    backgroundColor: 'color-mix(in srgb, var(--theme-accent-tint) 55%, var(--theme-bg-surface) 45%)',
+    color: 'var(--theme-accent-muted)',
+  }
+  const metaTextStyle: React.CSSProperties = {
+    color: 'var(--theme-text-tertiary)',
+  }
+  const userMessageContainerStyle: React.CSSProperties =
+    role === 'user'
+      ? {
+          backgroundColor: 'color-mix(in srgb, var(--theme-accent-tint) 72%, var(--theme-bg-surface) 28%)',
+          borderColor: 'color-mix(in srgb, var(--theme-accent-strong) 38%, var(--theme-border-default) 62%)',
+          color: 'var(--theme-accent-muted)',
+        }
+      : {}
+  const resendPulseStyle: React.CSSProperties = {
+    backgroundColor: 'color-mix(in srgb, var(--theme-accent) 18%, transparent)',
+  }
 
   const createMarkdownComponents = useCallback(
     (isThinkingCollapsed: boolean) => ({
@@ -135,9 +172,9 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
       code(codeProps: React.ComponentPropsWithoutRef<'code'>) {
         const { children, className } = codeProps
         const isBlock = typeof className === 'string' && className.includes('language-')
-        if (isBlock) return <code className={className}>{children}</code>
+        if (isBlock) return <code className={`${className} select-text`}>{children}</code>
         return (
-          <code className="px-1 py-0.5 rounded bg-blue-100 text-blue-900 dark:bg-blue-950/50 dark:text-blue-200">
+          <code className="select-text px-1 py-0.5 rounded" style={inlineCodeStyle}>
             {children}
           </code>
         )
@@ -149,7 +186,8 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
           <a
             href={target || undefined}
             title={target || undefined}
-            className="text-blue-700 underline underline-offset-2 decoration-blue-400 hover:text-blue-800 dark:text-blue-300 dark:hover:text-blue-200"
+            className="underline underline-offset-2"
+            style={linkStyle}
             onClick={(e) => {
               if (!target) return
               e.preventDefault()
@@ -169,6 +207,8 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
       codeBlockOpenById,
       setCodeBlockOpenById,
       activeTheme,
+      inlineCodeStyle,
+      linkStyle,
       onChatLinkClick,
     ]
   )
@@ -182,6 +222,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
       }
       : undefined
   const mergedMessageContainerStyle: React.CSSProperties = {
+    ...userMessageContainerStyle,
     ...(assistantMessageContainerStyle ?? {}),
     ...(messageContainerStyle ?? {}),
     ...(isDebugSystemNote ? { backgroundColor: activeTheme.errorStatus } : {}),
@@ -194,7 +235,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
       : [
         'rounded-2xl px-3.5 py-2.5 border shadow-sm',
         role === 'user'
-          ? 'bg-blue-50/90 border-blue-200 text-blue-950 dark:bg-blue-950/40 dark:border-blue-900 dark:text-blue-100'
+          ? ''
           : 'border-neutral-200/90 text-neutral-900 dark:border-neutral-800 dark:text-neutral-100',
         role === 'system'
           ? 'bg-neutral-50 border-neutral-200 text-neutral-700 dark:bg-neutral-900 dark:border-neutral-800 dark:text-neutral-300'
@@ -218,15 +259,16 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
 
   return (
     <div key={messageId} data-unit-id={unit.id} className="w-full">
-      <div className={containerClasses} style={mergedMessageContainerStyle}>
+      <div className={`${containerClasses} select-text`} style={mergedMessageContainerStyle}>
         {role === 'user' && isLastUserMessage && resendingPanelId === panelId && (
-          <div className="absolute inset-0 rounded-2xl animate-pulse bg-blue-200/30 dark:bg-blue-400/10 pointer-events-none" />
+          <div className="absolute inset-0 rounded-2xl animate-pulse pointer-events-none" style={resendPulseStyle} />
         )}
         {isCodeLifecycleUnit && hasFencedCodeBlocks && (
           <div className="mb-2 flex justify-end">
             <button
               type="button"
-              className="text-[11px] px-2 py-1 rounded border border-neutral-300 bg-white/80 text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+              className="text-[11px] px-2 py-1 rounded border"
+              style={pinButtonStyle}
               onClick={() =>
                 setTimelinePinnedCodeByUnitId((prev) => ({
                   ...prev,
@@ -266,7 +308,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
             </summary>
             <div className="mt-1 pl-0 py-1 text-[12px] leading-5 [&_*]:!text-current font-thinking" style={{ color: timelineMessageColor }}>
               {role === 'assistant' && format === 'markdown' ? (
-                <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-headings:my-1 prose-ul:my-0.5 prose-li:my-0 prose-code:text-[currentColor] font-chat">
+                <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-headings:my-1 prose-ul:my-0.5 prose-li:my-0 prose-code:text-[currentColor] font-chat select-text">
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={createMarkdownComponents(true)}>
                     {content}
                   </ReactMarkdown>
@@ -291,7 +333,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
             </div>
           </details>
         ) : role === 'assistant' && format === 'markdown' ? (
-          <div className="prose prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-ul:my-0.5 prose-li:my-0 prose-code:text-blue-800 dark:prose-code:text-blue-300 font-chat">
+          <div className="prose prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-ul:my-0.5 prose-li:my-0 prose-code:text-[currentColor] font-chat select-text">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={createMarkdownComponents(false)}>
               {content}
             </ReactMarkdown>
@@ -306,7 +348,8 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
                 <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{content}</span>
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 rounded border border-blue-300 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-200 dark:hover:bg-blue-900/40"
+                  className="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[11px]"
+                  style={accentButtonStyle}
                   onClick={onGrantPermissionAndResend}
                 >
                   Grant Permission
@@ -326,7 +369,8 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
                 return (
                   <span
                     key={attachment.id}
-                    className="inline-flex max-w-[220px] items-center rounded-md border border-blue-200/80 bg-blue-50 px-2 py-1 text-[11px] text-blue-900 dark:border-blue-900/70 dark:bg-blue-950/20 dark:text-blue-200"
+                    className="inline-flex max-w-[220px] items-center rounded-md border px-2 py-1 text-[11px]"
+                    style={attachmentStyle}
                     title={attachment.path}
                   >
                     {attachment.label || 'Local image'}
@@ -339,7 +383,8 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
                   src={src}
                   alt={attachment.label || 'Image attachment'}
                   title={attachment.path}
-                  className="h-20 w-20 rounded-md border border-blue-200/80 object-cover bg-blue-50 dark:border-blue-900/70 dark:bg-blue-950/20"
+                  className="h-20 w-20 rounded-md border object-cover"
+                  style={attachmentStyle}
                   loading="lazy"
                 />
               )
@@ -349,7 +394,8 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
         {showCompletedDurationOnMessage && completedPromptDurationLabel && (
           <div className="mt-2 flex justify-end">
             <span
-              className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400"
+              className="text-[11px] font-mono"
+              style={metaTextStyle}
               title={
                 completedPromptTimestamp
                   ? `Completed at ${new Date(completedPromptTimestamp).toLocaleTimeString()}\nDuration: ${completedPromptDurationLabel}`
@@ -365,7 +411,8 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
             {canRecallLastUserMessage && (
               <button
                 type="button"
-                className="h-6 w-6 inline-flex items-center justify-center rounded-md bg-white/80 text-blue-700 hover:bg-blue-100 dark:bg-blue-950/25 dark:text-blue-200 dark:hover:bg-blue-900/40"
+                className="h-6 w-6 inline-flex items-center justify-center rounded-md"
+                style={attachmentStyle}
                 onClick={onRecallLastUserMessage}
                 title="Recall this message for quick correction"
                 aria-label="Recall this message for editing"

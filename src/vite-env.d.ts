@@ -172,10 +172,15 @@ interface Window {
     setOrchestratorLicenseKey(key: string): Promise<{ ok: boolean; hasKey: boolean }>
     repairStartMenuShortcut(): Promise<{ ok: boolean; error?: string }>
     openPluginsFolder(): Promise<{ ok: boolean; error?: string }>
-    installOrchestratorPlugin(): Promise<{ ok: boolean; error?: string }>
-    uninstallOrchestratorPlugin(): Promise<{ ok: boolean; error?: string }>
+    reloadLocalPlugins(): Promise<{ ok: boolean; error?: string }>
     syncOrchestratorSettings(settings: { orchestratorModel?: string; workerProvider?: string; workerModel?: string; maxParallelPanels?: number; maxTaskAttempts?: number }): Promise<void>
-    getLoadedPlugins(): Promise<Array<{ pluginId: string; displayName: string; version: string; active: boolean }>>
+    getLoadedPlugins(): Promise<Array<{ pluginId: string; displayName: string; version: string; active: boolean; licensed: boolean }>>
+    startOrchestratorComparativeReview(goal: string): Promise<{ ok: boolean; runId?: string; error?: string }>
+    startOrchestratorGoalRun(goal: string): Promise<{ ok: boolean; runId?: string; error?: string }>
+    pauseOrchestratorRun(): Promise<{ ok: boolean; error?: string }>
+    cancelOrchestratorRun(): Promise<{ ok: boolean; error?: string }>
+    getOrchestratorState(): Promise<unknown>
+    browseMarkdownFile(): Promise<{ filePath: string; content: string } | null>
     onPluginsLoaded(cb: () => void): () => void
     interrupt(agentWindowId: string): Promise<void>
     disconnect(agentWindowId: string): Promise<void>

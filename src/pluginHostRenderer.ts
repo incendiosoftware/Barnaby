@@ -13,6 +13,8 @@ export type PluginPanelCreateOptions = {
   interactionMode?: string
   permissionMode?: string
   sandbox?: string
+  additionalSystemPrompt?: string
+  toolRestrictions?: string[]
 }
 
 export type PluginHostCallbacks = {
@@ -20,6 +22,9 @@ export type PluginHostCallbacks = {
   closePanel: (panelId: string) => Promise<void>
   sendMessage: (panelId: string, message: string, attachments: string[]) => Promise<void>
   interruptPanel: (panelId: string) => Promise<void>
+  getPanelInfo: (panelId: string) => Promise<any | null>
+  getPanelMessages: (panelId: string) => Promise<any[]>
+  listPanels: () => Promise<any[]>
   listFiles: (options: { includeHidden?: boolean }) => Promise<{ nodes: any[]; truncated: boolean }>
 }
 
@@ -57,6 +62,15 @@ export function registerPluginHostCallbacks(callbacks: PluginHostCallbacks): () 
           break
         case 'plugin:interruptPanel':
           result = await registeredCallbacks.interruptPanel(args[0] as string)
+          break
+        case 'plugin:getPanelInfo':
+          result = await registeredCallbacks.getPanelInfo(args[0] as string)
+          break
+        case 'plugin:getPanelMessages':
+          result = await registeredCallbacks.getPanelMessages(args[0] as string)
+          break
+        case 'plugin:listPanels':
+          result = await registeredCallbacks.listPanels()
           break
         case 'plugin:listFiles':
           result = await registeredCallbacks.listFiles((args[0] ?? {}) as { includeHidden?: boolean })

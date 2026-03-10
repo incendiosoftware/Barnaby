@@ -1,7 +1,7 @@
 {
   "name": "@barnaby.build/barnaby",
   "productName": "Barnaby",
-  "version": "0.0.223",
+  "version": "0.0.227",
   "main": "dist-electron/main/index.js",
   "bin": {
     "barnaby": "bin/barnaby.cjs"
@@ -52,7 +52,10 @@
     "package:win": "npm run build:dist && electron-packager . Barnaby --platform=win32 --arch=x64 --out=release/0.0.1/packaged --overwrite --asar --prune=true --icon=build/icon.ico",
     "preview": "vite preview",
     "pretest": "vite build --mode=test",
-    "test": "vitest run"
+    "test": "vitest run",
+    "orch:build": "cd ../barnaby-orchestrator && npm run build:raw",
+    "orch:deploy": "npm run orch:build && node -e \"const fs=require('fs'),path=require('path'),os=require('os');const src=path.resolve('../barnaby-orchestrator');const dest=path.join(os.homedir(),'.barnaby','plugins','barnaby-orchestrator');const distSrc=path.join(src,'dist');const distDest=path.join(dest,'dist');fs.rmSync(dest,{recursive:true,force:true});fs.mkdirSync(distDest,{recursive:true});for(const f of fs.readdirSync(distSrc))fs.copyFileSync(path.join(distSrc,f),path.join(distDest,f));fs.copyFileSync(path.join(src,'package.json'),path.join(dest,'package.json'));console.log('Orchestrator deployed to '+dest)\"",
+    "build:all": "npm run build:portable && npm run orch:deploy"
   },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",

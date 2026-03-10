@@ -14,6 +14,7 @@ export interface EditorPanelProps {
   applicationSettings: ApplicationSettings
   activeTheme: StandaloneTheme
   onFocus: () => void
+  onMouseDown: (e: React.MouseEvent<HTMLDivElement>) => void
   onWheel: (e: React.WheelEvent) => void
   onSave: () => void
   onSaveAs: () => void
@@ -27,34 +28,55 @@ export function EditorPanel({
   applicationSettings,
   activeTheme,
   onFocus,
+  onMouseDown,
   onWheel,
   onSave,
   onSaveAs,
   onClose,
   onContentChange,
 }: EditorPanelProps) {
-  const saveDisabled = panel.loading || panel.saving || panel.binary || !panel.dirty
-  const saveAsDisabled = panel.loading || panel.saving || panel.binary
+  const isReadOnly = Boolean(panel.diagnosticsReadOnly || panel.editMode === false)
+  const saveDisabled = panel.loading || panel.saving || panel.binary || isReadOnly || !panel.dirty
+  const saveAsDisabled = panel.loading || panel.saving || panel.binary || Boolean(panel.diagnosticsReadOnly)
+  const panelSurfaceStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-bg-surface)',
+    borderColor: isFocused ? 'var(--theme-accent-strong)' : 'var(--theme-border-default)',
+    color: 'var(--theme-text-primary)',
+  }
+  const contentSurfaceStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-bg-surface)',
+  }
+  const subtleTextStyle: React.CSSProperties = {
+    color: 'var(--theme-text-tertiary)',
+  }
+  const statusTextStyle: React.CSSProperties = {
+    color: 'var(--theme-text-secondary)',
+  }
 
   return (
     <div
       className={[
-        'h-full min-h-0 min-w-0 flex flex-col rounded-xl border bg-white dark:bg-neutral-950 overflow-hidden outline-none shadow-sm',
+        'h-full min-h-0 min-w-0 flex flex-col rounded-xl border overflow-hidden outline-none shadow-sm',
         isFocused
           ? 'border-blue-400 dark:border-blue-600 ring-2 ring-blue-100 dark:ring-blue-900/40'
-          : 'border-neutral-200/90 dark:border-neutral-800',
+          : '',
       ].join(' ')}
+      style={panelSurfaceStyle}
       tabIndex={0}
       onFocusCapture={onFocus}
-      onMouseDownCapture={onFocus}
+      onMouseDown={onMouseDown}
       onWheel={onWheel}
     >
-      <div className="px-3 py-2.5 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center justify-between gap-2">
+      <div
+        data-editor-toolbar="true"
+        className="px-3 py-2.5 border-b flex items-center justify-between gap-2"
+        style={{ borderColor: 'var(--theme-border-default)' }}
+      >
         <div className="min-w-0">
           <div className="text-sm font-semibold truncate" title={panel.relativePath}>
             {panel.title}{panel.dirty ? ' *' : ''}
           </div>
-          <div className="text-[11px] text-neutral-500 dark:text-neutral-400 font-mono truncate" title={panel.relativePath}>
+          <div className="text-[11px] font-mono truncate" style={subtleTextStyle} title={panel.relativePath}>
             {panel.relativePath}
           </div>
         </div>
@@ -100,15 +122,15 @@ export function EditorPanel({
           </button>
         </div>
       </div>
-      <div className="flex-1 min-h-0 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
+      <div className="flex-1 min-h-0 overflow-hidden" style={contentSurfaceStyle}>
         {panel.loading && (
-          <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">Loading file...</div>
+          <div className="p-4 text-sm" style={statusTextStyle}>Loading file...</div>
         )}
         {!panel.loading && panel.error && (
           <div className="p-4 text-sm text-red-600 dark:text-red-400">{panel.error}</div>
         )}
         {!panel.loading && !panel.error && panel.binary && (
-          <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">
+          <div className="p-4 text-sm" style={statusTextStyle}>
             Binary files are not editable in this editor.
           </div>
         )}
@@ -117,7 +139,7 @@ export function EditorPanel({
             <CodeMirrorEditor
               value={panel.content}
               onChange={onContentChange}
-              readOnly={false}
+              readOnly={isReadOnly}
               filename={panel.relativePath}
               wordWrap={applicationSettings.editorWordWrap}
               fontScale={panel.fontScale}
@@ -129,7 +151,10 @@ export function EditorPanel({
           </div>
         )}
       </div>
-      <div className="px-3 py-1.5 border-t border-neutral-200 dark:border-neutral-800 text-[11px] text-neutral-500 dark:text-neutral-400 flex items-center justify-between">
+      <div
+        className="px-3 py-1.5 border-t text-[11px] flex items-center justify-between"
+        style={{ borderColor: 'var(--theme-border-default)', color: 'var(--theme-text-tertiary)' }}
+      >
         <span>{Math.round(panel.size / 1024)} KB</span>
         <span>
           {panel.saving

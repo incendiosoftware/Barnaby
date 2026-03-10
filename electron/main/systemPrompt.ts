@@ -1,12 +1,15 @@
 /**
  * Shared system prompt builder for all AI clients.
  * Phase 1 of agent quality improvement — replaces minimal prompts with Cursor-quality instructions.
+ * Phase 3 adds automatic context enrichment via contextBuilder.
  *
  * The prompt is split into two parts for cache efficiency:
  *   - **Stable prefix**: behavioural rules, code quality, tool usage, mode — does not change
  *     within a session. CLI providers can cache this across turns.
- *   - **Dynamic suffix**: workspace tree, git status, cwd — refreshed on each turn.
+ *   - **Dynamic suffix**: workspace tree, git status, cwd, workspace profile — refreshed on each turn.
  */
+
+import { buildWorkspaceContextSummary } from './contextBuilder'
 
 export type SystemPromptOptions = {
   workspaceTree: string
@@ -68,7 +71,7 @@ export function buildStableSystemPrompt(options: StablePromptOptions): string {
   parts.push('- Never invent file names, symbols, or behavior — verify via tools first.')
   parts.push('- Cite evidence (file paths, line numbers) in your answers.')
   parts.push('- Keep working until the task is done or a clear blocker is identified.')
-  parts.push('- Do not narrate what you are about to do — just do it.')
+  parts.push('- Explain Before Acting: Never call tools in silence. Provide a concise explanation of your intent before executing tool calls.')
   parts.push('- Be concise — no filler, no restating the question.')
 
   parts.push('')
@@ -104,6 +107,14 @@ export function buildDynamicContext(options: DynamicContextOptions): string {
   parts.push(`- Sandbox: ${sandbox}`)
   if (showWorkspaceContextInPrompt && workspaceContext) {
     parts.push(`- Workspace notes: ${workspaceContext}`)
+  }
+
+  // Phase 3: auto-detected workspace profile
+  const profileSummary = buildWorkspaceContextSummary(cwd)
+  if (profileSummary) {
+    parts.push('')
+    parts.push('## Detected project profile')
+    parts.push(profileSummary)
   }
 
   if (gitStatus && gitStatus.trim()) {

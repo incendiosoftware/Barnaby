@@ -370,7 +370,10 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
       if (fromPicker) ctx.setWorkspacePickerOpening(null)
     })
     if (!openedRoot) return
-    if (fromPicker) closeWorkspacePicker()
+    if (fromPicker) {
+      ctx.setWorkspacePickerPrompt(null)
+      closeWorkspacePicker()
+    }
     await Promise.all(panelIds.map((id) => ctx.api.disconnect(id).catch(() => {})))
     ctx.setPanels([])
     ctx.setEditorPanels([])
@@ -404,7 +407,10 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
           })
           if (!openedRoot) return
           applyWorkspaceSnapshot(openedRoot)
-          if (fromPicker) closeWorkspacePicker()
+          if (fromPicker) {
+            ctx.setWorkspacePickerPrompt(null)
+            closeWorkspacePicker()
+          }
           if (source === 'workspace-create') ctx.setShowWorkspaceModal(false)
           ctx.requestImmediateAppStateSave()
         } finally {

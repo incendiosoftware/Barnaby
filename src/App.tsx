@@ -148,6 +148,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_INTERFACES,
   DEFAULT_THEME_ID,
+  CUSTOM_THEME_ID,
   FONT_OPTIONS,
   MONO_FONT_OPTIONS,
   DEFAULT_WORKSPACE_ALLOWED_AUTO_READ_PREFIXES,
@@ -161,6 +162,7 @@ import {
   FONT_SCALE_STEP,
   INPUT_MAX_HEIGHT_PX,
   MAX_AUTO_CONTINUE,
+  MAX_CONTENT_PANES,
   MAX_EDITOR_FILE_SIZE_BYTES,
   MAX_EDITOR_PANELS,
   MAX_FONT_SCALE,
@@ -258,6 +260,7 @@ import {
   getInitialWorkspaceRoot,
   getInitialWorkspaceSettings,
   getInitialSetupWizardDone,
+  getModelProvider as inferModelProviderFromId,
   getModelPingKey,
   getNextFontScale,
   getRateLimitPercent,
@@ -374,7 +377,7 @@ export default function App() {
   const [appSettingsView, setAppSettingsView] = useState<AppSettingsView>('connectivity')
   const [applicationSettings, setApplicationSettings] = useState<ApplicationSettings>(() => getInitialApplicationSettings())
   const [themeOverrides, setThemeOverrides] = useState<ThemeOverrides>(() => getInitialThemeOverrides())
-  const [selectedThemeEditorId, setSelectedThemeEditorId] = useState<string>(() => getInitialThemeId())
+  const [selectedThemeEditorId, setSelectedThemeEditorId] = useState<string>(CUSTOM_THEME_ID)
   const [showOnlyResponsiveModels, setShowOnlyResponsiveModels] = useState(true)
   const [themeEditorDraft, setThemeEditorDraft] = useState<StandaloneTheme | null>(null)
   const [themeEditorStatus, setThemeEditorStatus] = useState<string | null>(null)
@@ -400,6 +403,7 @@ export default function App() {
   const [modelCatalogRefreshPending, setModelCatalogRefreshPending] = useState(false)
   const [modelPingResults, setModelPingResults] = useState<Record<string, { ok: boolean; durationMs: number; error?: string }>>({})
   const [modelPingPending, setModelPingPending] = useState<Set<string>>(new Set())
+  const [catalogConfirmedModelKeys, setCatalogConfirmedModelKeys] = useState<Set<string>>(new Set())
   const [modelFormStatus, setModelFormStatus] = useState<string | null>(null)
   const [providerRegistry, setProviderRegistry] = useState<ProviderRegistry>(() => getInitialProviderRegistry())
   const [editingModel, setEditingModel] = useState<ModelInterface | null>(null)
@@ -471,6 +475,40 @@ export default function App() {
   const [deleteThisAndOlderChecked, setDeleteThisAndOlderChecked] = useState(false)
 
   const modelList = modelConfig.interfaces.filter((m) => m.enabled).map((m) => m.id)
+  const sessionFallbackModelsByProvider = useMemo<Record<ModelProvider, string[]>>(() => {
+    const byProvider: Record<ModelProvider, string[]> = { codex: [], claude: [], gemini: [], openrouter: [] }
+    const seen = new Set<string>()
+    const pushModel = (rawId: string) => {
+      const id = String(rawId ?? '').trim()
+      if (!id) return
+      const provider = inferModelProviderFromId(id) as ModelProvider
+      const key = getModelPingKey(provider, id)
+      if (seen.has(key)) return
+      seen.add(key)
+      byProvider[provider].push(id)
+    }
+    for (const entry of chatHistory) pushModel(entry.model)
+    return byProvider
+  }, [chatHistory])
+
+  const markCatalogModelsConfirmed = useCallback((available: AvailableCatalogModels, providers?: ModelProvider[]) => {
+    const providerScope: ModelProvider[] = providers && providers.length > 0
+      ? providers
+      : ['codex', 'claude', 'gemini', 'openrouter']
+    setCatalogConfirmedModelKeys((prev) => {
+      const next = new Set(prev)
+      for (const provider of providerScope) {
+        const models = available[provider] ?? []
+        for (const item of models) {
+          const id = String(item?.id ?? '').trim()
+          if (!id) continue
+          next.add(getModelPingKey(provider, id))
+        }
+      }
+      return next
+    })
+  }, [])
+
   const workspaceScopedHistory = useMemo(() => {
     const normalizedWorkspaceRoot = normalizeWorkspacePathForCompare(workspaceRoot || '')
     return chatHistory.filter(
@@ -490,6 +528,23 @@ export default function App() {
       }
       seen.add(value)
       base.push(value)
+    }
+    if (filterProvider) {
+      for (const fallbackId of sessionFallbackModelsByProvider[filterProvider]) {
+        const value = String(fallbackId ?? '').trim()
+        if (!value || seen.has(value)) continue
+        seen.add(value)
+        base.push(value)
+      }
+    } else {
+      for (const provider of ['codex', 'claude', 'gemini', 'openrouter'] as const) {
+        for (const fallbackId of sessionFallbackModelsByProvider[provider]) {
+          const value = String(fallbackId ?? '').trim()
+          if (!value || seen.has(value)) continue
+          seen.add(value)
+          base.push(value)
+        }
+      }
     }
     if (includeCurrent) {
       const value = String(includeCurrent).trim()
@@ -810,13 +865,13 @@ export default function App() {
   useEffect(() => {
     const selectedTheme =
       themeCatalog.find((theme) => theme.id === selectedThemeEditorId)
-      ?? themeCatalog.find((theme) => theme.id === applicationSettings.themeId)
+      ?? themeCatalog.find((theme) => theme.id === CUSTOM_THEME_ID)
       ?? themeCatalog[0]
       ?? null
     if (!selectedTheme) return
     if (selectedThemeEditorId !== selectedTheme.id) setSelectedThemeEditorId(selectedTheme.id)
     setThemeEditorDraft((prev) => (prev && prev.id === selectedTheme.id ? prev : cloneTheme(selectedTheme)))
-  }, [themeCatalog, selectedThemeEditorId, applicationSettings.themeId])
+  }, [themeCatalog, selectedThemeEditorId])
   useEffect(() => {
     const root = document.documentElement
     root.classList.toggle('dark', activeTheme.codeSyntax === 'dark')
@@ -1068,6 +1123,96 @@ export default function App() {
     setFocusedEditorId(next)
   }
 
+  const getOpenContentPaneCount = useCallback(() => panelsRef.current.length + editorPanelsRef.current.length, [])
+
+  function buildRawConversationInspectorContent(panel: AgentPanelState) {
+    return JSON.stringify(
+      {
+        exportedAt: new Date().toISOString(),
+        panel: {
+          id: panel.id,
+          title: panel.title,
+          cwd: panel.cwd,
+          provider: panel.provider,
+          model: panel.model,
+          interactionMode: panel.interactionMode,
+          permissionMode: panel.permissionMode,
+          sandbox: panel.sandbox,
+          status: panel.status,
+          connected: panel.connected,
+          streaming: panel.streaming,
+          historyId: panel.historyId,
+          historyLocked: panel.historyLocked,
+          pendingInputs: [...panel.pendingInputs],
+          attachments: panel.attachments.map((item) => ({ ...item })),
+        },
+        messages: panel.messages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          interactionMode: message.interactionMode,
+          format: message.format,
+          attachments: message.attachments?.map((item) => ({ ...item })),
+          createdAt: message.createdAt,
+        })),
+      },
+      null,
+      2,
+    )
+  }
+
+  function openRawConversationInspector(panelId: string) {
+    const panel = panelsRef.current.find((item) => item.id === panelId)
+    if (!panel) return
+
+    const editorId = `raw-conversation-${panel.id}`
+    const title = `Raw: ${truncateText(getConversationPrecis(panel), 32)}`
+    const relativePath = `__barnaby__/raw-conversation-${panel.id}.json`
+    const content = buildRawConversationInspectorContent(panel)
+    const nextPanel: EditorPanelState = {
+      id: editorId,
+      workspaceRoot: panel.cwd || workspaceRootRef.current || workspaceRoot || '',
+      relativePath,
+      title,
+      fontScale: 1,
+      content,
+      size: content.length,
+      loading: false,
+      saving: false,
+      dirty: false,
+      binary: false,
+      editMode: false,
+      diagnosticsReadOnly: true,
+      virtualKind: 'raw-conversation',
+      savedAt: Date.now(),
+    }
+
+    setCodeWindowTab('code')
+    setShowSettingsWindow(true)
+    let shouldFocus = true
+    setEditorPanels((prev) => {
+      const existingIndex = prev.findIndex((item) => item.id === editorId)
+      if (existingIndex >= 0) {
+        return prev.map((item, index) => (index === existingIndex ? { ...item, ...nextPanel } : item))
+      }
+      if (panelsRef.current.length + prev.length >= MAX_CONTENT_PANES) {
+        shouldFocus = false
+        alert(`Maximum ${MAX_CONTENT_PANES} content panes open. Close an agent or source pane first.`)
+        return prev
+      }
+      if (prev.length < MAX_EDITOR_PANELS) return [...prev, nextPanel]
+      const oldestUneditedIdx = prev.findIndex((item) => !item.dirty)
+      if (oldestUneditedIdx >= 0) {
+        const filtered = prev.filter((_, index) => index !== oldestUneditedIdx)
+        return [...filtered, nextPanel]
+      }
+      shouldFocus = false
+      alert(`Maximum ${MAX_EDITOR_PANELS} code files open. Save or close some files to open the raw conversation view.`)
+      return prev
+    })
+    if (shouldFocus) setFocusedEditor(editorId)
+  }
+
   useEffect(() => {
     const level = api.getZoomLevel?.()
     if (level !== undefined) setZoomLevel(level)
@@ -1210,6 +1355,7 @@ export default function App() {
           available.gemini.length > 0 ||
           available.openrouter.length > 0
         ) {
+          markCatalogModelsConfirmed(available)
           setModelConfig((prev) => syncModelConfigWithCatalog(prev, available, providerRegistry))
         }
         // Startup ping effect already ran; catalog effect only syncs config, does not re-ping.
@@ -1218,7 +1364,7 @@ export default function App() {
         // ignore - use built-in models only
       }
     })()
-  }, [api, providerRegistry, modelConfig])
+  }, [api, providerRegistry, modelConfig, markCatalogModelsConfirmed])
 
   const resolvedProviderConfigs = useMemo(
     () => resolveProviderConfigs(providerRegistry),
@@ -1327,6 +1473,7 @@ export default function App() {
     if (!api.saveAppState) return
     function runAppStateSave() {
       const snapshotsForPersist: Record<string, WorkspaceUiSnapshot> = { ...workspaceSnapshotsRef.current }
+      const persistEditorPanel = (panel: EditorPanelState) => panel.virtualKind !== 'raw-conversation'
       const currentWorkspace = workspaceRootRef.current?.trim()
       if (currentWorkspace) {
         snapshotsForPersist[currentWorkspace] = buildWorkspaceSnapshot(currentWorkspace)
@@ -1367,7 +1514,7 @@ export default function App() {
                 pendingInputs: [...panel.pendingInputs],
                 fontScale: panel.fontScale,
               })),
-              editorPanels: snapshot.editorPanels.map((panel) => ({
+              editorPanels: snapshot.editorPanels.filter(persistEditorPanel).map((panel) => ({
                 id: panel.id,
                 workspaceRoot: panel.workspaceRoot,
                 relativePath: panel.relativePath,
@@ -1418,7 +1565,7 @@ export default function App() {
           pendingInputs: [...panel.pendingInputs],
           fontScale: panel.fontScale,
         })),
-        editorPanels: editorPanels.map((panel) => ({
+        editorPanels: editorPanels.filter(persistEditorPanel).map((panel) => ({
           id: panel.id,
           workspaceRoot: panel.workspaceRoot,
           relativePath: panel.relativePath,
@@ -1933,7 +2080,11 @@ export default function App() {
       return
     }
     if (panelsRef.current.length >= MAX_PANELS) {
-      alert(`Maximum ${MAX_PANELS} panels open. Close one panel first.`)
+      alert(`Maximum ${MAX_PANELS} agent panels open. Close one panel first.`)
+      return
+    }
+    if (getOpenContentPaneCount() >= MAX_CONTENT_PANES) {
+      alert(`Maximum ${MAX_CONTENT_PANES} content panes open. Close an agent or source pane first.`)
       return
     }
     const panelId = newId()
@@ -1950,6 +2101,7 @@ export default function App() {
 
     setPanels((prev) => {
       if (prev.length >= MAX_PANELS) return prev
+      if (prev.length + editorPanelsRef.current.length >= MAX_CONTENT_PANES) return prev
       const model = entry.model || DEFAULT_MODEL
       return [
         ...prev,
@@ -2326,10 +2478,11 @@ export default function App() {
         const roles = msgs.map((m) => m.role)
         const lastAssistantIdx = roles.lastIndexOf('assistant')
         const lastUserIdx = roles.lastIndexOf('user')
-        // Only append to the existing assistant message if it comes AFTER the last user message.
-        // If a user message was added after the last assistant message (i.e. a new turn just started),
-        // create a fresh assistant message so the response doesn't bleed into the previous turn.
-        if (w.streaming && lastAssistantIdx >= 0 && lastAssistantIdx > lastUserIdx) {
+        const lastSystemIdx = roles.lastIndexOf('system')
+        // Only append to the existing assistant message if it comes AFTER the last user message
+        // AND after the last system message (tool log). Otherwise, create a fresh assistant message
+        // so commentary appears chronologically after tool activity.
+        if (w.streaming && lastAssistantIdx >= 0 && lastAssistantIdx > lastUserIdx && lastAssistantIdx > lastSystemIdx) {
           const last = msgs[lastAssistantIdx]
           return {
             ...w,
@@ -2487,11 +2640,14 @@ export default function App() {
         if (options.interactionMode) p.interactionMode = parseInteractionMode(options.interactionMode as any)
         if (options.permissionMode) p.permissionMode = options.permissionMode as any
         if (options.sandbox) p.sandbox = options.sandbox as any
+        if (options.additionalSystemPrompt) p.pluginSystemPrompt = options.additionalSystemPrompt
+        if (options.toolRestrictions?.length) p.pluginToolRestrictions = options.toolRestrictions
         const clampedSecurity = clampPanelSecurityForWorkspace(panelWorkspace, p.sandbox, p.permissionMode)
         p.sandbox = clampedSecurity.sandbox
         p.permissionMode = clampedSecurity.permissionMode
         setPanels((prev) => {
           if (prev.length >= MAX_PANELS) return prev
+          if (prev.length + editorPanelsRef.current.length >= MAX_CONTENT_PANES) return prev
           return [...prev, p]
         })
         return id
@@ -2601,6 +2757,7 @@ export default function App() {
   const diagnosticsImageCtrl = useMemo(() => createDiagnosticsImageController({
     api,
     workspaceRoot,
+    getOpenContentPaneCount,
     editorPanelsRef,
     setDiagnosticsActionStatus,
     setShowCodeWindow: setShowSettingsWindow, // alias for openDiagnosticsTarget
@@ -2610,12 +2767,17 @@ export default function App() {
     formatError,
     fileNameFromRelativePath,
     newId,
+    MAX_CONTENT_PANES,
     MAX_EDITOR_PANELS,
-  }), [api, workspaceRoot])
+  }), [api, workspaceRoot, getOpenContentPaneCount])
   const { openDiagnosticsTarget, handlePasteImage } = diagnosticsImageCtrl
 
   function getModelProvider(model: string): ModelProvider {
-    return modelConfig.interfaces.find((m) => m.id === model)?.provider ?? 'codex'
+    return modelConfig.interfaces.find((m) => m.id === model)?.provider ?? inferModelProviderFromId(model)
+  }
+
+  function isModelCatalogConfirmed(provider: ModelProvider, modelId: string): boolean {
+    return catalogConfirmedModelKeys.has(getModelPingKey(provider, modelId))
   }
 
   // ── Provider connectivity (auth, ping, API keys, login, upgrade) ──
@@ -2721,6 +2883,7 @@ export default function App() {
     () =>
       createEditorFileController({
         workspaceRoot,
+        getOpenContentPaneCount,
         setShowCodeWindow: () => { }, // Editor panels no longer require showing a specific dock window
         setCodeWindowTab,
         setEditorPanels,
@@ -2733,11 +2896,13 @@ export default function App() {
         fileNameFromRelativePath,
         formatError,
         newId,
+        MAX_CONTENT_PANES,
         MAX_EDITOR_PANELS,
         MAX_EDITOR_FILE_SIZE_BYTES,
       }),
     [
       workspaceRoot,
+      getOpenContentPaneCount,
       setShowCodeWindow,
       setCodeWindowTab,
       setEditorPanels,
@@ -2841,9 +3006,11 @@ export default function App() {
 
   const panelLayoutCtrl = useMemo(() => createPanelLayoutController({
     panelsRef,
+    getOpenContentPaneCount,
     workspaceRoot,
     workspaceSettingsByPath,
     MAX_PANELS,
+    MAX_CONTENT_PANES,
     DEFAULT_MODEL,
     newId,
     makeDefaultPanel,
@@ -2859,7 +3026,7 @@ export default function App() {
     setDraggingPanelId,
     setDragOverTarget,
     setDockLayout,
-  }), [workspaceRoot, workspaceSettingsByPath])
+  }), [workspaceRoot, workspaceSettingsByPath, getOpenContentPaneCount])
   const {
     DND_TYPE_DOCK,
     DND_TYPE_AGENT,
@@ -3988,7 +4155,10 @@ export default function App() {
   )
 
   return (
-    <div className="theme-preset h-screen w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden flex flex-col bg-neutral-100 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
+    <div
+      className="theme-preset h-screen w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden flex flex-col"
+      style={{ backgroundColor: 'var(--theme-bg-base)', color: 'var(--theme-text-primary)' }}
+    >
       <AppHeaderBar
         workspaceDockButtonOnLeft={workspaceDockButtonOnLeft}
         toolsDockButtonsOnLeft={toolsDockButtonsOnLeft}
@@ -4020,7 +4190,12 @@ export default function App() {
       />
 
       <div className="flex-1 flex flex-col min-h-0 min-w-0">
-        <div className="relative flex-1 min-h-0 min-w-0 bg-gradient-to-b from-neutral-100/90 to-neutral-100/60 dark:from-neutral-900 dark:to-neutral-950">
+        <div
+          className="relative flex-1 min-h-0 min-w-0"
+          style={{
+            background: 'linear-gradient(to bottom, color-mix(in srgb, var(--theme-bg-base) 92%, var(--theme-bg-surface) 8%), var(--theme-bg-base))',
+          }}
+        >
           <div ref={layoutRef} className="h-full flex flex-col min-h-0 min-w-0">
             {(() => {
               const contentPaneIds = [
@@ -4521,6 +4696,7 @@ export default function App() {
         getModelOptionsGrouped={getModelOptionsGrouped}
         showOnlyResponsiveModels={showOnlyResponsiveModels}
         setShowOnlyResponsiveModels={setShowOnlyResponsiveModels}
+        onModelsCatalogLoaded={markCatalogModelsConfirmed}
       />
 
       <AppModals
@@ -4606,6 +4782,9 @@ export default function App() {
         ctx={{
           api,
           panels,
+          contentPaneCount: panels.length + editorPanels.length,
+          MAX_PANELS,
+          MAX_CONTENT_PANES,
           activePanelId,
           draggingPanelId,
           dragOverTarget,
@@ -4634,6 +4813,7 @@ export default function App() {
           handleDragStart,
           handleDragEnd,
           splitAgentPanel,
+          openRawConversationInspector,
           downloadPanelTranscript,
           closePanel,
           registerMessageViewport,
@@ -4648,6 +4828,7 @@ export default function App() {
           injectQueuedMessage,
           removeQueuedMessage,
           getModelProvider,
+          isModelCatalogConfirmed,
           getModelOptions,
           modelPingResults,
           modelPingPending,

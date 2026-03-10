@@ -26,6 +26,10 @@ export interface PanelCreateOptions {
   interactionMode?: 'agent' | 'plan' | 'debug' | 'ask'
   permissionMode?: 'verify-first' | 'proceed-always'
   sandbox?: 'read-only' | 'workspace-write'
+  /** Extra system prompt text appended to the agent's instructions. */
+  additionalSystemPrompt?: string
+  /** Restrict which tools the agent can use (allowlist). Empty/undefined = all tools allowed. */
+  toolRestrictions?: string[]
 }
 
 export interface PanelMessage {
@@ -70,9 +74,9 @@ export interface BarnabyPluginHostApi {
   closePanel(panelId: string): Promise<void>
   sendMessage(panelId: string, message: string, attachments?: string[]): Promise<void>
   interruptPanel(panelId: string): Promise<void>
-  getPanelInfo(panelId: string): PanelInfo | null
-  getPanelMessages(panelId: string): PanelMessage[]
-  listPanels(): PanelInfo[]
+  getPanelInfo(panelId: string): Promise<PanelInfo | null>
+  getPanelMessages(panelId: string): Promise<PanelMessage[]>
+  listPanels(): Promise<PanelInfo[]>
 
   // --- Events ---
   onPanelEvent(panelId: string, handler: (evt: AgentEvent) => void): Disposable
@@ -120,6 +124,80 @@ export interface PluginLifecycleConfig {
   heartbeatField: string
   staleThresholdMs: number
   recoveryPrompt: string
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator: Goal Run types (Phase 6 multi-agent orchestration)
+// ---------------------------------------------------------------------------
+
+export type AgentRole = 'builder' | 'reviewer' | 'researcher' | 'planner'
+
+export type GoalRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type GoalRunTaskStatus = 'pending' | 'blocked' | 'running' | 'completed' | 'failed' | 'skipped'
+
+export interface GoalRunTask {
+  id: string
+  title: string
+  description: string
+  role: AgentRole
+  status: GoalRunTaskStatus
+  /** Task IDs that must complete before this task can start. */
+  dependsOn: string[]
+  /** Panel ID assigned when the task is dispatched to an agent. */
+  panelId?: string
+  /** Structured signal received from the agent upon completion. */
+  result?: AgentSignal
+  /** Number of attempts made (for retry logic). */
+  attempts: number
+  createdAt: number
+  startedAt?: number
+  completedAt?: number
+}
+
+export interface GoalRun {
+  id: string
+  goal: string
+  status: GoalRunStatus
+  tasks: GoalRunTask[]
+  createdAt: number
+  completedAt?: number
+  /** Final summary produced by the orchestrator after all tasks finish. */
+  summary?: string
+}
+
+/**
+ * Structured signal that agents embed in their output to communicate
+ * status back to the orchestrator.
+ */
+export type AgentSignal =
+  | { type: 'completed'; summary: string }
+  | { type: 'failed'; reason: string }
+  | { type: 'progress'; message: string; percentComplete?: number }
+  | { type: 'escalate'; question: string }
+  | { type: 'needs-review'; files: string[]; summary: string }
+
+/**
+ * Role-specific system prompt prefixes used when spawning agents.
+ */
+export const AGENT_ROLE_PROMPTS: Record<AgentRole, string> = {
+  builder:
+    'You are a Builder agent. Your job is to implement the assigned task by writing code. ' +
+    'When done, output a signal line: [SIGNAL:completed] followed by a brief summary of changes. ' +
+    'If you cannot complete the task, output [SIGNAL:failed] followed by the reason. ' +
+    'If you need clarification, output [SIGNAL:escalate] followed by your question.',
+  reviewer:
+    'You are a Reviewer agent. Your job is to review code changes and identify issues. ' +
+    'Do NOT make code changes yourself. Read the relevant files and provide your assessment. ' +
+    'When done, output [SIGNAL:completed] followed by your review summary. ' +
+    'If you find issues requiring changes, output [SIGNAL:needs-review] followed by file paths and summary.',
+  researcher:
+    'You are a Researcher agent. Your job is to gather information about the codebase. ' +
+    'Read files, search for patterns, and report findings. Do NOT modify files. ' +
+    'When done, output [SIGNAL:completed] followed by your findings.',
+  planner:
+    'You are a Planner agent. Your job is to analyze the goal and break it into concrete tasks. ' +
+    'Output a structured task list with dependencies. Do NOT make code changes. ' +
+    'When done, output [SIGNAL:completed] followed by the task breakdown.',
 }
 
 /**

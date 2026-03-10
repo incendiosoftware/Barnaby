@@ -56,6 +56,8 @@ body {
   margin: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  background-color: var(--theme-bg-base);
+  color: var(--theme-text-primary);
 }
 
 /* Keep native select popups legible and theme-consistent, especially on Windows. */
@@ -64,6 +66,34 @@ select option,
 select optgroup {
   background-color: var(--ui-select-bg);
   color: var(--ui-select-fg);
+}
+
+html {
+  scrollbar-color: var(--theme-scrollbar-thumb) var(--theme-scrollbar-track);
+}
+
+.theme-scrollable {
+  background-color: color-mix(in srgb, var(--theme-bg-surface) 30%, var(--theme-bg-base) 70%);
+  scrollbar-color: var(--theme-scrollbar-thumb) var(--theme-scrollbar-track);
+}
+
+.theme-scrollable::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+.theme-scrollable::-webkit-scrollbar-track {
+  background: var(--theme-scrollbar-track);
+}
+
+.theme-scrollable::-webkit-scrollbar-thumb {
+  background: var(--theme-scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid var(--theme-scrollbar-track);
+}
+
+.theme-scrollable::-webkit-scrollbar-corner {
+  background: var(--theme-scrollbar-track);
 }
 
 /* Intentionally no custom drag cursors. */

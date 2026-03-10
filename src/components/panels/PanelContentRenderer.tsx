@@ -83,10 +83,19 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
   const showReasoningUpdates = verbose || DEFAULT_DIAGNOSTICS_VISIBILITY.showReasoningUpdates
   const showOperationTrace = verbose || DEFAULT_DIAGNOSTICS_VISIBILITY.showOperationTrace
   const debugNoteColor = ctx.activeTheme.debugNotes
+  const activityUpdateColor = ctx.activeTheme.activityUpdates
+  const reasoningUpdateColor = ctx.activeTheme.reasoningUpdates
   const operationTraceColor = ctx.activeTheme.operationTrace
   const timelineMessageColor = ctx.activeTheme.thinkingProgress
   const settingsPopover = ctx.settingsPopoverByPanel[w.id] ?? null
   const interactionMode = ctx.parseInteractionMode(w.interactionMode)
+  const splitDisabled = Boolean(ctx.contentPaneCount >= ctx.MAX_CONTENT_PANES || ctx.panels.length >= ctx.MAX_PANELS)
+  const splitTitle =
+    ctx.contentPaneCount >= ctx.MAX_CONTENT_PANES
+      ? `Maximum ${ctx.MAX_CONTENT_PANES} content panes`
+      : ctx.panels.length >= ctx.MAX_PANELS
+        ? `Maximum ${ctx.MAX_PANELS} panels`
+        : 'Split panel'
   const panelSecurity = ctx.getPanelSecurityState(w)
   const effectivePermissionMode = panelSecurity.effectivePermissionMode
   const contextUsage = ctx.estimatePanelContextUsage(w)
@@ -111,6 +120,9 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
       <AgentPanelHeader
         panel={w}
         panelsCount={ctx.panels.length}
+        splitDisabled={splitDisabled}
+        splitTitle={splitTitle}
+        showRawConversationButton={Boolean(ctx.applicationSettings.showRawConversationTools)}
         draggingPanelId={ctx.draggingPanelId}
         dragOverTarget={ctx.dragOverTarget}
         onDragOver={(e) => ctx.handleDragOver(e, { acceptAgent: true, targetId: `agent-${w.id}` })}
@@ -118,7 +130,9 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         onDragStart={(e) => ctx.handleDragStart(e, 'agent', w.id)}
         onDragEnd={ctx.handleDragEnd}
         onSplit={() => ctx.splitAgentPanel(w.id)}
+        onViewRawConversation={() => ctx.openRawConversationInspector(w.id)}
         onDownloadTranscript={() => ctx.downloadPanelTranscript(w.id)}
+        onRemember={() => ctx.downloadPanelTranscript(w.id, true)}
         onClose={() => ctx.closePanel(w.id)}
       />
 
@@ -133,6 +147,8 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
           showOperationTrace={showOperationTrace}
           showReasoningUpdates={showReasoningUpdates}
           showActivityUpdates={showActivityUpdates}
+          activityUpdateColor={activityUpdateColor}
+          reasoningUpdateColor={reasoningUpdateColor}
           timelineOpenByUnitId={ctx.timelineOpenByUnitId}
           setTimelineOpenByUnitId={ctx.setTimelineOpenByUnitId}
           codeBlockOpenById={ctx.codeBlockOpenById}
@@ -195,6 +211,7 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         modelPingPending={ctx.modelPingPending}
         showOnlyResponsiveModels={ctx.showOnlyResponsiveModels}
         getModelProvider={ctx.getModelProvider}
+        isModelCatalogConfirmed={ctx.isModelCatalogConfirmed}
         getModelOptions={ctx.getModelOptions}
         textareaRef={(el) => ctx.registerTextarea(w.id, el)}
         onInputChange={(next) => {
@@ -248,7 +265,6 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
           if (inputLocked) return
           ctx.summarizeSessionContext(w.id)
         }}
-        onDownloadTranscriptAndRemember={() => ctx.downloadPanelTranscript(w.id, true)}
       />
     </AgentPanelShell>
   )

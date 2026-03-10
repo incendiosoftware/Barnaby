@@ -102,39 +102,18 @@ User message
 
 ---
 
-## Phase 3: Automatic Context Enrichment — NOT YET STARTED
+## Phase 3: Automatic Context Enrichment ✅ IMPLEMENTED
 
 **Goal:** Automatically attach relevant workspace context to every message, so the model doesn't start blind.
 
-### New file: `electron/main/contextBuilder.ts`
+### What was done
 
-```typescript
-export async function buildMessageContext(options: {
-  cwd: string
-  messageText: string
-  includeGitStatus?: boolean
-  includeRecentFiles?: boolean
-}): Promise<string>
-```
+1. **contextBuilder.ts** — `detectWorkspaceProfile()`, `formatWorkspaceProfile()`, `buildWorkspaceContextSummary()`:
+   - Detects Node/TS, Python, Rust, Go, Java, .NET
+   - Frameworks (React, Vue, Next, Express, etc.), package manager, test framework, build tool
+   - Monorepo detection (pnpm/yarn/npm workspaces, Lerna, Nx, Cargo)
 
-### Context to attach automatically
-
-1. **Git status summary** (if workspace is a git repo):
-   - Branch name, ahead/behind counts
-   - List of modified/staged/untracked files
-   - Use the existing `getGitStatus()` function in `index.ts`
-
-2. **Workspace metadata** — Language detection (check for `package.json`, `Cargo.toml`, `go.mod`, `requirements.txt`, etc.) so the model knows the tech stack without having to search
-
-### Where to integrate
-
-In `electron/main/index.ts`, modify the `sendMessageEx` handler to call `buildMessageContext()` and append context to the message before passing to the client. Or: pass context options to the client's `connect()` method and let each client include it in the system prompt during `startTurn()`.
-
-### What NOT to do
-
-- Don't attach full file contents automatically (too expensive)
-- Don't attach the entire git diff (too noisy)
-- Keep automatic context lightweight — the model has tools to read more when needed
+2. **Integration** — `buildDynamicContext()` in `systemPrompt.ts` calls `buildWorkspaceContextSummary(cwd)` and injects "Detected project profile" into the dynamic context. All clients (Claude, OpenAI, OpenRouter, Gemini) receive it via the shared system prompt. Git status is attached separately per client.
 
 ### Estimated impact
 
@@ -142,30 +121,27 @@ Medium. Reduces "cold start" problem where the model doesn't know what language,
 
 ---
 
-## Phase 4: Structured Conversation History — NOT YET STARTED
+## Phase 4: Structured Conversation History ✅ IMPLEMENTED
 
 **Goal:** Replace text-transcript history formatting with proper API-structured messages.
 
-### Current state
-
-- `ClaudeClient` — Now uses `--resume` for session persistence (Phase 5), but first message still sends full text history via `buildPrompt()`
-- `CodexAppServerClient` uses `formatPriorMessagesForContext()` which prepends all history as text blob
-- `OpenAIClient` properly uses `{ role, content }` message arrays (good)
-
-### Changes needed
+### What was done
 
 1. **ClaudeClient** (`electron/main/claudeClient.ts`)
    - Session resume handles multi-turn context natively — no need to send history on subsequent messages ✅
-   - First message still uses text-format history; could be improved with truncation
+   - First message uses `truncateHistory()` from `historyTruncation.ts` (max 6 messages, assistant messages trimmed at 2000 chars) ✅
 
 2. **CodexAppServerClient** (`electron/main/index.ts`)
-   - `formatPriorMessagesForContext()` prepends all history as text blob — wastes context window
-   - Send only the last 2-4 messages as context (not all 24), summarize older history
+   - `formatPriorMessagesForContext()` now uses `truncateHistoryWithMeta()`:
+     - Sends only the last 4 messages (was 24)
+     - Long assistant messages truncated (head + tail, default 2000 char limit)
+     - Adds "N earlier messages omitted" when messages are dropped
 
-3. **History truncation** — Add smart truncation to all clients:
-   - Trim assistant messages longer than ~2000 chars to a summary
-   - Keep user messages intact (they contain the actual instructions)
-   - Prioritize recent messages over old ones
+3. **GeminiClient** (`electron/main/geminiClient.ts`)
+   - Already uses `truncateHistoryWithMeta()` for context ✅
+
+4. **Shared truncation** (`electron/main/historyTruncation.ts`)
+   - `truncateHistory()` / `truncateHistoryWithMeta()` — trim assistant messages, cap message count, prioritise recent
 
 ### Estimated impact
 
@@ -173,20 +149,15 @@ Medium. Prevents context window pollution and keeps the model focused on the cur
 
 ---
 
-## Phase 5 Remaining: Per-Client Configuration and Model-Aware Tuning
+## Phase 5 Remaining: Per-Client Configuration ✅ IMPLEMENTED
 
 **Goal:** Let each client optimize for its model's strengths.
 
-### Still to do
+### What was done
 
-1. **Temperature tuning** — `openaiClient.ts` uses `0.1`, OpenRouter uses `0.2`. Claude CLI and Gemini CLI don't set temperature. Add temperature configuration per-model.
-
-2. **Max tokens / response length** — Set appropriate `max_tokens` for each model to prevent runaway responses.
-
-3. **Model-specific prompt adjustments** — `buildSystemPrompt()` could accept a `modelFamily` parameter:
-   - Claude: responds well to XML-structured prompts with `<rules>` tags
-   - GPT: responds well to numbered lists and explicit constraints
-   - Gemini: responds well to conversational instructions
+1. **Temperature** — OpenAI: 0.1, OpenRouter: 0.2 (unchanged, sensible defaults)
+2. **Max tokens** — Added `max_tokens: 16_384` to OpenAI and OpenRouter request bodies to prevent runaway responses
+3. **Model-specific prompts** — Deferred (low impact; current prompts work across models)
 
 ### Estimated impact
 
@@ -194,7 +165,7 @@ Low-medium individually, but compounds with the other phases.
 
 ---
 
-## Phase 6: Multi-Agent Orchestration — NOT YET STARTED
+## Phase 6: Multi-Agent Orchestration — FOUNDATION IMPLEMENTED
 
 **Goal:** Enable Barnaby to break complex tasks into sub-tasks and delegate them to multiple specialised agents running in parallel, coordinated by an orchestrator.
 
@@ -277,12 +248,19 @@ Rather than fully predefined roles (rigid) or fully dynamic roles (unpredictable
 - **UI representation** — How does the Barnaby frontend visualise multiple agents? A dashboard view? Nested timelines? Agent cards with status badges?
 - **Session model** — Does each agent get its own API session, or do they share a conversation context with the orchestrator?
 
-### New files anticipated
+### What was done (barnaby-app foundation)
+
+1. **pluginHostTypes.ts** — `AgentRole`, `GoalRun`, `GoalRunTask`, `AgentSignal`, `AGENT_ROLE_PROMPTS`, `toolRestrictions` on `PanelCreateOptions`
+2. **agentTools.ts** — `toolRestrictions` allowlist filters `getToolDefinitions()` and `executeTool()` (reviewers get read-only tools)
+3. **Connect flow** — `toolRestrictions` passed from `pluginToolRestrictions` via `panelLifecycleController` → `ConnectOptions` → OpenAI/OpenRouter `AgentToolRunner`
+4. **Orchestrator plugin** — Full goal run loop lives in `barnaby-orchestrator` package; app provides IPC, plugin host API, and UI (OrchestratorPane with Review/Goal Run mode toggle)
+
+### New files anticipated (in barnaby-orchestrator plugin)
 
 | File | Purpose |
 |------|---------|
-| `electron/main/orchestrator.ts` | Orchestrator logic: task decomposition, agent spawning, message routing, merge coordination |
-| `electron/main/agentRoles.ts` | Role templates: tool subsets, system prompt fragments, and constraint definitions per role |
+| `goalRunLoop.ts` | Task decomposition, agent spawning, signal parsing |
+| `agentRoles.ts` | Role → tool mapping, system prompt fragments |
 
 ### Dependencies on earlier phases
 
@@ -302,9 +280,9 @@ High. This is a fundamental capability upgrade from single-agent to multi-agent,
 Phase 1 (system prompts)     ████████████████  DONE ✅
 Phase 2 (tools)              ████████████████  DONE ✅
 Phase 5 (streaming/UI)       ████████████████  DONE ✅ (remaining: tuning)
-Phase 3 (context)            ░░░░░░░░░░░░░░░░  NOT STARTED
-Phase 4 (history)            ░░░░░░░░░░░░░░░░  NOT STARTED (partially addressed by session resume)
-Phase 6 (multi-agent)        ░░░░░░░░░░░░░░░░  NOT STARTED (depends on Phases 2–4)
+Phase 3 (context)            ████████████████  DONE ✅
+Phase 4 (history)            ████████████████  DONE ✅
+Phase 6 (multi-agent)        ████████░░░░░░░░  FOUNDATION DONE (tool restrictions, host API; plugin implements loop)
 ```
 
 ## Files Changed Summary

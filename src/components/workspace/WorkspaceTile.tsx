@@ -19,7 +19,7 @@ export interface WorkspaceTileProps {
   draggingPanelId: string | null
   dragOverTarget: string | { zoneId: string; hint: string } | null
   dockContent: React.ReactNode
-  onMouseDownCapture: () => void
+  onMouseDown: (e: React.MouseEvent<HTMLDivElement>) => void
   onDragOver: (e: React.DragEvent) => void
   onDrop: (e: React.DragEvent) => void
   onDragStart: (e: React.DragEvent) => void
@@ -38,7 +38,7 @@ export function WorkspaceTile({
   draggingPanelId,
   dragOverTarget,
   dockContent,
-  onMouseDownCapture,
+  onMouseDown,
   onDragOver,
   onDrop,
   onDragStart,
@@ -49,40 +49,69 @@ export function WorkspaceTile({
   onDockSideToggle,
   onClose,
 }: WorkspaceTileProps) {
+  const rootStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-bg-surface)',
+    borderColor: 'var(--theme-border-default)',
+    color: 'var(--theme-text-primary)',
+  }
+  const titleBarStyle: React.CSSProperties = {
+    backgroundColor: 'color-mix(in srgb, var(--theme-bg-surface) 82%, var(--theme-bg-base) 18%)',
+    borderColor: 'var(--theme-border-default)',
+    color: 'var(--theme-text-primary)',
+  }
+  const tabBarStyle: React.CSSProperties = {
+    backgroundColor: 'color-mix(in srgb, var(--theme-bg-surface) 76%, var(--theme-bg-base) 24%)',
+    borderColor: 'var(--theme-border-default)',
+  }
+  const selectedTabStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-accent-tint)',
+    color: 'var(--theme-accent-muted)',
+  }
+  const idleTabStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-bg-surface)',
+    color: 'var(--theme-text-secondary)',
+  }
+  const chromeButtonStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-bg-surface)',
+    color: 'var(--theme-text-secondary)',
+  }
+  const closeButtonStyle: React.CSSProperties = {
+    color: 'var(--theme-text-secondary)',
+  }
+
   return (
     <div
       data-workspace-window-root="true"
-      className="relative h-full min-h-0 min-w-0 flex flex-col border border-neutral-200/80 dark:border-neutral-800 rounded-lg overflow-hidden bg-neutral-50 dark:bg-neutral-900 font-mono"
-      onMouseDownCapture={onMouseDownCapture}
+      className="relative h-full min-h-0 min-w-0 flex flex-col border rounded-lg overflow-hidden font-mono"
+      style={rootStyle}
+      onMouseDown={onMouseDown}
       onDragOver={onDragOver}
       onDrop={onDrop}
       onWheel={onWheel}
     >
       <div
         data-workspace-title-bar="true"
-        className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 shrink-0 select-none"
+        className="px-3 py-2 border-b shrink-0 select-none"
+        style={titleBarStyle}
         draggable={showCodeWindow}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         onDragOver={onDragOver}
         onDrop={onDrop}
       >
-        <div className="text-xs font-semibold text-neutral-700 dark:text-neutral-200">Workspace Window</div>
+        <div className="text-xs font-semibold">Workspace Window</div>
       </div>
       {draggingPanelId && dragOverTarget === 'dock-workspace' && (
         <div className="absolute inset-0 rounded-lg pointer-events-none z-10" style={DROP_ZONE_OVERLAY_STYLE} />
       )}
-      <div data-workspace-dock-tab-bar="true" className="px-2.5 py-2 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center gap-1.5 bg-neutral-100 dark:bg-neutral-900/80">
+      <div data-workspace-dock-tab-bar="true" className="px-2.5 py-2 border-b flex items-center gap-1.5" style={tabBarStyle}>
         <div className="inline-flex items-center gap-1.5">
           <button
             type="button"
             title="Agent Orchestrator"
             aria-label="Agent Orchestrator"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium ${
-              dockTab === 'orchestrator'
-                ? 'bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-            }`}
+            className="h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium transition-opacity hover:opacity-90"
+            style={dockTab === 'orchestrator' ? selectedTabStyle : idleTabStyle}
             onClick={() => onDockTabChange('orchestrator')}
           >
             <RobotIcon size={18} />
@@ -91,11 +120,8 @@ export function WorkspaceTile({
             type="button"
             title="Workspace Folder"
             aria-label="Workspace Folder"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium ${
-              dockTab === 'explorer'
-                ? 'bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-            }`}
+            className="h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium transition-opacity hover:opacity-90"
+            style={dockTab === 'explorer' ? selectedTabStyle : idleTabStyle}
             onClick={() => onDockTabChange('explorer')}
           >
             <FolderIcon size={18} />
@@ -104,11 +130,8 @@ export function WorkspaceTile({
             type="button"
             title="Git"
             aria-label="Git"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium ${
-              dockTab === 'git'
-                ? 'bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-            }`}
+            className="h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium transition-opacity hover:opacity-90"
+            style={dockTab === 'git' ? selectedTabStyle : idleTabStyle}
             onClick={() => onDockTabChange('git')}
           >
             <GitIcon size={18} />
@@ -117,11 +140,8 @@ export function WorkspaceTile({
             type="button"
             title="Workspace settings"
             aria-label="Workspace settings"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium ${
-              dockTab === 'settings'
-                ? 'bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-                : 'bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200'
-            }`}
+            className="h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium transition-opacity hover:opacity-90"
+            style={dockTab === 'settings' ? selectedTabStyle : idleTabStyle}
             onClick={onWorkspaceSettingsTab}
           >
             <SettingsIcon size={18} />
@@ -131,7 +151,8 @@ export function WorkspaceTile({
           type="button"
           title={`Dock workspace window to ${workspaceDockSide === 'right' ? 'left' : 'right'}`}
           aria-label={`Dock workspace window to ${workspaceDockSide === 'right' ? 'left' : 'right'}`}
-          className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-200"
+          className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium transition-opacity hover:opacity-90"
+          style={chromeButtonStyle}
           onClick={onDockSideToggle}
         >
           <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -145,7 +166,8 @@ export function WorkspaceTile({
           type="button"
           title="Close workspace window"
           aria-label="Close workspace window"
-          className="h-9 w-9 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-xs font-medium text-neutral-600 hover:bg-transparent active:bg-transparent dark:text-neutral-300 dark:hover:bg-transparent dark:active:bg-transparent"
+          className="h-9 w-9 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-xs font-medium transition-opacity hover:opacity-80 active:opacity-70"
+          style={closeButtonStyle}
           onClick={onClose}
         >
           <CloseIcon size={16} />

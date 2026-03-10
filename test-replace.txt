@@ -1,0 +1,105 @@
+export function buildTimelineForPanel(input: BuildTimelineInput): TimelineUnit[] {
+  const windowSize =
+    typeof input.retrospectiveWindow === 'number' && Number.isFinite(input.retrospectiveWindow)
+      ? Math.max(1, Math.round(input.retrospectiveWindow))
+      : null
+  const units: TimelineUnit[] = []
+
+  for (let i = 0; i < input.messages.length; i += 1) {
+    const message = input.messages[i]
+    const messageCreatedAt = typeof message.createdAt === 'number' && Number.isFinite(message.createdAt) ? message.createdAt : i
+    
+    if (message.role === 'assistant' && /<(?:think|thought)>[\s\S]*?/i.test(message.content)) {
+      const thoughtRegex = /<(?:think|thought)>([\s\S]*?)(?:<\/(?:think|thought)>|$)/gi
+      let match
+      let lastIndex = 0
+      let segmentIndex = 0
+
+      while ((match = thoughtRegex.exec(message.content)) !== null) {
+        const prefix = message.content.slice(lastIndex, match.index).trim()
+        if (prefix) {
+          const kind = prefix.includes('```') ? 'code' : 'assistant'
+          units.push({
+            id: `msg-${message.id}-${segmentIndex++}`,
+            panelId: input.panelId,
+            sourceMessageIds: [message.id],
+            kind,
+            title: undefined,
+            body: prefix,
+            interactionMode: message.interactionMode,
+            markdown: (message.format ?? 'markdown') === 'markdown',
+            attachments: segmentIndex === 1 ? message.attachments : undefined,
+            createdAt: messageCreatedAt,
+            updatedAt: messageCreatedAt,
+            status: 'completed',
+            collapsible: kind === 'code',
+            defaultOpen: kind !== 'code',
+          })
+        }
+
+        const thoughtContent = match[1].trim()
+        const isClosed = match[0].toLowerCase().endsWith('</think>') || match[0].toLowerCase().endsWith('</thought>')
+        
+        if (thoughtContent || !isClosed) {
+          units.push({
+            id: `msg-${message.id}-thought-${segmentIndex++}`,
+            panelId: input.panelId,
+            sourceMessageIds: [message.id],
+            kind: 'thinking',
+            title: 'Thinking',
+            body: thoughtContent || 'Thinking...',
+            interactionMode: message.interactionMode,
+            markdown: (message.format ?? 'markdown') === 'markdown',
+            attachments: undefined,
+            createdAt: messageCreatedAt,
+            updatedAt: messageCreatedAt,
+            status: isClosed ? 'completed' : (input.streaming && i === input.messages.length - 1 ? 'in_progress' : 'completed'),
+            collapsible: true,
+            defaultOpen: false,
+          })
+        }
+        lastIndex = thoughtRegex.lastIndex
+      }
+
+      const suffix = message.content.slice(lastIndex).trim()
+      if (suffix) {
+        const kind = suffix.includes('```') ? 'code' : 'assistant'
+        units.push({
+          id: `msg-${message.id}-${segmentIndex++}`,
+          panelId: input.panelId,
+          sourceMessageIds: [message.id],
+          kind,
+          title: undefined,
+          body: suffix,
+          interactionMode: message.interactionMode,
+          markdown: (message.format ?? 'markdown') === 'markdown',
+          attachments: segmentIndex === 1 ? message.attachments : undefined,
+          createdAt: messageCreatedAt,
+          updatedAt: messageCreatedAt,
+          status: 'completed',
+          collapsible: kind === 'code',
+          defaultOpen: kind !== 'code',
+        })
+      }
+    } else {
+      const kind = messageKind(message)
+      units.push({
+        id: `msg-${message.id}`,
+        panelId: input.panelId,
+        sourceMessageIds: [message.id],
+        kind,
+        title: kind === 'thinking' ? 'Thinking' : undefined,
+        body: message.content,
+        interactionMode: message.interactionMode,
+        markdown: (message.format ?? 'markdown') === 'markdown',
+        attachments: message.attachments,
+        createdAt: messageCreatedAt,
+        updatedAt: messageCreatedAt,
+        status: 'completed',
+        collapsible: kind === 'thinking' || kind === 'activity' || kind === 'code',
+        defaultOpen: kind !== 'thinking' && kind !== 'code',
+      })
+    }
+  }
+
+  const orderedActivity = mergeActivityItems(input.activityItems)

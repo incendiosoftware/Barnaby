@@ -47,8 +47,8 @@ describe('normalizeWorkspaceSettingsFromPartial', () => {
     expect(normalized.cursorAllowBuilds).toBe(true)
   })
 
-  it('defaults cursorAllowBuilds to false when not provided', () => {
+  it('defaults cursorAllowBuilds to true when not provided', () => {
     const normalized = normalizeWorkspaceSettingsFromPartial('E:/Barnaby/barnaby-app', {})
-    expect(normalized.cursorAllowBuilds).toBe(false)
+    expect(normalized.cursorAllowBuilds).toBe(true)
   })
 })

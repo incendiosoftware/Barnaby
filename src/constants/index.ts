@@ -26,7 +26,8 @@ export const ALL_WORKSPACES_LOCKED_PROMPT =
 
 export const CODEX_API_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo']
 export const DEFAULT_MODEL_INTERFACES: ModelInterface[] = []
-export const MAX_PANELS = 5
+export const MAX_PANELS = 6
+export const MAX_CONTENT_PANES = 6
 export const MAX_EDITOR_PANELS = 20
 export const MAX_EDITOR_FILE_SIZE_BYTES = 2 * 1024 * 1024
 export const MAX_AUTO_CONTINUE = 3
@@ -215,7 +216,8 @@ export const TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS = 700
 /** Codex/Codex-style providers: system prompt, tool definitions, file-tree RAG, etc. */
 export const TOKEN_ESTIMATE_CODEX_SYSTEM_OVERHEAD = 3500
 export const APP_STATE_AUTOSAVE_MS = 800
-export const DEFAULT_THEME_ID = 'default-dark'
+export const DEFAULT_THEME_ID = 'graphite-void'
+export const CUSTOM_THEME_ID = 'custom'
 export const DEFAULT_FONT_FAMILY = 'inter'
 export const DEFAULT_FONT_CODE = 'consolas'
 export const DEFAULT_FONT_THINKING = 'inter'
@@ -317,21 +319,4 @@ export const INTERACTION_MODE_META: Record<AgentInteractionMode, { label: string
       'Mode: Ask. Answer in read-only guidance mode. Explain clearly and avoid code changes unless explicitly requested.',
     hint: 'Read-only Q&A guidance.',
   },
-}
-
-export const LEGACY_PRESET_TO_THEME_ID: Record<string, { light: string; dark: string }> = {
-  default: { light: 'default-light', dark: 'default-dark' },
-  'obsidian-black': { light: 'default-light', dark: 'obsidian-black' },
-  dracula: { light: 'default-light', dark: 'dracula' },
-  nord: { light: 'nord-light', dark: 'nord-dark' },
-  'solarized-dark': { light: 'solarized-light', dark: 'solarized-dark' },
-  'gruvbox-dark': { light: 'gruvbox-light', dark: 'gruvbox-dark' },
-  'tokyo-night': { light: 'tokyo-night-light', dark: 'tokyo-night-dark' },
-  'catppuccin-mocha': { light: 'default-light', dark: 'catppuccin-mocha' },
-  'github-dark': { light: 'default-light', dark: 'github-dark' },
-  monokai: { light: 'default-light', dark: 'monokai' },
-  'one-dark': { light: 'default-light', dark: 'one-dark' },
-  'ayu-mirage': { light: 'default-light', dark: 'ayu-mirage' },
-  'material-ocean': { light: 'default-light', dark: 'material-ocean' },
-  'synthwave-84': { light: 'default-light', dark: 'synthwave-84' },
 }

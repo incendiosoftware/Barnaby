@@ -58,6 +58,7 @@ import {
   DEFAULT_FONT_FAMILY,
   DEFAULT_FONT_THINKING,
   DEFAULT_MODEL_INTERFACES,
+  CUSTOM_THEME_ID,
   MONO_FONT_OPTIONS,
   EXPLORER_PREFS_STORAGE_KEY,
   FONT_OPTIONS,
@@ -82,7 +83,6 @@ import {
   SETUP_WIZARD_DONE_STORAGE_KEY,
 } from '../constants'
 import { THEMES } from '../constants/themes'
-import { LEGACY_PRESET_TO_THEME_ID } from '../constants'
 
 export function getModelProvider(modelId: string): ConnectivityProvider {
   if (modelId === 'gpt-4o' || modelId === 'gpt-4o-mini' || modelId === 'gpt-4-turbo' || modelId.startsWith('o1') || modelId.startsWith('o3')) {
@@ -378,7 +378,8 @@ export function looksLikeDiff(code: string): boolean {
 
 export function applyThemeOverrides(overrides: ThemeOverrides): StandaloneTheme[] {
   return THEMES.map((theme) => {
-    const override = overrides[theme.id]
+    if (theme.id !== CUSTOM_THEME_ID) return theme
+    const override = overrides[CUSTOM_THEME_ID]
     if (!override) return theme
     const next: StandaloneTheme = { ...theme }
     for (const field of THEME_EDITABLE_FIELDS) {
@@ -395,6 +396,7 @@ export function sanitizeThemeOverrides(raw: unknown): ThemeOverrides {
   const source = raw as Record<string, unknown>
   const result: ThemeOverrides = {}
   for (const [themeId, overrideValue] of Object.entries(source)) {
+    if (themeId !== CUSTOM_THEME_ID) continue
     if (!knownIds.has(themeId)) continue
     if (!overrideValue || typeof overrideValue !== 'object') continue
     const override = overrideValue as Record<string, unknown>
@@ -588,24 +590,6 @@ export function resolveWorkspaceRelativePathFromChatHref(workspaceRoot: string, 
 export function getInitialThemeId(): string {
   const stored = globalThis.localStorage?.getItem(THEME_ID_STORAGE_KEY) ?? ''
   if (THEMES.some((t) => t.id === stored)) return stored
-  const legacyTheme = (globalThis.localStorage?.getItem('agentorchestrator.theme') ?? '').toLowerCase()
-  let legacyPreset: string | null = null
-  try {
-    const app = globalThis.localStorage?.getItem(APP_SETTINGS_STORAGE_KEY)
-    if (app) {
-      const p = JSON.parse(app) as { themePresetId?: string }
-      legacyPreset = p?.themePresetId ?? null
-    }
-  } catch {
-    /* ignore */
-  }
-  const mapping = legacyPreset && LEGACY_PRESET_TO_THEME_ID[legacyPreset]
-  if (mapping) {
-    const id = legacyTheme === 'light' ? mapping.light : mapping.dark
-    if (THEMES.some((t) => t.id === id)) return id
-  }
-  if (legacyPreset && THEMES.some((t) => t.id === legacyPreset)) return legacyPreset
-  if (legacyTheme === 'light') return 'default-light'
   return DEFAULT_THEME_ID
 }
 
@@ -806,6 +790,7 @@ export function parseApplicationSettings(parsed: Partial<ApplicationSettings> | 
     fontEditorSize: 13,
     responseStyle: 'standard',
     showDebugNotesInTimeline: false,
+    showRawConversationTools: false,
     verboseDiagnostics: false,
     showResponseDurationAfterPrompt: false,
     editorWordWrap: true,
@@ -833,6 +818,7 @@ export function parseApplicationSettings(parsed: Partial<ApplicationSettings> | 
         ? parsed.responseStyle
         : 'standard',
     showDebugNotesInTimeline: Boolean(parsed.showDebugNotesInTimeline),
+    showRawConversationTools: Boolean(parsed.showRawConversationTools),
     verboseDiagnostics: Boolean(parsed.verboseDiagnostics),
     showResponseDurationAfterPrompt: Boolean(parsed.showResponseDurationAfterPrompt),
     editorWordWrap: typeof parsed.editorWordWrap === 'boolean' ? parsed.editorWordWrap : true,
@@ -882,6 +868,62 @@ export function clampFontScale(value: unknown, fallback = 1) {
 
 export function parseInteractionMode(value: unknown): AgentInteractionMode {
   return value === 'plan' || value === 'debug' || value === 'ask' ? value : 'agent'
+}
+
+function parseInteractionModeToken(value: string): AgentInteractionMode | null {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'agent' || normalized === 'default') return 'agent'
+  if (normalized === 'plan' || normalized === 'planner' || normalized === 'planning') return 'plan'
+  if (normalized === 'ask' || normalized === 'question' || normalized === 'questions' || normalized === 'read-only') return 'ask'
+  if (normalized === 'debug') return 'debug'
+  return null
+}
+
+function extractInteractionModeFromText(content: string): AgentInteractionMode | null {
+  const text = String(content ?? '').trim()
+  if (!text) return null
+  const direct = parseInteractionModeToken(text)
+  if (direct) return direct
+
+  const switched = text.match(/\bmode\s+switched\s+to\s+(agent|plan|ask|debug|default)\b/i)
+  if (switched?.[1]) return parseInteractionModeToken(switched[1])
+
+  const switching = text.match(/\bswitch(?:ing)?\s+to\s+(agent|plan|ask|debug|default)\s+mode\b/i)
+  if (switching?.[1]) return parseInteractionModeToken(switching[1])
+
+  return null
+}
+
+export function extractInteractionModeChange(input: unknown): AgentInteractionMode | null {
+  if (typeof input === 'string') return extractInteractionModeFromText(input)
+  if (!input || typeof input !== 'object') return null
+
+  const record = input as Record<string, unknown>
+  const directCandidates = [
+    record.interactionMode,
+    record.interaction_mode,
+    record.mode,
+    record.collaboration_mode_kind,
+    record.collaborationModeKind,
+    (record.collaboration_mode as Record<string, unknown> | undefined)?.mode,
+    (record.collaborationMode as Record<string, unknown> | undefined)?.mode,
+  ]
+  for (const candidate of directCandidates) {
+    if (typeof candidate !== 'string') continue
+    const parsed = parseInteractionModeToken(candidate)
+    if (parsed) return parsed
+    const fromText = extractInteractionModeFromText(candidate)
+    if (fromText) return fromText
+  }
+
+  const nestedCandidates = [record.params, record.payload, record.data, record.detail, record.details]
+  for (const candidate of nestedCandidates) {
+    const parsed = extractInteractionModeChange(candidate)
+    if (parsed) return parsed
+  }
+
+  return null
 }
 
 export function normalizeAllowedCommandPrefixes(raw: unknown): string[] {

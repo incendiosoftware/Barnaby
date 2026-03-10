@@ -46,6 +46,8 @@ export interface ChatTimelineProps {
   showOperationTrace: boolean
   showReasoningUpdates: boolean
   showActivityUpdates: boolean
+  activityUpdateColor: string
+  reasoningUpdateColor: string
   timelineOpenByUnitId: Record<string, boolean>
   setTimelineOpenByUnitId: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
   codeBlockOpenById: Record<string, boolean>
@@ -106,7 +108,10 @@ export function ChatTimeline(props: ChatTimelineProps) {
       })}
       {queueCount > 0 && (
         <div className="mt-4 pt-3 border-t border-amber-200/60 dark:border-amber-800/50 space-y-2">
-          <div className="text-[11px] font-medium text-amber-700 dark:text-amber-300">
+          <div
+            className="text-[11px] font-medium"
+            style={{ color: props.activityUpdateColor }}
+          >
             {queueCount} queued - will run after current turn
           </div>
           {pendingInputs.map((text, i) => {

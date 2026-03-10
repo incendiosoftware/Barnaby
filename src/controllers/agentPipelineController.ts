@@ -20,6 +20,7 @@ import {
   TURN_START_TIMEOUT_MS,
 } from '../constants'
 import {
+  classifyTerminalProviderFailure,
   newId,
   panelMessagesToInitialHistory,
   parseInteractionMode,
@@ -147,6 +148,7 @@ export function createAgentPipelineController(ctx: AgentPipelineContext): AgentP
       ctx.activePromptStartedAtRef.current.delete(winId)
       ctx.clearPanelTurnComplete(winId)
       const errMsg = ctx.formatConnectionError(e, provider)
+      const terminalFailure = classifyTerminalProviderFailure(errMsg) ?? classifyTerminalProviderFailure(String(e?.message ?? e ?? ''))
       ctx.appendPanelDebug(winId, 'error', errMsg)
       ctx.setPanels((prev) =>
         prev.map((x) =>
@@ -154,9 +156,13 @@ export function createAgentPipelineController(ctx: AgentPipelineContext): AgentP
             ? x
             : {
                 ...x,
+                historyLocked: terminalFailure ? true : x.historyLocked,
                 streaming: false,
                 connected: false,
-                status: 'Disconnected',
+                status: terminalFailure ? 'Session expired' : 'Disconnected',
+                input: terminalFailure ? '' : x.input,
+                attachments: terminalFailure ? [] : x.attachments,
+                pendingInputs: terminalFailure ? [] : x.pendingInputs,
                 messages: [...x.messages, { id: newId(), role: 'system' as const, content: errMsg, format: 'text' as const, createdAt: Date.now() }],
               },
         ),

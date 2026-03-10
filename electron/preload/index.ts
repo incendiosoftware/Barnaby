@@ -237,11 +237,8 @@ const api = {
   openPluginsFolder() {
     return ipcRenderer.invoke('agentorchestrator:openPluginsFolder') as Promise<{ ok: boolean; error?: string }>
   },
-  installOrchestratorPlugin() {
-    return ipcRenderer.invoke('agentorchestrator:installOrchestratorPlugin') as Promise<{ ok: boolean; error?: string }>
-  },
-  uninstallOrchestratorPlugin() {
-    return ipcRenderer.invoke('agentorchestrator:uninstallOrchestratorPlugin') as Promise<{ ok: boolean; error?: string }>
+  reloadLocalPlugins() {
+    return ipcRenderer.invoke('agentorchestrator:reloadLocalPlugins') as Promise<{ ok: boolean; error?: string }>
   },
   syncOrchestratorSettings(settings: { orchestratorModel?: string; workerProvider?: string; workerModel?: string; maxParallelPanels?: number; maxTaskAttempts?: number }) {
     return ipcRenderer.invoke('agentorchestrator:syncOrchestratorSettings', settings)
@@ -492,6 +489,24 @@ const api = {
     return ipcRenderer.invoke('agentorchestrator:getLoadedPlugins') as Promise<
       Array<{ pluginId: string; displayName: string; version: string; active: boolean; licensed: boolean }>
     >
+  },
+  startOrchestratorComparativeReview(goal: string) {
+    return ipcRenderer.invoke('agentorchestrator:startOrchestratorComparativeReview', goal) as Promise<{ ok: boolean; runId?: string; error?: string }>
+  },
+  startOrchestratorGoalRun(goal: string) {
+    return ipcRenderer.invoke('agentorchestrator:startOrchestratorGoalRun', goal) as Promise<{ ok: boolean; runId?: string; error?: string }>
+  },
+  pauseOrchestratorRun() {
+    return ipcRenderer.invoke('agentorchestrator:pauseOrchestratorRun') as Promise<{ ok: boolean; error?: string }>
+  },
+  cancelOrchestratorRun() {
+    return ipcRenderer.invoke('agentorchestrator:cancelOrchestratorRun') as Promise<{ ok: boolean; error?: string }>
+  },
+  getOrchestratorState() {
+    return ipcRenderer.invoke('agentorchestrator:getOrchestratorState') as Promise<unknown>
+  },
+  browseMarkdownFile() {
+    return ipcRenderer.invoke('agentorchestrator:browseMarkdownFile') as Promise<{ filePath: string; content: string } | null>
   },
   onPluginsLoaded(cb: () => void) {
     const listener = () => cb()

@@ -38,7 +38,7 @@ export interface CodeWindowTileProps {
   onSaveAs: (id: string) => void
   onCloseEditor: (id: string) => void
   onEditorContentChange: (id: string, value: string) => void
-  onMouseDownCapture: (e: React.MouseEvent) => void
+  onMouseDown: (e: React.MouseEvent<HTMLDivElement>) => void
   draggingPanelId: string | null
   dragOverTarget: string | { zoneId: string; hint: string } | null
 }
@@ -68,48 +68,116 @@ export function CodeWindowTile({
   onSaveAs,
   onCloseEditor,
   onEditorContentChange,
-  onMouseDownCapture,
+  onMouseDown,
   draggingPanelId,
   dragOverTarget,
 }: CodeWindowTileProps) {
+  const panelSurfaceStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-bg-surface)',
+    borderColor: 'var(--theme-border-default)',
+    color: 'var(--theme-text-primary)',
+  }
+  const toolbarSurfaceStyle: React.CSSProperties = {
+    backgroundColor: 'color-mix(in srgb, var(--theme-bg-surface) 88%, var(--theme-bg-base) 12%)',
+    borderColor: 'var(--theme-border-default)',
+  }
+  const contentSurfaceStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-bg-surface)',
+  }
+  const statusTextStyle: React.CSSProperties = {
+    color: 'var(--theme-text-secondary)',
+  }
+  const subtleTextStyle: React.CSSProperties = {
+    color: 'var(--theme-text-tertiary)',
+  }
+  const markdownPreviewStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-bg-surface)',
+    color: 'var(--theme-text-primary)',
+  }
+  const markdownChromeStyle: React.CSSProperties = {
+    backgroundColor: 'color-mix(in srgb, var(--theme-bg-surface) 84%, var(--theme-bg-base) 16%)',
+    borderColor: 'var(--theme-border-default)',
+  }
   const activePanel =
     (focusedEditorId ? editorPanels.find((p) => p.id === focusedEditorId) : null) ??
     editorPanels[0] ??
     null
   const hasTabs = editorPanels.length > 0
   const isMarkdown = activePanel?.relativePath.toLowerCase().endsWith('.md') || activePanel?.relativePath.toLowerCase().endsWith('.markdown')
+  const activePanelReadOnly = Boolean(activePanel?.diagnosticsReadOnly)
   const showingSettingsPanel = codeWindowTab === 'settings'
+  const selectedTabButtonStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-accent-tint)',
+    color: 'var(--theme-accent-muted)',
+  }
+  const idleTabButtonStyle: React.CSSProperties = {
+    color: 'var(--theme-text-secondary)',
+  }
+  const toolbarButtonStyle: React.CSSProperties = {
+    color: 'var(--theme-text-secondary)',
+  }
+  const toolbarButtonActiveStyle: React.CSSProperties = {
+    backgroundColor: 'color-mix(in srgb, var(--theme-bg-elevated) 78%, var(--theme-bg-surface) 22%)',
+    color: 'var(--theme-text-primary)',
+  }
+  const editModeButtonStyle: React.CSSProperties = activePanel?.editMode
+    ? {
+      borderColor: 'var(--theme-accent-strong)',
+      backgroundColor: 'var(--theme-accent-tint)',
+      color: 'var(--theme-accent-muted)',
+    }
+    : {
+      borderColor: 'var(--theme-border-default)',
+      backgroundColor: 'color-mix(in srgb, var(--theme-bg-surface) 94%, var(--theme-bg-base) 6%)',
+      color: 'var(--theme-text-secondary)',
+    }
 
   const markdownComponents: import('react-markdown').Components = {
-    h1: ({ children }) => <h1 className="text-2xl font-bold mt-6 mb-4 pb-2 border-b border-neutral-200 dark:border-neutral-800">{children}</h1>,
-    h2: ({ children }) => <h2 className="text-xl font-bold mt-5 mb-3 pb-1 border-b border-neutral-200 dark:border-neutral-800">{children}</h2>,
+    h1: ({ children }) => <h1 className="text-2xl font-bold mt-6 mb-4 pb-2 border-b" style={{ borderColor: 'var(--theme-border-default)' }}>{children}</h1>,
+    h2: ({ children }) => <h2 className="text-xl font-bold mt-5 mb-3 pb-1 border-b" style={{ borderColor: 'var(--theme-border-default)' }}>{children}</h2>,
     h3: ({ children }) => <h3 className="text-lg font-bold mt-4 mb-2">{children}</h3>,
     p: ({ children }) => <p className="mb-4 leading-relaxed">{children}</p>,
     ul: ({ children }) => <ul className="list-disc pl-6 mb-4 space-y-1">{children}</ul>,
     ol: ({ children }) => <ol className="list-decimal pl-6 mb-4 space-y-1">{children}</ol>,
     li: ({ children }) => <li>{children}</li>,
-    blockquote: ({ children }) => <blockquote className="border-l-4 border-neutral-300 dark:border-neutral-700 pl-4 py-1 mb-4 italic text-neutral-600 dark:text-neutral-400">{children}</blockquote>,
-    pre: ({ children }) => <pre className="bg-neutral-100 dark:bg-black/50 p-4 rounded-lg overflow-x-auto mb-4 border border-neutral-200 dark:border-neutral-800 text-[13px]">{children}</pre>,
+    blockquote: ({ children }) => (
+      <blockquote className="border-l-4 pl-4 py-1 mb-4 italic" style={{ borderColor: 'var(--theme-border-strong)', color: 'var(--theme-text-secondary)' }}>
+        {children}
+      </blockquote>
+    ),
+    pre: ({ children }) => <pre className="p-4 rounded-lg overflow-x-auto mb-4 border text-[13px]" style={markdownChromeStyle}>{children}</pre>,
     code: (props: any) => props.inline
-      ? <code className="bg-neutral-100 dark:bg-black/50 px-1.5 py-0.5 rounded text-[0.9em] border border-neutral-200/50 dark:border-neutral-800/50">{props.children}</code>
+      ? <code className="px-1.5 py-0.5 rounded text-[0.9em] border" style={markdownChromeStyle}>{props.children}</code>
       : <code className="font-mono text-inherit">{props.children}</code>,
-    a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">{children}</a>,
+    a: ({ href, children }) => (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="hover:underline"
+        style={{ color: 'var(--theme-accent-strong)' }}
+      >
+        {children}
+      </a>
+    ),
     table: ({ children }) => <div className="overflow-x-auto mb-4"><table className="w-full text-sm text-left border-collapse">{children}</table></div>,
-    th: ({ children }) => <th className="px-4 py-2 bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 font-medium">{children}</th>,
-    td: ({ children }) => <td className="px-4 py-2 border border-neutral-200 dark:border-neutral-800">{children}</td>,
+    th: ({ children }) => <th className="px-4 py-2 border font-medium" style={markdownChromeStyle}>{children}</th>,
+    td: ({ children }) => <td className="px-4 py-2 border" style={{ borderColor: 'var(--theme-border-default)' }}>{children}</td>,
   }
 
   return (
     <div
-      className="relative h-full min-h-0 min-w-0 flex flex-col border border-neutral-200/80 dark:border-neutral-800 rounded-lg overflow-hidden bg-neutral-50 dark:bg-neutral-900 font-editor"
-      onMouseDownCapture={onMouseDownCapture}
+      className="relative h-full min-h-0 min-w-0 flex flex-col border rounded-lg overflow-hidden font-editor"
+      style={panelSurfaceStyle}
+      onMouseDown={onMouseDown}
       onDragOver={onDragOver}
       onDrop={onDrop}
       onWheel={onZoomWheel}
     >
       <div
         data-code-window-dock-tab-bar="true"
-        className="px-2.5 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-1.5 bg-neutral-100 dark:bg-neutral-900 shrink-0 select-none"
+        className="px-2.5 py-2 border-b flex items-center gap-1.5 shrink-0 select-none"
+        style={toolbarSurfaceStyle}
         draggable={showWorkspaceWindow}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
@@ -121,10 +189,8 @@ export function CodeWindowTile({
             type="button"
             title="Code"
             aria-label="Code"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium transition-colors focus:outline-none ${codeWindowTab === 'code'
-              ? 'bg-neutral-200 text-blue-800 dark:bg-neutral-700 dark:text-blue-100'
-              : 'bg-transparent hover:bg-neutral-200 text-neutral-600 dark:hover:bg-neutral-700 dark:text-neutral-300'
-              }`}
+            className="h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium transition-colors focus:outline-none"
+            style={codeWindowTab === 'code' ? selectedTabButtonStyle : idleTabButtonStyle}
             onClick={() => onCodeWindowTabChange('code')}
           >
             <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -137,10 +203,8 @@ export function CodeWindowTile({
             type="button"
             title="Settings"
             aria-label="Settings"
-            className={`h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium transition-colors focus:outline-none ${codeWindowTab === 'settings'
-              ? 'bg-neutral-200 text-blue-800 dark:bg-neutral-700 dark:text-blue-100'
-              : 'bg-transparent hover:bg-neutral-200 text-neutral-600 dark:hover:bg-neutral-700 dark:text-neutral-300'
-              }`}
+            className="h-8 w-8 inline-flex items-center justify-center rounded-md border-0 text-xs font-medium transition-colors focus:outline-none"
+            style={codeWindowTab === 'settings' ? selectedTabButtonStyle : idleTabButtonStyle}
             onClick={() => onCodeWindowTabChange('settings')}
           >
             <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -153,7 +217,8 @@ export function CodeWindowTile({
           type="button"
           title={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
           aria-label={`Move dock to ${workspaceDockSide === 'right' ? 'left' : 'right'} side`}
-          className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-xs font-medium text-neutral-600 transition-colors focus:outline-none hover:bg-neutral-200/80 active:bg-neutral-300/80 dark:text-neutral-300 dark:hover:bg-neutral-700/80 dark:active:bg-neutral-600/80"
+          className="ml-auto h-8 w-8 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-xs font-medium transition-colors focus:outline-none"
+          style={toolbarButtonStyle}
           onClick={onDockSideToggle}
         >
           <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -167,7 +232,8 @@ export function CodeWindowTile({
           type="button"
           title={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
           aria-label={showingSettingsPanel ? 'Close settings window' : 'Close code window'}
-          className="h-9 w-9 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-xs font-medium text-neutral-600 transition-colors focus:outline-none hover:bg-transparent active:bg-transparent dark:text-neutral-300 dark:hover:bg-transparent dark:active:bg-transparent"
+          className="h-9 w-9 inline-flex items-center justify-center rounded-md border-0 bg-transparent text-xs font-medium transition-colors focus:outline-none"
+          style={toolbarButtonStyle}
           onClick={onCloseCodeWindow}
         >
           <svg width="16" height="16" viewBox="0 0 10 10" fill="none" aria-hidden="true">
@@ -180,8 +246,8 @@ export function CodeWindowTile({
         <div className="absolute inset-0 rounded-lg pointer-events-none z-10" style={DROP_ZONE_OVERLAY_STYLE} />
       )}
       {!showingSettingsPanel && hasTabs && activePanel && (
-        <div className="px-2 py-2 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center gap-2 flex-wrap bg-neutral-100 dark:bg-neutral-900 shrink-0">
-          <span className="text-xs text-neutral-600 dark:text-neutral-400">Current file:</span>
+        <div className="px-2 py-2 border-b flex items-center gap-2 flex-wrap shrink-0" style={toolbarSurfaceStyle}>
+          <span className="text-xs" style={subtleTextStyle}>Current file:</span>
           <select
             className={`flex-1 min-w-0 max-w-[240px] text-[11px] font-mono ${UI_SELECT_CLASS} dark:border-neutral-700/80 dark:bg-neutral-800/80 dark:text-neutral-200`}
             value={focusedEditorId ?? ''}
@@ -199,19 +265,17 @@ export function CodeWindowTile({
           </select>
           <button
             type="button"
-            className={`px-2 py-1 text-xs rounded border ${activePanel.editMode
-              ? 'border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-100'
-              : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700/80 dark:bg-transparent dark:text-neutral-300 dark:hover:bg-neutral-800/80 dark:hover:border-neutral-600'
-              }`}
+            className="px-2 py-1 text-xs rounded border transition-colors"
+            style={editModeButtonStyle}
             onClick={() => {
               const id = focusedEditorId ?? editorPanels[0]?.id ?? null
               if (!id) return
               const panel = editorPanels.find((p) => p.id === id)
-              const nextMode = !(panel?.editMode ?? false)
+              if (panel?.diagnosticsReadOnly) return
               onEditModeToggle(id)
               onFocusedEditorChange(id)
             }}
-            disabled={activePanel.loading || activePanel.binary}
+            disabled={activePanel.loading || activePanel.binary || activePanelReadOnly}
             title={activePanel.editMode ? 'Switch to view-only' : 'Enable editing'}
           >
             {activePanel.editMode ? 'View' : 'Edit'}
@@ -219,6 +283,7 @@ export function CodeWindowTile({
           <button
             type="button"
             className={`${CODE_WINDOW_TOOLBAR_BUTTON} ${applicationSettings.editorWordWrap ? 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700/80 dark:text-neutral-100' : ''}`}
+            style={applicationSettings.editorWordWrap ? toolbarButtonActiveStyle : toolbarButtonStyle}
             onClick={onWordWrapToggle}
             aria-label={applicationSettings.editorWordWrap ? 'Word wrap on' : 'Word wrap off'}
             title={applicationSettings.editorWordWrap ? 'Word wrap on (click to turn off)' : 'Word wrap off (click to turn on)'}
@@ -232,7 +297,8 @@ export function CodeWindowTile({
           <button
             type="button"
             className={CODE_WINDOW_TOOLBAR_BUTTON}
-            disabled={activePanel.loading || activePanel.saving || activePanel.binary || !activePanel.dirty}
+            style={toolbarButtonStyle}
+            disabled={activePanel.loading || activePanel.saving || activePanel.binary || activePanelReadOnly || !activePanel.dirty}
             onClick={() => {
               const id = focusedEditorId ?? editorPanels[0]?.id ?? null
               if (!id) return
@@ -251,7 +317,8 @@ export function CodeWindowTile({
           <button
             type="button"
             className={CODE_WINDOW_TOOLBAR_BUTTON}
-            disabled={activePanel.loading || activePanel.saving || activePanel.binary}
+            style={toolbarButtonStyle}
+            disabled={activePanel.loading || activePanel.saving || activePanel.binary || activePanelReadOnly}
             onClick={() => {
               const id = focusedEditorId ?? editorPanels[0]?.id ?? null
               if (!id) return
@@ -271,6 +338,7 @@ export function CodeWindowTile({
           <button
             type="button"
             className={CODE_WINDOW_TOOLBAR_BUTTON_SM}
+            style={toolbarButtonStyle}
             onClick={() => {
               const id = focusedEditorId ?? editorPanels[0]?.id ?? null
               if (!id) return
@@ -286,23 +354,23 @@ export function CodeWindowTile({
           </button>
         </div>
       )}
-      <div className="flex-1 min-h-0 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
+      <div className="flex-1 min-h-0 overflow-hidden" style={contentSurfaceStyle}>
         {showingSettingsPanel && (
           <div ref={settingsHostRef} className="h-full min-h-0" />
         )}
         {!showingSettingsPanel && !hasTabs && (
-          <div className="h-full flex items-center justify-center text-sm text-neutral-500 dark:text-neutral-400 p-4 text-center">
+          <div className="h-full flex items-center justify-center text-sm p-4 text-center" style={subtleTextStyle}>
             Double-click a file in the workspace to open it.
           </div>
         )}
         {!showingSettingsPanel && hasTabs && activePanel && activePanel.loading && (
-          <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">Loading file...</div>
+          <div className="p-4 text-sm" style={statusTextStyle}>Loading file...</div>
         )}
         {!showingSettingsPanel && hasTabs && activePanel && !activePanel.loading && activePanel.error && (
           <div className="p-4 text-sm text-red-600 dark:text-red-400">{activePanel.error}</div>
         )}
         {!showingSettingsPanel && hasTabs && activePanel && !activePanel.loading && !activePanel.error && activePanel.binary && (
-          <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400">
+          <div className="p-4 text-sm" style={statusTextStyle}>
             Binary files are not editable in this editor.
           </div>
         )}
@@ -310,8 +378,8 @@ export function CodeWindowTile({
           <div className="h-full min-h-0 flex flex-col overflow-hidden">
             {!activePanel.editMode && isMarkdown ? (
               <div
-                className="flex-1 overflow-auto p-6 md:p-8 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100"
-                style={{ fontSize: `${14 * activePanel.fontScale}px` }}
+                className="flex-1 overflow-auto p-6 md:p-8"
+                style={{ ...markdownPreviewStyle, fontSize: `${14 * activePanel.fontScale}px` }}
               >
                 <div className="max-w-4xl mx-auto">
                   <ReactMarkdown
@@ -340,7 +408,10 @@ export function CodeWindowTile({
         )}
       </div>
       {!showingSettingsPanel && hasTabs && activePanel && (
-        <div className="px-3 py-1.5 border-t border-neutral-200 dark:border-neutral-800 text-[11px] text-neutral-500 dark:text-neutral-400 flex items-center justify-between shrink-0">
+        <div
+          className="px-3 py-1.5 border-t text-[11px] flex items-center justify-between shrink-0"
+          style={{ ...toolbarSurfaceStyle, ...subtleTextStyle }}
+        >
           <span>{Math.round(activePanel.size / 1024)} KB</span>
           <span>
             {activePanel.saving

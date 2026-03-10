@@ -93,8 +93,25 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
     openrouter: { label: 'OpenRouter', desc: 'API' },
   }
 
+  const headerStyle: React.CSSProperties = {
+    borderColor: 'var(--theme-border-default)',
+    backgroundColor: 'var(--theme-bg-surface)',
+    color: 'var(--theme-text-primary)',
+  }
+  const separatorStyle: React.CSSProperties = {
+    backgroundColor: 'var(--theme-border-default)',
+  }
+  const subtleLabelStyle: React.CSSProperties = {
+    color: 'var(--theme-text-secondary)',
+  }
+  const dropdownStyle: React.CSSProperties = {
+    borderColor: 'var(--theme-border-default)',
+    backgroundColor: 'color-mix(in srgb, var(--theme-bg-surface) 94%, var(--theme-bg-base) 6%)',
+    color: 'var(--theme-text-primary)',
+  }
+
   return (
-    <div data-app-header-bar="true" className="shrink-0 border-b border-neutral-200/80 dark:border-neutral-800 px-4 py-3 bg-white dark:bg-neutral-950">
+    <div data-app-header-bar="true" className="shrink-0 border-b px-4 py-3" style={headerStyle}>
       <div className="flex flex-wrap items-center justify-between gap-2.5 text-xs min-w-0">
         <div className="flex items-center gap-1.5 min-w-0">
           <div className="flex items-center gap-0.5 shrink-0">
@@ -110,8 +127,8 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
             </button>
             {toolsDockButtonsOnLeft && rightDockToggleButton}
           </div>
-          <div className="mx-1.5 h-6 w-px bg-neutral-300/80 dark:bg-neutral-700/80" />
-          <span className="text-neutral-600 dark:text-neutral-300">Workspace</span>
+          <div className="mx-1.5 h-6 w-px" style={separatorStyle} />
+          <span style={subtleLabelStyle}>Workspace</span>
           <select
             className={`h-9 px-3 rounded-lg font-mono shadow-sm w-[34vw] max-w-[440px] min-w-[220px] ${UI_INPUT_CLASS}`}
             value={workspaceList.includes(workspaceRoot) ? workspaceRoot : workspaceList[0] ?? ''}
@@ -149,8 +166,8 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
               <circle cx="12" cy="12" r="1.2" fill="currentColor" />
             </svg>
           </button>
-          <div className="mx-2 h-6 w-px bg-neutral-300/80 dark:bg-neutral-700/80" />
-          <span className="text-neutral-600 dark:text-neutral-300">History</span>
+          <div className="mx-2 h-6 w-px" style={separatorStyle} />
+          <span style={subtleLabelStyle}>History</span>
           <div ref={historyDropdownRef} className="relative shrink-0">
             <button
               type="button"
@@ -163,17 +180,18 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
               </svg>
             </button>
             {historyDropdownOpen && (
-              <div className="absolute top-full left-0 right-0 mt-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg z-50 max-h-64 overflow-auto min-w-[270px]">
+              <div className="absolute top-full left-0 right-0 mt-1 rounded-lg border shadow-lg z-50 max-h-64 overflow-auto min-w-[270px]" style={dropdownStyle}>
                 {workspaceScopedHistory.length === 0 ? (
-                  <div className="px-3 py-2 text-sm text-neutral-500 dark:text-neutral-400">No conversations yet</div>
+                  <div className="px-3 py-2 text-sm" style={{ color: 'var(--theme-text-tertiary)' }}>No conversations yet</div>
                 ) : (
                   workspaceScopedHistory.map((entry) => (
                     <div
                       key={entry.id}
-                      className="flex items-center gap-1.5 group px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer text-sm"
+                      className="flex items-center gap-1.5 group px-3 py-1.5 cursor-pointer text-sm"
+                      style={{ color: 'var(--theme-text-primary)' }}
                       onClick={() => openChatFromHistory(entry.id)}
                     >
-                      <span className="flex-1 min-w-0 truncate text-neutral-800 dark:text-neutral-200">
+                      <span className="flex-1 min-w-0 truncate">
                         {formatHistoryOptionLabel(entry)}
                       </span>
                       <button

@@ -27,6 +27,7 @@ import { initializePluginHost, shutdownPluginHost, setPluginHostWindow, setWorks
 import { readOrchestratorSecrets, writeOrchestratorSecrets, writeOrchestratorSettings, type OrchestratorSettingsData } from './orchestratorStorage'
 import { validateLicenseKey } from './licenseKeys'
 import { McpServerManager, type McpServerConfig } from './mcpClient'
+import { truncateHistoryWithMeta, type HistoryMessage } from './historyTruncation'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
 const WORKSPACE_LOCK_DIRNAME = '.barnaby'
@@ -2114,12 +2115,6 @@ async function launchProviderUpgrade(config: ProviderConfigForAuth): Promise<{ s
   return { started: true, detail: `Ran ${config.id} CLI upgrade. Re-check connectivity.` }
 }
 
-const GEMINI_MODELS_PROMPT =
-  'Output a JSON array of model IDs you support. Use names like gemini-2.5-flash, gemini-2.5-pro, gemini-3-pro-preview, gemini-3.1-pro. Output only the JSON array, no markdown or other text.'
-
-const CLAUDE_MODELS_PROMPT =
-  'Output only a JSON array of model IDs you support. Use names like sonnet, opus, haiku, claude-sonnet-4, claude-opus-4. Output only the JSON array, no markdown or other text.'
-
 type ModelsByProvider = {
   codex: { id: string; displayName: string }[]
   claude: { id: string; displayName: string }[]
@@ -2357,38 +2352,109 @@ async function pingModelById(provider: string, modelId: string, cwd?: string): P
   return { ok: true, durationMs: 0 }
 }
 
-const CODEX_MODELS_PROMPT =
-  'Output only a JSON array of model IDs from the Codex CLI /model menu. Example: ["gpt-5.3-codex","gpt-5.2-codex"]. No other text.'
+const FALLBACK_CLAUDE_MODELS: Array<{ id: string; displayName: string }> = [
+  { id: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+  { id: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6' },
+  { id: 'claude-haiku-4-5-20251001', displayName: 'Claude Haiku 4.5' },
+  { id: 'claude-sonnet-4-5-20250929', displayName: 'Claude Sonnet 4.5' },
+  { id: 'claude-opus-4-5-20251101', displayName: 'Claude Opus 4.5' },
+  { id: 'claude-opus-4-1-20250805', displayName: 'Claude Opus 4.1' },
+  { id: 'claude-sonnet-4-20250514', displayName: 'Claude Sonnet 4' },
+  { id: 'claude-opus-4-20250514', displayName: 'Claude Opus 4' },
+  { id: 'opus', displayName: 'Claude Opus (alias)' },
+  { id: 'sonnet', displayName: 'Claude Sonnet (alias)' },
+  { id: 'haiku', displayName: 'Claude Haiku (alias)' },
+]
+
+const FALLBACK_GEMINI_MODELS: Array<{ id: string; displayName: string }> = [
+  { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
+  { id: 'gemini-2.5-flash-lite', displayName: 'Gemini 2.5 Flash Lite' },
+  { id: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
+  { id: 'gemini-3-pro-preview', displayName: 'Gemini 3 Pro (Preview)' },
+  { id: 'gemini-3-flash-preview', displayName: 'Gemini 3 Flash (Preview)' },
+]
+
+function dedupeModels(models: Array<{ id: string; displayName: string }>): Array<{ id: string; displayName: string }> {
+  const seen = new Set<string>()
+  const out: Array<{ id: string; displayName: string }> = []
+  for (const model of models) {
+    const id = String(model.id ?? '').trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push({
+      id,
+      displayName: String(model.displayName ?? '').trim() || id,
+    })
+  }
+  return out
+}
+
+function getProviderApiKeyOrEnv(providerId: string, envVars: string[]): string {
+  const fromSecrets = getProviderApiKey(providerId)
+  if (fromSecrets) return fromSecrets
+  for (const envVar of envVars) {
+    const v = (process.env[envVar] ?? '').trim()
+    if (v) return v
+  }
+  return ''
+}
+
+function readCodexModelsFromCache(): Array<{ id: string; displayName: string }> {
+  try {
+    const cachePath = path.join(os.homedir(), '.codex', 'models_cache.json')
+    if (!fs.existsSync(cachePath)) return []
+    const raw = fs.readFileSync(cachePath, 'utf8')
+    const parsed = JSON.parse(raw) as {
+      models?: Array<{ slug?: string; display_name?: string; visibility?: string }>
+    }
+    const list = Array.isArray(parsed?.models) ? parsed.models : []
+    return dedupeModels(
+      list
+        .map((entry) => ({
+          id: String(entry?.slug ?? '').trim(),
+          displayName: String(entry?.display_name ?? '').trim(),
+          visibility: String(entry?.visibility ?? '').trim(),
+        }))
+        .filter((entry) => entry.id.length > 0)
+        .filter((entry) => !entry.visibility || entry.visibility === 'list')
+        .map(({ id, displayName }) => ({ id, displayName: displayName || id })),
+    )
+  } catch {
+    return []
+  }
+}
 
 async function queryCodexModelsViaExec(): Promise<{ id: string; displayName: string }[]> {
-  return [
-    { id: "gpt-5.3-codex", displayName: "GPT 5.3 (Codex)" },
-    { id: "gpt-5.3-codex-spark", displayName: "GPT 5.3 Codex Spark" },
-    { id: "gpt-5.2-codex", displayName: "GPT 5.2 (Codex)" },
-    { id: "gpt-5.1-codex", displayName: "GPT 5.1 (Codex)" },
-    { id: "gpt-4o", displayName: "GPT 4o" },
-    { id: "gpt-4o-mini", displayName: "GPT 4o Mini" },
-    { id: "gpt-4-turbo", displayName: "GPT 4 Turbo" }
-  ]
+  return readCodexModelsFromCache()
 }
 
 async function queryClaudeModelsViaExec(): Promise<{ id: string; displayName: string }[]> {
-  return [
-    // Latest models (per Anthropic API docs)
-    { id: "claude-opus-4-6", displayName: "Claude Opus 4.6" },
-    { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6" },
-    { id: "claude-haiku-4-5-20251001", displayName: "Claude Haiku 4.5" },
-    // Legacy models
-    { id: "claude-sonnet-4-5-20250929", displayName: "Claude Sonnet 4.5" },
-    { id: "claude-opus-4-5-20251101", displayName: "Claude Opus 4.5" },
-    { id: "claude-opus-4-1-20250805", displayName: "Claude Opus 4.1" },
-    { id: "claude-sonnet-4-20250514", displayName: "Claude Sonnet 4" },
-    { id: "claude-opus-4-20250514", displayName: "Claude Opus 4" },
-    // Aliases for backwards compatibility
-    { id: "opus", displayName: "Claude Opus (alias)" },
-    { id: "sonnet", displayName: "Claude Sonnet (alias)" },
-    { id: "haiku", displayName: "Claude Haiku (alias)" }
-  ]
+  const apiKey = getProviderApiKeyOrEnv('claude', ['ANTHROPIC_API_KEY'])
+  if (!apiKey) return FALLBACK_CLAUDE_MODELS
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/models', {
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) return FALLBACK_CLAUDE_MODELS
+    const data = (await res.json()) as { data?: Array<{ id?: string; display_name?: string }> }
+    const fromApi = Array.isArray(data?.data)
+      ? data.data
+        .map((entry) => ({
+          id: String(entry?.id ?? '').trim(),
+          displayName: String(entry?.display_name ?? '').trim(),
+        }))
+        .filter((entry) => entry.id.startsWith('claude-'))
+        .map((entry) => ({ id: entry.id, displayName: entry.displayName || entry.id }))
+      : []
+    if (fromApi.length === 0) return FALLBACK_CLAUDE_MODELS
+    return dedupeModels([...fromApi, ...FALLBACK_CLAUDE_MODELS.filter((m) => ['opus', 'sonnet', 'haiku'].includes(m.id))])
+  } catch {
+    return FALLBACK_CLAUDE_MODELS
+  }
 }
 
 async function getAvailableModels(): Promise<ModelsByProvider> {
@@ -2445,13 +2511,42 @@ async function fetchOpenRouterModels(): Promise<{ id: string; displayName: strin
 }
 
 async function getGeminiAvailableModels(): Promise<{ id: string; displayName: string }[]> {
-  return [
-    { id: "gemini-2.5-flash", displayName: "Gemini 2.5 Flash" },
-    { id: "gemini-2.5-flash-lite", displayName: "Gemini 2.5 Flash Lite" },
-    { id: "gemini-2.5-pro", displayName: "Gemini 2.5 Pro" },
-    { id: "gemini-3-pro-preview", displayName: "Gemini 3 Pro (Preview)" },
-    { id: "gemini-3-flash-preview", displayName: "Gemini 3 Flash (Preview)" }
-  ]
+  const apiKey = getProviderApiKeyOrEnv('gemini', ['GEMINI_API_KEY', 'GOOGLE_API_KEY'])
+  if (apiKey) {
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`, {
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (res.ok) {
+        const data = (await res.json()) as { models?: Array<{ name?: string; displayName?: string; supportedGenerationMethods?: string[] }> }
+        const fromApi = Array.isArray(data?.models)
+          ? data.models
+            .map((m) => {
+              const name = String(m?.name ?? '').trim()
+              const id = name.startsWith('models/') ? name.slice('models/'.length) : name
+              return {
+                id,
+                displayName: String(m?.displayName ?? '').trim() || id,
+                supportsGenerate: Array.isArray(m?.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'),
+              }
+            })
+            .filter((m) => m.id.startsWith('gemini-') && m.supportsGenerate)
+            .map(({ id, displayName }) => ({ id, displayName }))
+          : []
+        if (fromApi.length > 0) return dedupeModels(fromApi)
+      }
+    } catch { /* fall through */ }
+  }
+
+  try {
+    const result = await runCliCommand('gemini', ['list', 'models'], CLI_MODELS_QUERY_TIMEOUT_MS)
+    const out = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
+    const matches = out.match(/\bgemini-[a-z0-9][a-z0-9.-]*/gi) ?? []
+    const fromCli = dedupeModels(matches.map((id) => ({ id: id.toLowerCase(), displayName: id.toLowerCase() })))
+    if (fromCli.length > 0) return fromCli
+  } catch { /* fall through */ }
+
+  return FALLBACK_GEMINI_MODELS
 }
 
 function buildCommitMessageFromEntries(entries: GitStatusEntry[]): { subject: string; body: string } {
@@ -2789,6 +2884,7 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
       systemPrompt: options.systemPrompt,
       initialHistory: options.initialHistory,
       mcpServerManager,
+      toolRestrictions: options.toolRestrictions,
     }) as { threadId: string }
     agentClients.set(agentWindowId, client)
     agentClientCwds.set(agentWindowId, path.resolve(options.cwd || process.cwd()))
@@ -2817,6 +2913,7 @@ async function getOrCreateClient(agentWindowId: string, options: ConnectOptions)
         allowedCommandPrefixes: options.allowedCommandPrefixes,
         initialHistory: options.initialHistory,
         mcpServerManager,
+        toolRestrictions: options.toolRestrictions,
       }) as { threadId: string }
       agentClients.set(agentWindowId, client)
       agentClientCwds.set(agentWindowId, path.resolve(options.cwd || process.cwd()))
@@ -2910,6 +3007,9 @@ app.whenReady().then(async () => {
     return
   }
   pendingStartupWorkspaceRoot = readStartupWorkspaceRoot(process.argv)
+  if (pendingStartupWorkspaceRoot.trim()) {
+    currentWindowWorkspaceRoot = pendingStartupWorkspaceRoot
+  }
   registerRuntimeDiagnosticsLogging()
   appendRuntimeLog('app-start', { version: app.getVersion(), platform: process.platform, electron: process.versions.electron })
   migrateLegacyLocalStorageIfNeeded()
@@ -2917,7 +3017,13 @@ app.whenReady().then(async () => {
   if (win) {
     setPluginHostWindow(win)
     setWorkspaceRootGetter(() => {
+      if (currentWindowWorkspaceRoot.trim()) return currentWindowWorkspaceRoot
+      if (pendingStartupWorkspaceRoot.trim()) return pendingStartupWorkspaceRoot
+      const startupWorkspaceRoot = readStartupWorkspaceRoot(process.argv)
+      if (startupWorkspaceRoot.trim()) return startupWorkspaceRoot
       for (const [root] of ownedWorkspaceLocks) return root
+      const currentWorkingDirectory = process.cwd()
+      if (isDirectory(currentWorkingDirectory)) return currentWorkingDirectory
       return ''
     })
     initializePluginHost(app.getAppPath(), getAppStorageDirPath)
@@ -3030,14 +3136,23 @@ ipcMain.handle('agentorchestrator:sendMessage', async (_evt, agentWindowId: stri
   return {}
 })
 
+/** Phase 4: Structured history — limit context to last N messages and truncate long assistant replies. */
 function formatPriorMessagesForContext(messages: Array<{ role: string; content: string }>): string {
   if (!messages.length) return ''
-  const transcript = messages
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}:\n${(m.content ?? '').trim()}`)
-    .filter((s) => s.length > 0)
+  const history: HistoryMessage[] = messages
+    .filter((m): m is { role: 'user' | 'assistant'; content: string } =>
+      m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({ role: m.role as 'user' | 'assistant', text: (m.content ?? '').trim() }))
+    .filter((m) => m.text.length > 0)
+  const { history: truncated, droppedMessages } = truncateHistoryWithMeta(history, { maxMessages: 4 })
+  if (!truncated.length) return ''
+  const transcript = truncated
+    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}:\n${m.text}`)
     .join('\n\n')
-  return transcript ? `Previous conversation:\n\n${transcript}\n\nUser continues: ` : ''
+  const header = droppedMessages > 0
+    ? `Previous conversation (${droppedMessages} earlier messages omitted):\n\n`
+    : 'Previous conversation:\n\n'
+  return `${header}${transcript}\n\nUser continues: `
 }
 
 const CONCISE_RESPONSE_PREFIX =
@@ -3060,7 +3175,7 @@ ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: st
   const sendOptions = (interactionMode || gitStatus) ? { interactionMode, gitStatus } : undefined
   if (client instanceof CodexAppServerClient) {
     if (priorMessages.length > 0) {
-      const prefix = formatPriorMessagesForContext(priorMessages.slice(-24))
+      const prefix = formatPriorMessagesForContext(priorMessages)
       if (prefix) text = prefix + text
     }
     if (gitStatus) {
@@ -3153,6 +3268,7 @@ ipcMain.handle('agentorchestrator:rendererReady', async () => {
   maybeRevealMainWindow()
   if (pendingStartupWorkspaceRoot) {
     const target = pendingStartupWorkspaceRoot
+    currentWindowWorkspaceRoot = target
     pendingStartupWorkspaceRoot = ''
     setTimeout(() => {
       sendMenuAction('openWorkspace', { path: target })
@@ -3174,6 +3290,94 @@ ipcMain.handle('agentorchestrator:getLoadedPlugins', async () => {
     active: entry.active,
     licensed: typeof (entry.plugin as any).isLicensed === 'function' ? (entry.plugin as any).isLicensed() : true,
   }))
+})
+
+ipcMain.handle('agentorchestrator:startOrchestratorComparativeReview', async (_evt, goal: unknown) => {
+  const pluginEntry = getLoadedPlugins().get('orchestrator')
+  if (!pluginEntry?.active) {
+    return { ok: false, error: 'Orchestrator plugin is not active.' }
+  }
+  if (typeof goal !== 'string' || !goal.trim()) {
+    return { ok: false, error: 'Goal text is required.' }
+  }
+  const startRun = (pluginEntry.plugin as any).startComparativeReview
+  if (typeof startRun !== 'function') {
+    return { ok: false, error: 'Orchestrator plugin does not support comparative review yet.' }
+  }
+  try {
+    const result = await startRun(goal.trim())
+    return { ok: true, ...(result && typeof result === 'object' ? result : {}) }
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) }
+  }
+})
+
+ipcMain.handle('agentorchestrator:startOrchestratorGoalRun', async (_evt, goal: unknown) => {
+  const pluginEntry = getLoadedPlugins().get('orchestrator')
+  if (!pluginEntry?.active) {
+    return { ok: false, error: 'Orchestrator plugin is not active.' }
+  }
+  if (typeof goal !== 'string' || !goal.trim()) {
+    return { ok: false, error: 'Goal text is required.' }
+  }
+  const startRun = (pluginEntry.plugin as any).startGoalRun
+  if (typeof startRun !== 'function') {
+    return { ok: false, error: 'Orchestrator plugin does not support goal runs yet.' }
+  }
+  try {
+    const result = await startRun(goal.trim())
+    return { ok: true, ...(result && typeof result === 'object' ? result : {}) }
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) }
+  }
+})
+
+ipcMain.handle('agentorchestrator:pauseOrchestratorRun', async () => {
+  const pluginEntry = getLoadedPlugins().get('orchestrator')
+  if (!pluginEntry?.active) {
+    return { ok: false, error: 'Orchestrator plugin is not active.' }
+  }
+  const pauseRun = (pluginEntry.plugin as any).pauseCurrentRun
+  if (typeof pauseRun !== 'function') {
+    return { ok: false, error: 'Orchestrator plugin does not support pausing yet.' }
+  }
+  try {
+    const result = await pauseRun()
+    if (result && typeof result === 'object' && 'ok' in result) return result
+    return { ok: Boolean(result) }
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) }
+  }
+})
+
+ipcMain.handle('agentorchestrator:cancelOrchestratorRun', async () => {
+  const pluginEntry = getLoadedPlugins().get('orchestrator')
+  if (!pluginEntry?.active) {
+    return { ok: false, error: 'Orchestrator plugin is not active.' }
+  }
+  const cancelRun = (pluginEntry.plugin as any).cancelCurrentRun
+  if (typeof cancelRun !== 'function') {
+    return { ok: false, error: 'Orchestrator plugin does not support cancellation yet.' }
+  }
+  try {
+    const result = await cancelRun()
+    if (result && typeof result === 'object' && 'ok' in result) return result
+    return { ok: Boolean(result) }
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) }
+  }
+})
+
+ipcMain.handle('agentorchestrator:getOrchestratorState', async () => {
+  const pluginEntry = getLoadedPlugins().get('orchestrator')
+  if (!pluginEntry?.active) return null
+  const getState = (pluginEntry.plugin as any).getState
+  if (typeof getState !== 'function') return null
+  try {
+    return await getState()
+  } catch {
+    return null
+  }
 })
 
 ipcMain.handle('agentorchestrator:openRuntimeLog', async () => {
@@ -3291,34 +3495,8 @@ ipcMain.handle('agentorchestrator:openPluginsFolder', async () => {
   }
 })
 
-ipcMain.handle('agentorchestrator:installOrchestratorPlugin', async () => {
-  const pluginsDir = path.join(os.homedir(), '.barnaby', 'plugins')
+ipcMain.handle('agentorchestrator:reloadLocalPlugins', async () => {
   try {
-    if (!fs.existsSync(pluginsDir)) {
-      fs.mkdirSync(pluginsDir, { recursive: true })
-    }
-    const pkgPath = path.join(pluginsDir, 'package.json')
-    if (!fs.existsSync(pkgPath)) {
-      const { execSync } = await import('node:child_process')
-      execSync('npm init -y', { cwd: pluginsDir, stdio: 'pipe' })
-    }
-    const { execSync } = await import('node:child_process')
-    execSync('npm install "@barnaby.build/orchestrator"', { cwd: pluginsDir, stdio: 'pipe' })
-    await shutdownPluginHost()
-    await initializePluginHost(app.getAppPath(), getAppStorageDirPath)
-    win?.webContents.send('barnaby:plugin-host:plugins-loaded')
-    return { ok: true }
-  } catch (err) {
-    return { ok: false, error: errorMessage(err) }
-  }
-})
-
-ipcMain.handle('agentorchestrator:uninstallOrchestratorPlugin', async () => {
-  const pluginsDir = path.join(os.homedir(), '.barnaby', 'plugins')
-  try {
-    if (!fs.existsSync(pluginsDir)) return { ok: true }
-    const { execSync } = await import('node:child_process')
-    execSync('npm uninstall "@barnaby.build/orchestrator"', { cwd: pluginsDir, stdio: 'pipe' })
     await shutdownPluginHost()
     await initializePluginHost(app.getAppPath(), getAppStorageDirPath)
     win?.webContents.send('barnaby:plugin-host:plugins-loaded')
@@ -3342,6 +3520,19 @@ ipcMain.handle('agentorchestrator:disconnect', async (_evt, agentWindowId: strin
   agentClients.delete(agentWindowId)
   agentClientCwds.delete(agentWindowId)
   return {}
+})
+
+ipcMain.handle('agentorchestrator:browseMarkdownFile', async () => {
+  const parent = win ?? BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined
+  const result = await dialog.showOpenDialog(parent, {
+    properties: ['openFile'],
+    title: 'Import Markdown file',
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  const filePath = result.filePaths[0]
+  const content = await fs.promises.readFile(filePath, 'utf-8')
+  return { filePath, content }
 })
 
 ipcMain.handle('agentorchestrator:openFolderDialog', async () => {

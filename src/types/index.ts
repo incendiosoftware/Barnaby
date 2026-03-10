@@ -116,6 +116,10 @@ export type AgentPanelState = {
   input: string
   pendingInputs: string[]
   fontScale: number
+  /** Plugin-injected additional system prompt (overrides workspace-level when set). */
+  pluginSystemPrompt?: string
+  /** Plugin-injected tool restrictions (allowlist). */
+  pluginToolRestrictions?: string[]
   usage?: {
     kind?: string
     primary?: { usedPercent?: number; windowMinutes?: number; resetsAt?: number } | null
@@ -203,6 +207,7 @@ export type EditorPanelState = {
   editMode?: boolean
   diagnosticsTarget?: 'chatHistory' | 'appState' | 'runtimeLog'
   diagnosticsReadOnly?: boolean
+  virtualKind?: 'raw-conversation'
 }
 
 export type ExplorerPrefs = {
@@ -246,6 +251,7 @@ export type ApplicationSettings = {
   fontEditorSize: number
   responseStyle: 'concise' | 'standard' | 'detailed'
   showDebugNotesInTimeline: boolean
+  showRawConversationTools: boolean
   verboseDiagnostics: boolean
   showResponseDurationAfterPrompt: boolean
   editorWordWrap: boolean

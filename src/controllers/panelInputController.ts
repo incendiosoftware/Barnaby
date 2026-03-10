@@ -151,10 +151,12 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
           ? x
           : {
               ...x,
+              input: '',
               status: 'Draft edit cancelled.',
             },
       ),
     )
+    queueMicrotask(() => ctx.autoResizeTextarea(winId))
   }
 
   function recallLastUserMessage(winId: string) {

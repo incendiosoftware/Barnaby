@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom'
 import { SpinnerIcon } from '../icons'
 import {
   APP_SETTINGS_VIEWS,
+  CUSTOM_THEME_ID,
   UI_CLOSE_ICON_BUTTON_CLASS,
   UI_INPUT_CLASS,
   UI_SELECT_CLASS,
@@ -32,6 +33,7 @@ import type {
   ConnectivityMode,
   ConnectivityProvider,
   CustomProviderConfig,
+  AvailableCatalogModels,
   ModelCatalogRefreshStatus,
   ModelConfig,
   ModelInterface,
@@ -56,6 +58,31 @@ import {
   syncModelConfigWithCatalog,
 } from '../../utils/appCore'
 
+const THEME_FIELD_IMPACT_HINTS: Partial<Record<ThemeEditableField, string>> = {
+  accent: 'Primary accents, highlights, focus surfaces',
+  accentStrong: 'Stronger accent borders and emphasis',
+  accentMuted: 'Accent-colored text on tinted surfaces',
+  accentOnPrimary: 'Text/icons on accent-filled elements',
+  accentTint: 'Soft tinted backgrounds',
+  bgBase: 'Main app background',
+  bgSurface: 'Cards, panels, input surfaces',
+  bgElevated: 'Raised or hover surfaces',
+  textPrimary: 'Main text',
+  textSecondary: 'Secondary copy',
+  textTertiary: 'Muted metadata',
+  borderDefault: 'Standard dividers',
+  borderStrong: 'Emphasized borders',
+  assistantBubbleBg: 'Assistant chat bubble fill',
+  scrollbarThumb: 'Scrollable thumb',
+  scrollbarTrack: 'Scrollable track',
+  debugNotes: 'Debug/system note text',
+  activityUpdates: 'Activity and queued update labels',
+  reasoningUpdates: 'Reasoning activity labels',
+  operationTrace: 'Operation trace rows',
+  thinkingProgress: 'Thinking/progress rows',
+  errorStatus: 'Debug warning fill',
+}
+
 export interface DockedAppSettingsProps {
   portalTarget: HTMLDivElement | null
   visible: boolean
@@ -73,6 +100,7 @@ export interface DockedAppSettingsProps {
   setModelCatalogRefreshPending: React.Dispatch<React.SetStateAction<boolean>>
   modelCatalogRefreshStatus: ModelCatalogRefreshStatus | null
   setModelCatalogRefreshStatus: React.Dispatch<React.SetStateAction<ModelCatalogRefreshStatus | null>>
+  onModelsCatalogLoaded?: (available: AvailableCatalogModels, providers?: ModelProvider[]) => void
   modelPingResults: Record<string, any>
   setModelPingResults: React.Dispatch<React.SetStateAction<any>>
   modelPingPending: Set<string>
@@ -170,6 +198,7 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
     modelConfig, setModelConfig, providerRegistry, setProviderRegistry,
     modelCatalogRefreshPending, setModelCatalogRefreshPending,
     modelCatalogRefreshStatus, setModelCatalogRefreshStatus,
+    onModelsCatalogLoaded,
     modelPingResults, setModelPingResults, modelPingPending, setModelPingPending,
     editingModel, setEditingModel, modelForm, setModelForm, modelFormStatus, setModelFormStatus,
     applicationSettings, setApplicationSettings,
@@ -213,6 +242,41 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
   const closeAppSettings = onClose
   const showDockedAppSettings = visible
   const codeWindowSettingsHostRef = { current: portalTarget }
+  const themePreviewDraft = themeEditorDraft
+  const customTheme = themeCatalog.find((theme) => theme.id === CUSTOM_THEME_ID) ?? null
+  const isEditingCustomTheme = themeEditorDraft?.id === CUSTOM_THEME_ID
+  const refreshModelsFromProviders = async (providers?: ModelProvider[]) => {
+    if (!api.getAvailableModels) return
+    setModelCatalogRefreshPending(true)
+    setModelCatalogRefreshStatus(null)
+    try {
+      const available = await api.getAvailableModels()
+      onModelsCatalogLoaded?.(available, providers)
+      const nextModelConfig = syncModelConfigWithCatalog(
+        modelConfig,
+        available,
+        providerRegistry,
+        {
+          pruneMissingFromCatalog: true,
+          providers,
+        },
+      )
+      setModelConfig(nextModelConfig)
+      const providerScope = providers && providers.length > 0 ? providers : ['codex', 'claude', 'gemini', 'openrouter']
+      const total = providerScope.reduce((sum, providerId) => {
+        const list = available[providerId as keyof typeof available]
+        return sum + (Array.isArray(list) ? list.length : 0)
+      }, 0)
+      setModelCatalogRefreshStatus({
+        kind: 'success',
+        message: `Model list refreshed (${total} from provider${total === 1 ? '' : 's'}).`,
+      })
+    } catch (err) {
+      setModelCatalogRefreshStatus({ kind: 'error', message: `Provider refresh failed: ${formatError(err)}` })
+    } finally {
+      setModelCatalogRefreshPending(false)
+    }
+  }
 
   const settingsCard = (
     <div
@@ -777,8 +841,10 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                           ...prev,
                           themeId: t.id,
                         }))
-                        setSelectedThemeEditorId(t.id)
-                        setThemeEditorDraft(cloneTheme(t))
+                        setSelectedThemeEditorId(CUSTOM_THEME_ID)
+                        if (t.id === CUSTOM_THEME_ID) {
+                          setThemeEditorDraft(cloneTheme(t))
+                        }
                         setThemeEditorStatus(null)
                       }}
                       className={`px-3 py-2 rounded-md border text-left text-sm ${applicationSettings.themeId === t.id
@@ -790,34 +856,131 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                     </button>
                   ))}
                 </div>
-                <label className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(applicationSettings.customiseStandardThemes)}
-                    onChange={(e) =>
-                      setApplicationSettings((prev) => ({
-                        ...prev,
-                        customiseStandardThemes: e.target.checked,
-                      }))
-                    }
-                  />
-                  <span className="text-sm text-neutral-700 dark:text-neutral-300">Customise standard themes</span>
-                </label>
-                {(applicationSettings.themeId === 'custom' || applicationSettings.customiseStandardThemes) && (
-                  <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
-                    <div className="text-xs text-neutral-600 dark:text-neutral-400">
-                      Theme fields
-                    </div>
-                    <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                      {applicationSettings.themeId === 'custom'
-                        ? 'Custom theme starts from Default Light. Adjust colours below and save.'
-                        : 'Click a theme above to populate editable color fields, then save changes back to that theme.'}
-                    </div>
-                    {themeEditorDraft ? (
+                <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
+                  <div className="text-xs text-neutral-600 dark:text-neutral-400">
+                    Custom theme fields
+                  </div>
+                  <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                    Only <span className="font-medium">Custom</span> is editable. It starts as a copy of <span className="font-medium">Default</span>.
+                  </div>
+                  {themeEditorDraft && isEditingCustomTheme ? (
                       <>
                         <div className="text-xs text-neutral-600 dark:text-neutral-400">
                           Editing <span className="font-medium text-neutral-800 dark:text-neutral-200">{themeEditorDraft.name}</span> ({themeEditorDraft.id})
                         </div>
+                        {themePreviewDraft && (
+                          <div
+                            className="rounded-xl border p-3 space-y-3"
+                            style={{
+                              backgroundColor: themePreviewDraft.bgBase,
+                              borderColor: themePreviewDraft.borderDefault,
+                              color: themePreviewDraft.textPrimary,
+                            }}
+                          >
+                            <div className="text-[11px] font-medium uppercase tracking-wide" style={{ color: themePreviewDraft.textSecondary }}>
+                              Theme preview
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <div
+                                className="rounded-lg border p-3 space-y-2"
+                                style={{
+                                  backgroundColor: themePreviewDraft.bgSurface,
+                                  borderColor: themePreviewDraft.borderDefault,
+                                }}
+                              >
+                                <div className="text-sm font-semibold" style={{ color: themePreviewDraft.textPrimary }}>Surface sample</div>
+                                <div className="text-xs" style={{ color: themePreviewDraft.textSecondary }}>
+                                  Secondary text with <span style={{ color: themePreviewDraft.textTertiary }}>muted metadata</span>
+                                </div>
+                                <div className="flex flex-wrap gap-2 pt-1">
+                                  <span
+                                    className="inline-flex items-center rounded-md px-2 py-1 text-[11px] font-medium"
+                                    style={{
+                                      backgroundColor: themePreviewDraft.accent,
+                                      color: themePreviewDraft.accentOnPrimary,
+                                    }}
+                                  >
+                                    Accent
+                                  </span>
+                                  <span
+                                    className="inline-flex items-center rounded-md border px-2 py-1 text-[11px] font-medium"
+                                    style={{
+                                      backgroundColor: themePreviewDraft.accentTint,
+                                      borderColor: themePreviewDraft.borderStrong,
+                                      color: themePreviewDraft.accentMuted,
+                                    }}
+                                  >
+                                    Tint
+                                  </span>
+                                  <span
+                                    className="inline-flex items-center rounded-md border px-2 py-1 text-[11px]"
+                                    style={{
+                                      backgroundColor: themePreviewDraft.bgElevated,
+                                      borderColor: themePreviewDraft.borderStrong,
+                                      color: themePreviewDraft.textPrimary,
+                                    }}
+                                  >
+                                    Elevated
+                                  </span>
+                                </div>
+                                <div
+                                  className="rounded-2xl border px-3 py-2 text-sm"
+                                  style={{
+                                    backgroundColor: themePreviewDraft.assistantBubbleBg,
+                                    borderColor: themePreviewDraft.borderStrong,
+                                    color: themePreviewDraft.textPrimary,
+                                  }}
+                                >
+                                  Assistant bubble preview
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-lg border p-3 space-y-2"
+                                style={{
+                                  backgroundColor: themePreviewDraft.bgSurface,
+                                  borderColor: themePreviewDraft.borderDefault,
+                                }}
+                              >
+                                <div className="text-sm font-semibold" style={{ color: themePreviewDraft.textPrimary }}>Diagnostics sample</div>
+                                <div className="text-[11px]" style={{ color: themePreviewDraft.debugNotes }}>Debug note color</div>
+                                <div className="text-[11px]" style={{ color: themePreviewDraft.activityUpdates }}>Activity update color</div>
+                                <div className="text-[11px]" style={{ color: themePreviewDraft.reasoningUpdates }}>Reasoning update color</div>
+                                <div className="text-[11px]" style={{ color: themePreviewDraft.operationTrace }}>Operation trace color</div>
+                                <div className="text-[11px]" style={{ color: themePreviewDraft.thinkingProgress }}>Thinking progress color</div>
+                                <div
+                                  className="rounded-md px-2 py-1 text-[11px]"
+                                  style={{
+                                    backgroundColor: themePreviewDraft.errorStatus,
+                                    color: themePreviewDraft.textPrimary,
+                                  }}
+                                >
+                                  Error status fill
+                                </div>
+                                <div className="space-y-1 pt-1">
+                                  {THEME_EDITABLE_FIELDS.map((field) => (
+                                    <div key={`impact-${field.key}`} className="flex items-center justify-between gap-3 text-[10px]">
+                                      <span style={{ color: themePreviewDraft.textSecondary }}>{field.label}</span>
+                                      <span style={{ color: themePreviewDraft.textTertiary }}>
+                                        {THEME_FIELD_IMPACT_HINTS[field.key] ?? 'Theme preview'}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                                <div
+                                  className="h-3 rounded-full"
+                                  style={{
+                                    backgroundColor: themePreviewDraft.scrollbarTrack,
+                                  }}
+                                >
+                                  <div
+                                    className="h-3 w-16 rounded-full"
+                                    style={{ backgroundColor: themePreviewDraft.scrollbarThumb }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                         <div className="space-y-3 pr-1">
                           {(() => {
                             const groups = new Map<string, typeof THEME_EDITABLE_FIELDS>()
@@ -889,8 +1052,8 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                               }
                               setThemeOverrides((prev) => {
                                 const next = { ...prev }
-                                if (Object.keys(nextOverride).length === 0) delete next[themeEditorDraft.id]
-                                else next[themeEditorDraft.id] = nextOverride
+                                if (Object.keys(nextOverride).length === 0) delete next[CUSTOM_THEME_ID]
+                                else next[CUSTOM_THEME_ID] = nextOverride
                                 return next
                               })
                               setThemeEditorStatus(`Saved changes to ${themeEditorDraft.name}.`)
@@ -906,9 +1069,9 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                               if (!baseTheme) return
                               setThemeEditorDraft(cloneTheme(baseTheme))
                               setThemeOverrides((prev) => {
-                                if (!prev[themeEditorDraft.id]) return prev
+                                if (!prev[CUSTOM_THEME_ID]) return prev
                                 const next = { ...prev }
-                                delete next[themeEditorDraft.id]
+                                delete next[CUSTOM_THEME_ID]
                                 return next
                               })
                               setThemeEditorStatus(`Reset ${themeEditorDraft.name} to defaults.`)
@@ -922,10 +1085,11 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                         </div>
                       </>
                     ) : (
-                      <div className="text-xs text-neutral-500 dark:text-neutral-400">Select a theme to edit its fields.</div>
+                      <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                        {customTheme ? 'Select Custom above to edit its fields.' : 'Custom theme is unavailable.'}
+                      </div>
                     )}
-                  </div>
-                )}
+                </div>
               </div>
             </section>
           </>
@@ -939,7 +1103,10 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                 <button
                   type="button"
                   className="px-2.5 py-1.5 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 text-xs dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                  onClick={() => void refreshAllProviderAuthStatuses()}
+                  onClick={() => void (async () => {
+                    await refreshAllProviderAuthStatuses()
+                    await refreshModelsFromProviders()
+                  })()}
                 >
                   Re-check all
                 </button>
@@ -1347,6 +1514,9 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                                       setProviderPingDurationByName((prev) => ({ ...prev, [config.id]: authDurationMs }))
                                       setProviderVerifiedByName((prev) => prev[config.id] ? prev : { ...prev, [config.id]: true })
                                     }
+                                    if (CONNECTIVITY_PROVIDERS.includes(config.id as ConnectivityProvider)) {
+                                      await refreshModelsFromProviders([config.id as ModelProvider])
+                                    }
                                   }}
                                 >
                                   {loading ? 'Checking...' : 'Re-check'}
@@ -1580,36 +1750,18 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                     type="button"
                     className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
                     onClick={async () => {
-                      setOrchestratorInstallStatus('Installing...')
+                      setOrchestratorInstallStatus('Reloading local plugins...')
                       try {
-                        const result = await api.installOrchestratorPlugin?.()
-                        setOrchestratorInstallStatus(result?.ok ? 'Installed successfully' : result?.error ?? 'Install failed')
+                        const result = await api.reloadLocalPlugins?.()
+                        setOrchestratorInstallStatus(result?.ok ? 'Local plugins reloaded' : result?.error ?? 'Reload failed')
                       } catch (e) {
                         setOrchestratorInstallStatus(String(e))
                       }
                       setTimeout(() => setOrchestratorInstallStatus(null), 4000)
                     }}
                   >
-                    Install from npm
+                    Reload local plugins
                   </button>
-                  {loadedPlugins?.some((p) => p.pluginId === 'orchestrator' && p.active) && (
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                      onClick={async () => {
-                        setOrchestratorInstallStatus('Uninstalling...')
-                        try {
-                          const result = await api.uninstallOrchestratorPlugin?.()
-                          setOrchestratorInstallStatus(result?.ok ? 'Uninstalled' : result?.error ?? 'Uninstall failed')
-                        } catch (e) {
-                          setOrchestratorInstallStatus(String(e))
-                        }
-                        setTimeout(() => setOrchestratorInstallStatus(null), 4000)
-                      }}
-                    >
-                      Uninstall
-                    </button>
-                  )}
                   <button
                     type="button"
                     className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
@@ -2059,6 +2211,20 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                     }
                   />
                   Inject debug notes into chat timeline
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(applicationSettings.showRawConversationTools)}
+                    onChange={(e) =>
+                      setApplicationSettings((prev) => ({
+                        ...prev,
+                        showRawConversationTools: e.target.checked,
+                      }))
+                    }
+                  />
+                  Expose raw conversation tools
+                  <span className="text-xs text-neutral-500 dark:text-neutral-400">(show a View Raw Conversation button in each panel header)</span>
                 </label>
                 <label className="flex items-center gap-2">
                   <input

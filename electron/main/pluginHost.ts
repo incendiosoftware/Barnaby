@@ -26,11 +26,6 @@ import type {
 } from './pluginHostTypes'
 import { readOrchestratorSecrets, readOrchestratorSettings } from './orchestratorStorage'
 
-const PLUGIN_DISCOVERY_PATHS = [
-  'node_modules/@barnaby',
-  'node_modules/@barnaby.build',
-]
-
 const PLUGIN_HEARTBEAT_CHECK_INTERVAL_MS = 10_000
 const PLUGIN_STALE_GRACE_PERIOD_MS = 5_000
 
@@ -101,16 +96,16 @@ function buildHostApi(): BarnabyPluginHostApi {
       return invokeRenderer<void>('plugin:interruptPanel', panelId)
     },
 
-    getPanelInfo(_panelId: string): PanelInfo | null {
-      return null
+    async getPanelInfo(panelId: string): Promise<PanelInfo | null> {
+      return invokeRenderer<PanelInfo | null>('plugin:getPanelInfo', panelId)
     },
 
-    getPanelMessages(_panelId: string): PanelMessage[] {
-      return []
+    async getPanelMessages(panelId: string): Promise<PanelMessage[]> {
+      return invokeRenderer<PanelMessage[]>('plugin:getPanelMessages', panelId)
     },
 
-    listPanels(): PanelInfo[] {
-      return []
+    async listPanels(): Promise<PanelInfo[]> {
+      return invokeRenderer<PanelInfo[]>('plugin:listPanels')
     },
 
     onPanelEvent(panelId: string, handler: (evt: AgentEvent) => void): Disposable {
@@ -257,27 +252,57 @@ export function notifyPluginPanelTurnComplete(panelId: string) {
 
 function discoverPlugins(appRoot: string): string[] {
   const found: string[] = []
+  const seen = new Set<string>()
+  const seenPackageNames = new Set<string>()
 
-  for (const searchPath of PLUGIN_DISCOVERY_PATHS) {
-    const dir = path.join(appRoot, searchPath)
-    if (!fs.existsSync(dir)) continue
+  const addPluginPath = (pluginPath: string, packageName?: string) => {
+    const normalized = path.resolve(pluginPath)
+    if (seen.has(normalized)) return
+    seen.add(normalized)
+    if (packageName) seenPackageNames.add(packageName)
+    found.push(normalized)
+  }
+
+  const tryAddPluginPackage = (pluginPath: string) => {
+    const pkgJsonPath = path.join(pluginPath, 'package.json')
+    if (!fs.existsSync(pkgJsonPath)) return
     try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true })
-      for (const entry of entries) {
-        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
-        const pkgJsonPath = path.join(dir, entry.name, 'package.json')
-        if (!fs.existsSync(pkgJsonPath)) continue
-        try {
-          const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'))
-          if (pkg.barnaby?.plugin === true) {
-            found.push(path.join(dir, entry.name))
-          }
-        } catch {
-          // skip malformed package.json
-        }
+      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'))
+      const entryFile = pkg.main ?? 'index.js'
+      const entryPath = path.join(pluginPath, entryFile)
+      const packageName = typeof pkg.name === 'string' ? pkg.name : undefined
+      if (packageName && seenPackageNames.has(packageName)) return
+      if (pkg.barnaby?.plugin === true && fs.existsSync(entryPath)) {
+        addPluginPath(pluginPath, packageName)
       }
     } catch {
-      // directory not readable
+      // skip malformed package
+    }
+  }
+
+  const discoverNodeModulesPlugins = (nodeModulesPath: string) => {
+    if (!fs.existsSync(nodeModulesPath)) return
+    try {
+      const entries = fs.readdirSync(nodeModulesPath, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
+        const entryPath = path.join(nodeModulesPath, entry.name)
+        if (entry.name.startsWith('@')) {
+          try {
+            const scopedEntries = fs.readdirSync(entryPath, { withFileTypes: true })
+            for (const scopedEntry of scopedEntries) {
+              if (!scopedEntry.isDirectory() && !scopedEntry.isSymbolicLink()) continue
+              tryAddPluginPackage(path.join(entryPath, scopedEntry.name))
+            }
+          } catch {
+            // skip unreadable scope directory
+          }
+          continue
+        }
+        tryAddPluginPackage(entryPath)
+      }
+    } catch {
+      // skip unreadable node_modules directory
     }
   }
 
@@ -287,43 +312,14 @@ function discoverPlugins(appRoot: string): string[] {
       const entries = fs.readdirSync(homePluginDir, { withFileTypes: true })
       for (const entry of entries) {
         if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
-        const pkgJsonPath = path.join(homePluginDir, entry.name, 'package.json')
-        if (!fs.existsSync(pkgJsonPath)) continue
-        try {
-          const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'))
-          if (pkg.barnaby?.plugin === true) {
-            found.push(path.join(homePluginDir, entry.name))
-          }
-        } catch {
-          // skip
-        }
+        if (entry.name === 'node_modules') continue
+        tryAddPluginPackage(path.join(homePluginDir, entry.name))
       }
     } catch {
       // not readable
     }
-  }
 
-  for (const scope of ['@barnaby', '@barnaby.build']) {
-    const npmScopedDir = path.join(homePluginDir, 'node_modules', scope)
-    if (!fs.existsSync(npmScopedDir)) continue
-    try {
-      const entries = fs.readdirSync(npmScopedDir, { withFileTypes: true })
-      for (const entry of entries) {
-        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
-        const pkgJsonPath = path.join(npmScopedDir, entry.name, 'package.json')
-        if (!fs.existsSync(pkgJsonPath)) continue
-        try {
-          const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'))
-          if (pkg.barnaby?.plugin === true) {
-            found.push(path.join(npmScopedDir, entry.name))
-          }
-        } catch {
-          // skip
-        }
-      }
-    } catch {
-      // not readable
-    }
+    discoverNodeModulesPlugins(path.join(homePluginDir, 'node_modules'))
   }
 
   return found

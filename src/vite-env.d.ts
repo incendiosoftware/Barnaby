@@ -254,6 +254,7 @@ interface Window {
     gitDeploy(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }>
     gitBuild(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }>
     gitRelease(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }>
+    gitRollback(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }>
     setRecentWorkspaces(list: string[]): void
     setEditorMenuState(enabled: boolean): void
     setDockPanelMenuState(visibility: Record<string, boolean>): void

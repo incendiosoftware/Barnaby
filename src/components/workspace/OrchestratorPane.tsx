@@ -12,7 +12,7 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import { UI_CLOSE_ICON_BUTTON_CLASS } from '../../constants'
+import { MODAL_BACKDROP_CLASS, MODAL_CARD_CLASS, UI_CLOSE_ICON_BUTTON_CLASS } from '../../constants'
 import type { OrchestratorSettings } from '../../types'
 
 export interface OrchestratorPaneProps {
@@ -84,6 +84,43 @@ interface OrchestratorStateSnapshot {
 
 type OrchestratorMode = 'goal-run' | 'review'
 
+type GoalWizardStep = 1 | 2 | 3 | 4 | 5 | 6
+
+interface GoalPlanQuestion {
+  id: string
+  question: string
+  answer: string
+}
+
+interface GoalPlanAgentRole {
+  id: string
+  agent: string
+  role: string
+}
+
+interface GoalPlanSettings {
+  orchestratorModel: string
+  workerProvider: string
+  workerModel: string
+  maxParallelPanels: number
+  maxTaskAttempts: number
+  iterations: number
+}
+
+interface GoalPlan {
+  id: string
+  title: string
+  goalPrompt: string
+  clarificationQuestions: GoalPlanQuestion[]
+  clarificationNotes: string
+  requirements: string[]
+  tasks: string[]
+  agents: GoalPlanAgentRole[]
+  settings: GoalPlanSettings
+  createdAt: number
+  updatedAt: number
+}
+
 type OrchestratorApi = {
   startOrchestratorComparativeReview?: (
     goal: string,
@@ -102,6 +139,9 @@ type OrchestratorApi = {
     suggestedFileName: string,
     content: string,
   ) => Promise<{ ok: boolean; canceled?: boolean; path?: string; error?: string }>
+  gitCommit?: (workspaceRoot: string, selectedPaths?: string[]) => Promise<{ ok: boolean; error?: string }>
+  gitPush?: (workspaceRoot: string, selectedPaths?: string[]) => Promise<{ ok: boolean; error?: string }>
+  gitRollback?: (workspaceRoot: string, selectedPaths?: string[]) => Promise<{ ok: boolean; error?: string }>
 }
 
 const MODE_LABELS: Record<OrchestratorMode, { label: string; placeholder: string; button: string; importLabel: string }> = {
@@ -153,6 +193,109 @@ const PHASE_LABELS: Record<string, string> = {
   complete: 'Complete',
   failed: 'Failed',
   paused: 'Paused',
+}
+
+const GOAL_PLANS_STORAGE_KEY = 'agentorchestrator.goalPlans.v1'
+
+const GOAL_WIZARD_STEPS: Array<{ id: GoalWizardStep; label: string }> = [
+  { id: 1, label: 'Goal Prompt' },
+  { id: 2, label: 'Clarifying Q&A' },
+  { id: 3, label: 'Requirements' },
+  { id: 4, label: 'Tasks' },
+  { id: 5, label: 'Agents & Roles' },
+  { id: 6, label: 'Settings' },
+]
+
+function makeLocalId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function moveItem<T>(items: T[], fromIndex: number, delta: -1 | 1): T[] {
+  const targetIndex = fromIndex + delta
+  if (targetIndex < 0 || targetIndex >= items.length) return items
+  const next = [...items]
+  const [item] = next.splice(fromIndex, 1)
+  next.splice(targetIndex, 0, item)
+  return next
+}
+
+function createDefaultPlanSettings(orchestratorSettings: OrchestratorSettings): GoalPlanSettings {
+  return {
+    orchestratorModel: orchestratorSettings.orchestratorModel,
+    workerProvider: orchestratorSettings.workerProvider,
+    workerModel: orchestratorSettings.workerModel,
+    maxParallelPanels: orchestratorSettings.maxParallelPanels,
+    maxTaskAttempts: orchestratorSettings.maxTaskAttempts,
+    iterations: orchestratorSettings.maxTaskAttempts,
+  }
+}
+
+function createBlankGoalPlan(orchestratorSettings: OrchestratorSettings): GoalPlan {
+  const id = makeLocalId('goal-plan')
+  return {
+    id,
+    title: 'Untitled Goal Plan',
+    goalPrompt: '',
+    clarificationQuestions: [],
+    clarificationNotes: '',
+    requirements: [],
+    tasks: [],
+    agents: [],
+    settings: createDefaultPlanSettings(orchestratorSettings),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }
+}
+
+function buildPlanRunPrompt(plan: GoalPlan): string {
+  const lines: string[] = []
+  lines.push(`# ${plan.title}`)
+  lines.push('')
+  lines.push('## Goal')
+  lines.push(plan.goalPrompt.trim() || '_No goal prompt provided._')
+  lines.push('')
+  if (plan.clarificationQuestions.length > 0) {
+    lines.push('## Clarifying Q&A')
+    for (const item of plan.clarificationQuestions) {
+      lines.push(`- Q: ${item.question.trim() || '(empty question)'}`)
+      lines.push(`  A: ${item.answer.trim() || '(no answer yet)'}`)
+    }
+    lines.push('')
+  }
+  if (plan.clarificationNotes.trim()) {
+    lines.push('## Clarification Notes')
+    lines.push(plan.clarificationNotes.trim())
+    lines.push('')
+  }
+  if (plan.requirements.length > 0) {
+    lines.push('## Numbered Requirements')
+    plan.requirements.forEach((item, index) => {
+      lines.push(`${index + 1}. ${item}`)
+    })
+    lines.push('')
+  }
+  if (plan.tasks.length > 0) {
+    lines.push('## Task Order')
+    plan.tasks.forEach((item, index) => {
+      lines.push(`${index + 1}. ${item}`)
+    })
+    lines.push('')
+  }
+  if (plan.agents.length > 0) {
+    lines.push('## Suggested Agents')
+    plan.agents.forEach((item, index) => {
+      lines.push(`${index + 1}. ${item.agent} - ${item.role}`)
+    })
+    lines.push('')
+  }
+  lines.push('## Execution Constraints')
+  lines.push(`- Max parallel panels: ${plan.settings.maxParallelPanels}`)
+  lines.push(`- Max task attempts: ${plan.settings.maxTaskAttempts}`)
+  lines.push(`- Iteration budget: ${plan.settings.iterations}`)
+  if (plan.settings.orchestratorModel) lines.push(`- Orchestrator model: ${plan.settings.orchestratorModel}`)
+  if (plan.settings.workerProvider) lines.push(`- Worker provider: ${plan.settings.workerProvider}`)
+  if (plan.settings.workerModel) lines.push(`- Worker model: ${plan.settings.workerModel}`)
+  return lines.join('\n')
 }
 
 function formatDuration(ms: number): string {
@@ -295,6 +438,440 @@ function ActivityLog({ log }: { log: OrchestratorLogEntry[] }) {
   )
 }
 
+function OrderedEditor({
+  title,
+  items,
+  onChange,
+  addLabel,
+}: {
+  title: string
+  items: string[]
+  onChange: (next: string[]) => void
+  addLabel: string
+}) {
+  const [draft, setDraft] = useState('')
+  return (
+    <div className="rounded-md border border-neutral-200 dark:border-neutral-700 p-2 space-y-2">
+      <div className="text-xs font-medium text-neutral-700 dark:text-neutral-200">{title}</div>
+      <div className="space-y-1.5">
+        {items.map((item, index) => (
+          <div key={`${title}-${index}`} className="flex items-center gap-1.5">
+            <span className="w-6 text-[11px] text-neutral-500 dark:text-neutral-400 text-right">{index + 1}.</span>
+            <input
+              className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-xs px-2 py-1.5"
+              value={item}
+              onChange={(e) => {
+                const next = [...items]
+                next[index] = e.target.value
+                onChange(next)
+              }}
+            />
+            <button
+              type="button"
+              className="h-7 px-2 rounded-md border border-neutral-300 dark:border-neutral-600 text-xs text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+              onClick={() => onChange(moveItem(items, index, -1))}
+              disabled={index === 0}
+            >
+              Up
+            </button>
+            <button
+              type="button"
+              className="h-7 px-2 rounded-md border border-neutral-300 dark:border-neutral-600 text-xs text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+              onClick={() => onChange(moveItem(items, index, 1))}
+              disabled={index === items.length - 1}
+            >
+              Down
+            </button>
+            <button
+              type="button"
+              className="h-7 px-2 rounded-md border border-red-300 dark:border-red-700 text-xs text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/30"
+              onClick={() => onChange(items.filter((_, i) => i !== index))}
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-xs px-2 py-1.5"
+          value={draft}
+          placeholder="Add item..."
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              const next = draft.trim()
+              if (!next) return
+              onChange([...items, next])
+              setDraft('')
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="h-8 px-2.5 rounded-md bg-blue-600 text-white text-xs hover:bg-blue-700 disabled:opacity-50"
+          disabled={!draft.trim()}
+          onClick={() => {
+            const next = draft.trim()
+            if (!next) return
+            onChange([...items, next])
+            setDraft('')
+          }}
+        >
+          {addLabel}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function GoalWizardModal({
+  visible,
+  step,
+  draft,
+  mode,
+  onClose,
+  onChangeStep,
+  onChangeDraft,
+  onSave,
+}: {
+  visible: boolean
+  step: GoalWizardStep
+  draft: GoalPlan
+  mode: 'create' | 'edit'
+  onClose: () => void
+  onChangeStep: (next: GoalWizardStep) => void
+  onChangeDraft: (updater: (prev: GoalPlan) => GoalPlan) => void
+  onSave: () => void
+}) {
+  const [newQuestion, setNewQuestion] = useState('')
+  if (!visible) return null
+
+  return (
+    <div className={MODAL_BACKDROP_CLASS}>
+      <div className={`w-full max-w-4xl ${MODAL_CARD_CLASS}`}>
+        <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+          <div className="font-medium text-sm">{mode === 'edit' ? 'Edit Goal Plan' : 'New Goal Plan Wizard'}</div>
+          <button className={UI_CLOSE_ICON_BUTTON_CLASS} onClick={onClose} title="Close">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+        <div className="px-4 pt-3 pb-2 border-b border-neutral-200 dark:border-neutral-800">
+          <div className="grid grid-cols-2 sm:grid-cols-6 gap-1.5">
+            {GOAL_WIZARD_STEPS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`rounded-md border px-2 py-1.5 text-[11px] ${step === item.id
+                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-200'
+                  : 'border-neutral-300 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                  }`}
+                onClick={() => onChangeStep(item.id)}
+              >
+                {item.id}. {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="p-4 max-h-[72vh] overflow-y-auto space-y-3">
+          {step === 1 && (
+            <div className="space-y-2">
+              <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-200">Goal title</label>
+              <input
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-sm px-2.5 py-1.5"
+                value={draft.title}
+                onChange={(e) => onChangeDraft((prev) => ({ ...prev, title: e.target.value }))}
+              />
+              <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-200">Goal prompt</label>
+              <textarea
+                className="w-full min-h-[180px] rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-sm px-2.5 py-2"
+                value={draft.goalPrompt}
+                placeholder="Describe the goal outcome, constraints, and success criteria."
+                onChange={(e) => onChangeDraft((prev) => ({ ...prev, goalPrompt: e.target.value }))}
+              />
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-2.5">
+              <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                Capture clarifying questions and answers until the requirements are concrete enough for step 3.
+              </div>
+              {draft.clarificationQuestions.map((item, index) => (
+                <div key={item.id} className="rounded-md border border-neutral-200 dark:border-neutral-700 p-2 space-y-1.5">
+                  <div className="text-[11px] text-neutral-500 dark:text-neutral-400">Question {index + 1}</div>
+                  <input
+                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-xs px-2 py-1.5"
+                    value={item.question}
+                    placeholder="Clarifying question"
+                    onChange={(e) => onChangeDraft((prev) => ({
+                      ...prev,
+                      clarificationQuestions: prev.clarificationQuestions.map((row) => (row.id === item.id ? { ...row, question: e.target.value } : row)),
+                    }))}
+                  />
+                  <textarea
+                    className="w-full min-h-[72px] rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-xs px-2 py-1.5"
+                    value={item.answer}
+                    placeholder="User answer / inferred answer"
+                    onChange={(e) => onChangeDraft((prev) => ({
+                      ...prev,
+                      clarificationQuestions: prev.clarificationQuestions.map((row) => (row.id === item.id ? { ...row, answer: e.target.value } : row)),
+                    }))}
+                  />
+                  <button
+                    type="button"
+                    className="h-7 px-2 rounded-md border border-red-300 dark:border-red-700 text-xs text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/30"
+                    onClick={() => onChangeDraft((prev) => ({
+                      ...prev,
+                      clarificationQuestions: prev.clarificationQuestions.filter((row) => row.id !== item.id),
+                    }))}
+                  >
+                    Delete question
+                  </button>
+                </div>
+              ))}
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-xs px-2 py-1.5"
+                  value={newQuestion}
+                  placeholder="Add a clarifying question..."
+                  onChange={(e) => setNewQuestion(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="h-8 px-2.5 rounded-md bg-blue-600 text-white text-xs hover:bg-blue-700 disabled:opacity-50"
+                  disabled={!newQuestion.trim()}
+                  onClick={() => {
+                    const next = newQuestion.trim()
+                    if (!next) return
+                    onChangeDraft((prev) => ({
+                      ...prev,
+                      clarificationQuestions: [...prev.clarificationQuestions, { id: makeLocalId('q'), question: next, answer: '' }],
+                    }))
+                    setNewQuestion('')
+                  }}
+                >
+                  Add Question
+                </button>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-200 mb-1">Extra clarification notes</label>
+                <textarea
+                  className="w-full min-h-[100px] rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-xs px-2 py-1.5"
+                  value={draft.clarificationNotes}
+                  onChange={(e) => onChangeDraft((prev) => ({ ...prev, clarificationNotes: e.target.value }))}
+                />
+              </div>
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="space-y-2">
+              <OrderedEditor
+                title="Identified requirements"
+                items={draft.requirements}
+                onChange={(next) => onChangeDraft((prev) => ({ ...prev, requirements: next }))}
+                addLabel="Add"
+              />
+              <button
+                type="button"
+                className="h-8 px-2.5 rounded-md border border-neutral-300 dark:border-neutral-600 text-xs text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                onClick={() => onChangeStep(2)}
+              >
+                Ask More Questions
+              </button>
+            </div>
+          )}
+
+          {step === 4 && (
+            <OrderedEditor
+              title="Task sequence"
+              items={draft.tasks}
+              onChange={(next) => onChangeDraft((prev) => ({ ...prev, tasks: next }))}
+              addLabel="Add"
+            />
+          )}
+
+          {step === 5 && (
+            <div className="space-y-2">
+              <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                Suggested agents and roles. You can edit the list; the orchestrator still makes the final execution decisions.
+              </div>
+              {draft.agents.map((item, index) => (
+                <div key={item.id} className="rounded-md border border-neutral-200 dark:border-neutral-700 p-2 grid grid-cols-1 sm:grid-cols-[1.1fr_1.6fr_auto_auto_auto] gap-2 items-center">
+                  <input
+                    className="rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-xs px-2 py-1.5"
+                    value={item.agent}
+                    placeholder="Agent name"
+                    onChange={(e) => onChangeDraft((prev) => ({
+                      ...prev,
+                      agents: prev.agents.map((row) => (row.id === item.id ? { ...row, agent: e.target.value } : row)),
+                    }))}
+                  />
+                  <input
+                    className="rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-xs px-2 py-1.5"
+                    value={item.role}
+                    placeholder="Role"
+                    onChange={(e) => onChangeDraft((prev) => ({
+                      ...prev,
+                      agents: prev.agents.map((row) => (row.id === item.id ? { ...row, role: e.target.value } : row)),
+                    }))}
+                  />
+                  <button
+                    type="button"
+                    className="h-7 px-2 rounded-md border border-neutral-300 dark:border-neutral-600 text-xs text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                    onClick={() => onChangeDraft((prev) => ({ ...prev, agents: moveItem(prev.agents, index, -1) }))}
+                    disabled={index === 0}
+                  >
+                    Up
+                  </button>
+                  <button
+                    type="button"
+                    className="h-7 px-2 rounded-md border border-neutral-300 dark:border-neutral-600 text-xs text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                    onClick={() => onChangeDraft((prev) => ({ ...prev, agents: moveItem(prev.agents, index, 1) }))}
+                    disabled={index === draft.agents.length - 1}
+                  >
+                    Down
+                  </button>
+                  <button
+                    type="button"
+                    className="h-7 px-2 rounded-md border border-red-300 dark:border-red-700 text-xs text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/30"
+                    onClick={() => onChangeDraft((prev) => ({ ...prev, agents: prev.agents.filter((row) => row.id !== item.id) }))}
+                  >
+                    Delete
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="h-8 px-2.5 rounded-md bg-blue-600 text-white text-xs hover:bg-blue-700"
+                onClick={() => onChangeDraft((prev) => ({
+                  ...prev,
+                  agents: [...prev.agents, { id: makeLocalId('agent'), agent: 'Worker', role: '' }],
+                }))}
+              >
+                Add Agent
+              </button>
+            </div>
+          )}
+
+          {step === 6 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block font-medium text-neutral-700 dark:text-neutral-200 mb-1">Orchestrator model</label>
+                <input
+                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-2 py-1.5"
+                  value={draft.settings.orchestratorModel}
+                  onChange={(e) => onChangeDraft((prev) => ({ ...prev, settings: { ...prev.settings, orchestratorModel: e.target.value } }))}
+                />
+              </div>
+              <div>
+                <label className="block font-medium text-neutral-700 dark:text-neutral-200 mb-1">Worker provider</label>
+                <input
+                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-2 py-1.5"
+                  value={draft.settings.workerProvider}
+                  onChange={(e) => onChangeDraft((prev) => ({ ...prev, settings: { ...prev.settings, workerProvider: e.target.value } }))}
+                />
+              </div>
+              <div>
+                <label className="block font-medium text-neutral-700 dark:text-neutral-200 mb-1">Worker model</label>
+                <input
+                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-2 py-1.5"
+                  value={draft.settings.workerModel}
+                  onChange={(e) => onChangeDraft((prev) => ({ ...prev, settings: { ...prev.settings, workerModel: e.target.value } }))}
+                />
+              </div>
+              <div>
+                <label className="block font-medium text-neutral-700 dark:text-neutral-200 mb-1">Max parallel panels</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={8}
+                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-2 py-1.5"
+                  value={draft.settings.maxParallelPanels}
+                  onChange={(e) => {
+                    const value = parseInt(e.target.value, 10)
+                    if (!Number.isNaN(value)) onChangeDraft((prev) => ({ ...prev, settings: { ...prev.settings, maxParallelPanels: value } }))
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block font-medium text-neutral-700 dark:text-neutral-200 mb-1">Max task attempts</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-2 py-1.5"
+                  value={draft.settings.maxTaskAttempts}
+                  onChange={(e) => {
+                    const value = parseInt(e.target.value, 10)
+                    if (!Number.isNaN(value)) onChangeDraft((prev) => ({ ...prev, settings: { ...prev.settings, maxTaskAttempts: value } }))
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block font-medium text-neutral-700 dark:text-neutral-200 mb-1">Iteration budget</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-2 py-1.5"
+                  value={draft.settings.iterations}
+                  onChange={(e) => {
+                    const value = parseInt(e.target.value, 10)
+                    if (!Number.isNaN(value)) onChangeDraft((prev) => ({ ...prev, settings: { ...prev.settings, iterations: value } }))
+                  }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+          <button
+            type="button"
+            className="h-8 px-3 rounded-md border border-neutral-300 dark:border-neutral-600 text-xs text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-50"
+            disabled={step === 1}
+            onClick={() => onChangeStep(Math.max(1, step - 1) as GoalWizardStep)}
+          >
+            Back
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="h-8 px-3 rounded-md border border-neutral-300 dark:border-neutral-600 text-xs text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              onClick={onClose}
+            >
+              Cancel
+            </button>
+            {step < 6 ? (
+              <button
+                type="button"
+                className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs hover:bg-blue-700"
+                onClick={() => onChangeStep(Math.min(6, step + 1) as GoalWizardStep)}
+              >
+                Next
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs hover:bg-blue-700"
+                onClick={onSave}
+              >
+                Save Plan
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main component ───────────────────────────────────────────────────
 
 export function OrchestratorPane({
@@ -317,8 +894,35 @@ export function OrchestratorPane({
   const [stoppingRun, setStoppingRun] = useState(false)
   const [mode, setMode] = useState<OrchestratorMode>('goal-run')
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
+  const [goalPlans, setGoalPlans] = useState<GoalPlan[]>([])
+  const [selectedGoalPlanId, setSelectedGoalPlanId] = useState<string | null>(null)
+  const [wizardVisible, setWizardVisible] = useState(false)
+  const [wizardMode, setWizardMode] = useState<'create' | 'edit'>('create')
+  const [wizardStep, setWizardStep] = useState<GoalWizardStep>(1)
+  const [wizardDraft, setWizardDraft] = useState<GoalPlan>(() => createBlankGoalPlan(orchestratorSettings))
   const summaryRef = useRef<HTMLDivElement>(null)
   const modeConfig = MODE_LABELS[mode]
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(GOAL_PLANS_STORAGE_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as GoalPlan[]
+      if (!Array.isArray(parsed)) return
+      setGoalPlans(parsed)
+      if (parsed.length > 0) setSelectedGoalPlanId(parsed[0].id)
+    } catch {
+      // Best-effort local state restore
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(GOAL_PLANS_STORAGE_KEY, JSON.stringify(goalPlans))
+    } catch {
+      // Ignore storage write failures
+    }
+  }, [goalPlans])
 
   // Poll orchestrator state
   useEffect(() => {
@@ -527,6 +1131,7 @@ export function OrchestratorPane({
   const hasWork = Boolean(effectiveGoalRun || effectiveComparativeRun || (isRunning && snapshot?.goal?.text))
   const goalText = effectiveGoalRun?.goal ?? effectiveComparativeRun?.goal ?? (isRunning ? snapshot?.goal?.text ?? null : null)
   const canStopRun = Boolean(goalText) && (isRunning || phase === 'paused')
+  const selectedGoalPlan = goalPlans.find((item) => item.id === selectedGoalPlanId) ?? null
 
   const taskCounts = effectiveGoalRun ? {
     total: effectiveGoalRun.tasks.length,
@@ -539,6 +1144,105 @@ export function OrchestratorPane({
   const elapsed = effectiveGoalRun
     ? (effectiveGoalRun.completedAt ?? Date.now()) - effectiveGoalRun.createdAt
     : null
+
+  const openNewGoalWizard = useCallback(() => {
+    setWizardMode('create')
+    setWizardStep(1)
+    setWizardDraft(createBlankGoalPlan(orchestratorSettings))
+    setWizardVisible(true)
+  }, [orchestratorSettings])
+
+  const openSelectedGoalPlan = useCallback(() => {
+    if (!selectedGoalPlan) {
+      setStatusMessage('No saved plan selected.')
+      return
+    }
+    setWizardMode('edit')
+    setWizardStep(1)
+    setWizardDraft({ ...selectedGoalPlan, settings: { ...selectedGoalPlan.settings } })
+    setWizardVisible(true)
+  }, [selectedGoalPlan])
+
+  const saveGoalPlanFromWizard = useCallback(() => {
+    const timestamp = Date.now()
+    const normalizedTitle = wizardDraft.title.trim() || 'Untitled Goal Plan'
+    const normalizedPrompt = wizardDraft.goalPrompt.trim()
+    if (!normalizedPrompt) {
+      setStatusMessage('Goal prompt is required before saving.')
+      return
+    }
+    const nextPlan: GoalPlan = {
+      ...wizardDraft,
+      title: normalizedTitle,
+      goalPrompt: normalizedPrompt,
+      updatedAt: timestamp,
+      createdAt: wizardMode === 'edit' ? wizardDraft.createdAt : timestamp,
+    }
+    setGoalPlans((prev) => {
+      if (wizardMode === 'edit') {
+        return prev.map((plan) => (plan.id === nextPlan.id ? nextPlan : plan))
+      }
+      return [nextPlan, ...prev]
+    })
+    setSelectedGoalPlanId(nextPlan.id)
+    setWizardVisible(false)
+    setStatusMessage(`Plan saved: ${nextPlan.title}`)
+  }, [wizardDraft, wizardMode])
+
+  const runSelectedGoalPlan = useCallback(async () => {
+    if (!selectedGoalPlan) {
+      setStatusMessage('Select or create a goal plan first.')
+      return
+    }
+    setOrchestratorSettings((prev) => ({
+      ...prev,
+      orchestratorModel: selectedGoalPlan.settings.orchestratorModel,
+      workerProvider: selectedGoalPlan.settings.workerProvider,
+      workerModel: selectedGoalPlan.settings.workerModel,
+      maxParallelPanels: selectedGoalPlan.settings.maxParallelPanels,
+      maxTaskAttempts: selectedGoalPlan.settings.maxTaskAttempts,
+    }))
+    const prompt = buildPlanRunPrompt(selectedGoalPlan)
+    await handleSend(prompt)
+  }, [selectedGoalPlan, setOrchestratorSettings, handleSend])
+
+  const deleteSelectedGoalPlan = useCallback(() => {
+    if (!selectedGoalPlan) return
+    setGoalPlans((prev) => {
+      const next = prev.filter((item) => item.id !== selectedGoalPlan.id)
+      setSelectedGoalPlanId(next[0]?.id ?? null)
+      return next
+    })
+    setStatusMessage(`Deleted plan: ${selectedGoalPlan.title}`)
+  }, [selectedGoalPlan])
+
+  const handleGitCommitAndPush = useCallback(async () => {
+    if (!workspaceRoot) {
+      setStatusMessage('Workspace root is not available.')
+      return
+    }
+    const api = getOrchestratorApi()
+    if (typeof api.gitPush !== 'function') {
+      setStatusMessage('COMMIT and PUSH is not available in this build.')
+      return
+    }
+    const result = await api.gitPush(workspaceRoot)
+    setStatusMessage(result?.ok ? 'Git push completed.' : result?.error ?? 'Git push failed.')
+  }, [workspaceRoot])
+
+  const handleGitRollback = useCallback(async () => {
+    if (!workspaceRoot) {
+      setStatusMessage('Workspace root is not available.')
+      return
+    }
+    const api = getOrchestratorApi()
+    if (typeof api.gitRollback !== 'function') {
+      setStatusMessage('ROLLBACK macro is not available yet in this build.')
+      return
+    }
+    const result = await api.gitRollback(workspaceRoot)
+    setStatusMessage(result?.ok ? 'Workspace rolled back.' : result?.error ?? 'Rollback failed.')
+  }, [workspaceRoot])
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
@@ -588,15 +1292,29 @@ export function OrchestratorPane({
             </select>
             <button
               type="button"
+              className="inline-flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 text-xs px-2.5 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-50"
+              onClick={openNewGoalWizard}
+              disabled={mode !== 'goal-run'}
+              title="Create a new goal plan with the setup wizard"
+            >
+              New
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 text-xs px-2.5 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-50"
+              onClick={openSelectedGoalPlan}
+              disabled={mode !== 'goal-run' || !selectedGoalPlan}
+              title="Open selected goal plan in wizard"
+            >
+              Open
+            </button>
+            <button
+              type="button"
               className="inline-flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 text-xs px-2.5 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-700"
               onClick={() => { void handleImportMarkdown() }}
-              title={`Open a markdown file as the ${modeConfig.label.toLowerCase()} prompt`}
+              title={`Import markdown as the ${modeConfig.label.toLowerCase()} prompt`}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-              </svg>
-              Open
+              Import
             </button>
             <button
               type="button"
@@ -776,6 +1494,101 @@ export function OrchestratorPane({
               </DashboardRow>
             )}
 
+            {mode === 'goal-run' && (
+              <DashboardRow label="Loaded Plan">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 text-xs px-2 py-1.5"
+                      value={selectedGoalPlanId ?? ''}
+                      onChange={(e) => setSelectedGoalPlanId(e.target.value || null)}
+                    >
+                      <option value="">No plan selected</option>
+                      {goalPlans.map((plan) => (
+                        <option key={plan.id} value={plan.id}>{plan.title}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="h-8 px-2.5 rounded-md border border-neutral-300 dark:border-neutral-600 text-xs text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                      onClick={openNewGoalWizard}
+                    >
+                      New
+                    </button>
+                    <button
+                      type="button"
+                      className="h-8 px-2.5 rounded-md border border-neutral-300 dark:border-neutral-600 text-xs text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-50"
+                      onClick={openSelectedGoalPlan}
+                      disabled={!selectedGoalPlan}
+                    >
+                      Open
+                    </button>
+                  </div>
+                  {selectedGoalPlan ? (
+                    <div className="rounded-md border border-neutral-200 dark:border-neutral-700 p-2 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs font-medium text-neutral-700 dark:text-neutral-200">{selectedGoalPlan.title}</div>
+                        <div className="text-[10px] text-neutral-500 dark:text-neutral-400">
+                          req {selectedGoalPlan.requirements.length} • tasks {selectedGoalPlan.tasks.length}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          className="h-7 px-2.5 rounded-md bg-blue-600 text-white text-[11px] hover:bg-blue-700 disabled:opacity-50"
+                          onClick={() => { void runSelectedGoalPlan() }}
+                          disabled={startingRun || stoppingRun}
+                        >
+                          RUN
+                        </button>
+                        <button
+                          type="button"
+                          className="h-7 px-2.5 rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-200 text-[11px] hover:bg-amber-100 dark:hover:bg-amber-900/60 disabled:opacity-50"
+                          onClick={() => { void handlePause() }}
+                          disabled={!isRunning || stoppingRun}
+                        >
+                          PAUSE
+                        </button>
+                        <button
+                          type="button"
+                          className="h-7 px-2.5 rounded-md border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-200 text-[11px] hover:bg-red-100 dark:hover:bg-red-900/60 disabled:opacity-50"
+                          onClick={() => { void handleCancel() }}
+                          disabled={!canStopRun || stoppingRun}
+                        >
+                          CANCEL
+                        </button>
+                        <button
+                          type="button"
+                          className="h-7 px-2.5 rounded-md border border-red-300 dark:border-red-700 text-red-700 dark:text-red-300 text-[11px] hover:bg-red-50 dark:hover:bg-red-950/30"
+                          onClick={deleteSelectedGoalPlan}
+                        >
+                          DELETE
+                        </button>
+                        <button
+                          type="button"
+                          className="h-7 px-2.5 rounded-md border border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300 text-[11px] hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                          onClick={() => { void handleGitCommitAndPush() }}
+                        >
+                          COMMIT and PUSH
+                        </button>
+                        <button
+                          type="button"
+                          className="h-7 px-2.5 rounded-md border border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300 text-[11px] hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                          onClick={() => { void handleGitRollback() }}
+                        >
+                          ROLLBACK
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                      No saved goal plan. Use New to run the setup wizard.
+                    </div>
+                  )}
+                </div>
+              </DashboardRow>
+            )}
+
             {/* Goal display */}
             {goalText && (
               <DashboardRow label="Goal">
@@ -914,6 +1727,16 @@ export function OrchestratorPane({
           </div>
         </>
       )}
+      <GoalWizardModal
+        visible={wizardVisible}
+        step={wizardStep}
+        draft={wizardDraft}
+        mode={wizardMode}
+        onClose={() => setWizardVisible(false)}
+        onChangeStep={setWizardStep}
+        onChangeDraft={(updater) => setWizardDraft((prev) => updater(prev))}
+        onSave={saveGoalPlanFromWizard}
+      />
     </div>
   )
 }

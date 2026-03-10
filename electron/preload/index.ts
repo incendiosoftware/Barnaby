@@ -387,6 +387,9 @@ const api = {
   gitRelease(workspaceRoot: string, selectedPaths?: string[]) {
     return ipcRenderer.invoke('agentorchestrator:gitRelease', workspaceRoot, selectedPaths) as Promise<{ ok: boolean; error?: string }>
   },
+  gitRollback(workspaceRoot: string, selectedPaths?: string[]) {
+    return ipcRenderer.invoke('agentorchestrator:gitRollback', workspaceRoot, selectedPaths) as Promise<{ ok: boolean; error?: string }>
+  },
   setRecentWorkspaces(list: string[]) {
     ipcRenderer.send('agentorchestrator:setRecentWorkspaces', list)
   },

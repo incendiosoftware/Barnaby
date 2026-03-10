@@ -30,6 +30,7 @@ import { McpServerManager, type McpServerConfig } from './mcpClient'
 import { truncateHistoryWithMeta, type HistoryMessage } from './historyTruncation'
 
 const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
+const WORKSPACE_BUNDLE_FILENAME = '.barnaby-workspace.json'
 const WORKSPACE_LOCK_DIRNAME = '.barnaby'
 const WORKSPACE_LOCK_FILENAME = 'active-token.json'
 const WORKSPACE_LOCK_HEARTBEAT_INTERVAL_MS = 5000
@@ -163,6 +164,22 @@ type WorkspaceConfigSettingsPayload = {
   deniedAutoReadPrefixes?: string[]
   deniedAutoWritePrefixes?: string[]
   cursorAllowBuilds?: boolean
+}
+
+type BarnabyWorkspaceFolder = {
+  id: string
+  path: string
+  name?: string
+  settings?: WorkspaceConfigSettingsPayload
+}
+
+type BarnabyWorkspaceFile = {
+  version: 1
+  app: 'Barnaby'
+  kind: 'workspace'
+  savedAt: number
+  activeFolderId?: string
+  folders: BarnabyWorkspaceFolder[]
 }
 type ContextMenuKind = 'input-selection' | 'chat-selection'
 type ViewMenuDockPanelId =
@@ -723,6 +740,300 @@ function readPersistedAppState() {
   } catch (err) {
     appendRuntimeLog('read-app-state-failed', errorMessage(err), 'warn')
     return null
+  }
+}
+
+function normalizeWorkspaceRoots(raw: unknown, preferredRoot?: string): string[] {
+  const roots: string[] = []
+  const seen = new Set<string>()
+  const pushRoot = (value: unknown) => {
+    if (typeof value !== 'string') return
+    const trimmed = value.trim()
+    if (!trimmed) return
+    const resolved = path.resolve(trimmed)
+    const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved
+    if (seen.has(key)) return
+    seen.add(key)
+    roots.push(resolved)
+  }
+  pushRoot(preferredRoot)
+  if (Array.isArray(raw)) {
+    for (const item of raw) pushRoot(item)
+  } else {
+    pushRoot(raw)
+  }
+  return roots
+}
+
+function isWorkspaceBundlePath(rawPath: string) {
+  return path.basename(rawPath).toLowerCase() === WORKSPACE_BUNDLE_FILENAME.toLowerCase()
+}
+
+function defaultWorkspaceConfigSettings(folderPath: string): WorkspaceConfigSettingsPayload {
+  return {
+    path: folderPath,
+    defaultModel: '',
+    permissionMode: 'proceed-always',
+    sandbox: 'workspace-write',
+    workspaceContext: '',
+    showWorkspaceContextInPrompt: false,
+    systemPrompt: '',
+    allowedCommandPrefixes: [],
+    allowedAutoReadPrefixes: [],
+    allowedAutoWritePrefixes: [],
+    deniedAutoReadPrefixes: [],
+    deniedAutoWritePrefixes: [],
+    cursorAllowBuilds: true,
+  }
+}
+
+function resolveWorkspaceRootFromAnyPath(rawPath: string): string {
+  const trimmed = typeof rawPath === 'string' ? rawPath.trim() : ''
+  if (!trimmed) throw new Error('Workspace path is required.')
+  const resolved = path.resolve(trimmed)
+  return isWorkspaceBundlePath(resolved) ? path.dirname(resolved) : resolved
+}
+
+function getWorkspaceBundleFilePathForRoot(workspaceRoot: string) {
+  return path.join(workspaceRoot, WORKSPACE_BUNDLE_FILENAME)
+}
+
+function upsertWorkspaceBundleFolder(
+  workspaceRoot: string,
+  settings?: WorkspaceConfigSettingsPayload,
+): { ok: boolean; workspaceRoot: string; workspaceFilePath: string; error?: string } {
+  let resolvedRoot = ''
+  try {
+    resolvedRoot = resolveWorkspaceRootPath(workspaceRoot)
+  } catch (err) {
+    return { ok: false, workspaceRoot: path.resolve(workspaceRoot || '.'), workspaceFilePath: '', error: errorMessage(err) }
+  }
+  const workspaceFilePath = getWorkspaceBundleFilePathForRoot(resolvedRoot)
+  const folderSettings = sanitizeWorkspaceConfigSettings(resolvedRoot, settings ?? defaultWorkspaceConfigSettings(resolvedRoot))
+  const defaultFolder: BarnabyWorkspaceFolder = {
+    id: 'folder-1',
+    path: '.',
+    name: path.basename(resolvedRoot),
+    settings: folderSettings,
+  }
+  let next: BarnabyWorkspaceFile = {
+    version: 1,
+    app: 'Barnaby',
+    kind: 'workspace',
+    savedAt: Date.now(),
+    activeFolderId: defaultFolder.id,
+    folders: [defaultFolder],
+  }
+  try {
+    if (fs.existsSync(workspaceFilePath)) {
+      const raw = fs.readFileSync(workspaceFilePath, 'utf8')
+      const parsed = JSON.parse(raw) as Partial<BarnabyWorkspaceFile>
+      if (parsed && parsed.app === 'Barnaby' && parsed.kind === 'workspace' && Array.isArray(parsed.folders) && parsed.folders.length > 0) {
+        const folders = parsed.folders
+          .filter((item): item is BarnabyWorkspaceFolder => Boolean(item && typeof item === 'object'))
+          .map((item, index) => {
+            const itemPath = typeof item.path === 'string' && item.path.trim() ? item.path.trim() : '.'
+            const absolute = path.isAbsolute(itemPath) ? path.resolve(itemPath) : path.resolve(resolvedRoot, itemPath)
+            const portable = toPortableWorkspacePath(resolvedRoot, absolute)
+            return {
+              id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `folder-${index + 1}`,
+              path: portable,
+              name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : path.basename(absolute),
+              settings: item.settings && typeof item.settings === 'object'
+                ? sanitizeWorkspaceConfigSettings(absolute, item.settings)
+                : undefined,
+            } as BarnabyWorkspaceFolder
+          })
+        const rootFolderIndex = folders.findIndex((item) => {
+          const absolute = path.isAbsolute(item.path) ? path.resolve(item.path) : path.resolve(resolvedRoot, item.path)
+          return path.resolve(absolute) === resolvedRoot
+        })
+        if (rootFolderIndex >= 0) {
+          folders[rootFolderIndex] = {
+            ...folders[rootFolderIndex],
+            path: '.',
+            settings: folderSettings,
+          }
+        } else {
+          folders.unshift(defaultFolder)
+        }
+        const activeFolderId =
+          typeof parsed.activeFolderId === 'string' && parsed.activeFolderId.trim()
+            ? parsed.activeFolderId.trim()
+            : folders[0]?.id
+        next = {
+          version: 1,
+          app: 'Barnaby',
+          kind: 'workspace',
+          savedAt: Date.now(),
+          activeFolderId,
+          folders,
+        }
+      }
+    }
+    fs.writeFileSync(workspaceFilePath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+    return { ok: true, workspaceRoot: resolvedRoot, workspaceFilePath }
+  } catch (err) {
+    return { ok: false, workspaceRoot: resolvedRoot, workspaceFilePath, error: errorMessage(err) }
+  }
+}
+
+function normalizeRecentWorkspaceFiles(rawList: unknown): string[] {
+  if (!Array.isArray(rawList)) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const item of rawList) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (!trimmed) continue
+    let root = ''
+    try {
+      root = resolveWorkspaceRootFromAnyPath(trimmed)
+    } catch {
+      continue
+    }
+    const ensured = upsertWorkspaceBundleFolder(root)
+    if (!ensured.ok || !ensured.workspaceFilePath) continue
+    const key = process.platform === 'win32' ? ensured.workspaceFilePath.toLowerCase() : ensured.workspaceFilePath
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(ensured.workspaceFilePath)
+  }
+  return out
+}
+
+function toPortableWorkspacePath(anchorRoot: string, workspaceRoot: string): string {
+  const relative = path.relative(anchorRoot, workspaceRoot)
+  if (!relative) return '.'
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    return workspaceRoot
+  }
+  return relative.replace(/\\/g, '/')
+}
+
+function readWorkspaceBundleFromRoot(rawRoot: string): { workspaceRoot: string; workspaceList: string[]; sourcePath: string } | null {
+  const root = typeof rawRoot === 'string' ? rawRoot.trim() : ''
+  if (!root) return null
+  let resolvedRoot = ''
+  try {
+    resolvedRoot = resolveWorkspaceRootPath(root)
+  } catch {
+    return null
+  }
+  const sourcePath = path.join(resolvedRoot, WORKSPACE_BUNDLE_FILENAME)
+  if (!fs.existsSync(sourcePath)) return null
+  try {
+    const raw = fs.readFileSync(sourcePath, 'utf8')
+    if (!raw.trim()) return null
+    const parsed = JSON.parse(raw) as Partial<BarnabyWorkspaceFile>
+    if (!parsed || typeof parsed !== 'object') return null
+    if (parsed.app !== 'Barnaby' || parsed.kind !== 'workspace') return null
+    if (!Array.isArray(parsed.folders)) return null
+    const folders: BarnabyWorkspaceFolder[] = parsed.folders
+      .filter((item): item is BarnabyWorkspaceFolder => Boolean(item && typeof item === 'object'))
+      .map((item, index) => {
+        const folderPath = typeof item.path === 'string' ? item.path.trim() : ''
+        if (!folderPath) return null
+        const absolutePath = path.isAbsolute(folderPath)
+          ? path.resolve(folderPath)
+          : path.resolve(resolvedRoot, folderPath)
+        return {
+          id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `folder-${index + 1}`,
+          name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : undefined,
+          path: absolutePath,
+        } as BarnabyWorkspaceFolder
+      })
+      .filter((item): item is BarnabyWorkspaceFolder => Boolean(item))
+    if (folders.length === 0) return null
+    const activeFolderId = typeof parsed.activeFolderId === 'string' && parsed.activeFolderId.trim()
+      ? parsed.activeFolderId.trim()
+      : folders[0].id
+    const activeFolder = folders.find((item) => item.id === activeFolderId) ?? folders[0]
+    const workspaceList = normalizeWorkspaceRoots(folders.map((item) => item.path), activeFolder.path)
+    const workspaceRoot = workspaceList[0] ?? activeFolder.path
+    return {
+      workspaceRoot,
+      workspaceList,
+      sourcePath,
+    }
+  } catch (err) {
+    appendRuntimeLog('read-workspace-bundle-failed', { root: resolvedRoot, error: errorMessage(err) }, 'warn')
+    return null
+  }
+}
+
+function extractWorkspaceSelectionFromState(rawState: unknown): { workspaceRoot: string; workspaceList: string[] } {
+  if (!rawState || typeof rawState !== 'object') {
+    return { workspaceRoot: '', workspaceList: [] }
+  }
+  const record = rawState as { workspaceRoot?: unknown; workspaceList?: unknown }
+  const preferredRoot = typeof record.workspaceRoot === 'string' ? record.workspaceRoot : ''
+  const list = normalizeWorkspaceRoots(record.workspaceList, preferredRoot)
+  return {
+    workspaceRoot: list[0] ?? '',
+    workspaceList: list,
+  }
+}
+
+function withWorkspaceBundleSelection(rawState: unknown): unknown {
+  const persisted = extractWorkspaceSelectionFromState(rawState)
+  const searchRoots = normalizeWorkspaceRoots(
+    [currentWindowWorkspaceRoot, persisted.workspaceRoot, ...persisted.workspaceList],
+    '',
+  )
+  for (const candidate of searchRoots) {
+    const loaded = readWorkspaceBundleFromRoot(candidate)
+    if (!loaded) continue
+    if (rawState && typeof rawState === 'object' && !Array.isArray(rawState)) {
+      return {
+        ...(rawState as Record<string, unknown>),
+        workspaceRoot: loaded.workspaceRoot,
+        workspaceList: loaded.workspaceList,
+      }
+    }
+    return {
+      version: 1,
+      workspaceRoot: loaded.workspaceRoot,
+      workspaceList: loaded.workspaceList,
+    }
+  }
+  return rawState
+}
+
+function syncWorkspaceBundleFromState(rawState: unknown): { ok: boolean; path?: string; reason?: string } {
+  const selection = extractWorkspaceSelectionFromState(rawState)
+  if (!selection.workspaceRoot || selection.workspaceList.length === 0) {
+    return { ok: false, reason: 'no-workspace-selection' }
+  }
+  let anchorRoot = ''
+  try {
+    anchorRoot = resolveWorkspaceRootPath(selection.workspaceRoot)
+  } catch {
+    return { ok: false, reason: 'invalid-workspace-root' }
+  }
+  const folders: BarnabyWorkspaceFolder[] = selection.workspaceList.map((folderPath, index) => ({
+    id: `folder-${index + 1}`,
+    path: toPortableWorkspacePath(anchorRoot, folderPath),
+    name: path.basename(folderPath),
+  }))
+  const workspace: BarnabyWorkspaceFile = {
+    version: 1,
+    app: 'Barnaby',
+    kind: 'workspace',
+    savedAt: Date.now(),
+    activeFolderId: folders[0]?.id,
+    folders,
+  }
+  const bundlePath = path.join(anchorRoot, WORKSPACE_BUNDLE_FILENAME)
+  const nextRaw = `${JSON.stringify(workspace, null, 2)}\n`
+  try {
+    const existingRaw = fs.existsSync(bundlePath) ? fs.readFileSync(bundlePath, 'utf8') : null
+    if (existingRaw === nextRaw) return { ok: true, path: bundlePath }
+    fs.writeFileSync(bundlePath, nextRaw, 'utf8')
+    return { ok: true, path: bundlePath }
+  } catch (err) {
+    appendRuntimeLog('write-workspace-bundle-failed', { path: bundlePath, error: errorMessage(err) }, 'warn')
+    return { ok: false, reason: 'write-failed' }
   }
 }
 
@@ -1654,7 +1965,7 @@ function ensureWorkspaceLockHeartbeatTimer() {
 function acquireWorkspaceLock(workspaceRoot: string): WorkspaceLockAcquireResult {
   let root = ''
   try {
-    root = resolveWorkspaceRootPath(workspaceRoot)
+    root = resolveWorkspaceRootPath(resolveWorkspaceRootFromAnyPath(workspaceRoot))
   } catch (err) {
     const resolvedPath = path.resolve(workspaceRoot || '.')
     return {
@@ -1663,6 +1974,18 @@ function acquireWorkspaceLock(workspaceRoot: string): WorkspaceLockAcquireResult
       message: errorMessage(err),
       workspaceRoot: resolvedPath,
       lockFilePath: getWorkspaceLockFilePath(resolvedPath),
+      owner: null,
+    }
+  }
+
+  const ensuredWorkspace = upsertWorkspaceBundleFolder(root)
+  if (!ensuredWorkspace.ok) {
+    return {
+      ok: false,
+      reason: 'error',
+      message: ensuredWorkspace.error ?? 'Could not initialize workspace file.',
+      workspaceRoot: root,
+      lockFilePath: getWorkspaceLockFilePath(root),
       owner: null,
     }
   }
@@ -2730,6 +3053,27 @@ async function gitBuild(workspaceRoot: string, _selectedPaths?: string[]): Promi
   return { ok: result.ok, error: result.error }
 }
 
+async function gitRollback(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }> {
+  const root = path.resolve(workspaceRoot)
+  const status = await getGitStatus(root)
+  if (!status.ok) return { ok: false, error: status.error ?? 'Cannot read git status.' }
+  if (status.clean) return { ok: false, error: 'Nothing to rollback.' }
+
+  const normalizedSelection = normalizeSelectedGitPaths(selectedPaths)
+  const selection = buildCommitSelection(status.entries, normalizedSelection)
+  if (selection.hasSelection && selection.selectedEntries.length === 0) {
+    return { ok: false, error: 'Selected files no longer have tracked changes.' }
+  }
+
+  const restoreArgs = selection.hasSelection
+    ? ['restore', '--staged', '--worktree', '--', ...selection.pathspecs]
+    : ['restore', '--staged', '--worktree', '.']
+  const restoreResult = await runGitCommand(root, restoreArgs)
+  if (!restoreResult.ok) return { ok: false, error: restoreResult.error ?? 'git restore failed' }
+
+  return { ok: true }
+}
+
 async function getGitStatus(workspaceRoot: string): Promise<GitStatusResult> {
   const root = path.resolve(workspaceRoot)
   const base: Omit<GitStatusResult, 'ok'> = {
@@ -3238,7 +3582,8 @@ ipcMain.handle('agentorchestrator:saveTranscriptDirect', async (_evt, workspaceR
 })
 
 ipcMain.handle('agentorchestrator:loadAppState', async () => {
-  return readPersistedAppState()
+  const persisted = readPersistedAppState()
+  return withWorkspaceBundleSelection(persisted)
 })
 
 ipcMain.handle('agentorchestrator:saveAppState', async (_evt, state: unknown) => {
@@ -3705,7 +4050,7 @@ function sanitizeWorkspaceConfigSettings(folderPath: string, raw: unknown): Work
 ipcMain.handle('agentorchestrator:writeWorkspaceConfig', async (_evt, folderPath: string, settings?: unknown) => {
   const trimmedFolder = typeof folderPath === 'string' ? folderPath.trim() : ''
   if (!trimmedFolder) throw new Error('Workspace folder path is required.')
-  const resolvedFolder = path.resolve(trimmedFolder)
+  const resolvedFolder = resolveWorkspaceRootFromAnyPath(trimmedFolder)
   if (!isDirectory(resolvedFolder)) throw new Error('Workspace folder does not exist.')
 
   const configPath = path.join(resolvedFolder, WORKSPACE_CONFIG_FILENAME)
@@ -3717,6 +4062,7 @@ ipcMain.handle('agentorchestrator:writeWorkspaceConfig', async (_evt, folderPath
     workspace: workspaceSettings,
   }
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
+  upsertWorkspaceBundleFolder(resolvedFolder, workspaceSettings)
   return true
 })
 
@@ -3810,8 +4156,12 @@ ipcMain.handle('agentorchestrator:gitBuild', async (_evt, workspaceRoot: string,
   return gitBuild(workspaceRoot, selectedPaths)
 })
 
+ipcMain.handle('agentorchestrator:gitRollback', async (_evt, workspaceRoot: string, selectedPaths?: string[]) => {
+  return gitRollback(workspaceRoot, selectedPaths)
+})
+
 ipcMain.on('agentorchestrator:setRecentWorkspaces', (_evt, list: string[]) => {
-  recentWorkspaces = Array.isArray(list) ? list : []
+  recentWorkspaces = normalizeRecentWorkspaceFiles(list)
   setAppMenu()
 })
 
@@ -4196,9 +4546,9 @@ function createAboutWindow() {
 function setAppMenu() {
   const recentSubmenu: Electron.MenuItemConstructorOptions[] =
     recentWorkspaces.length > 0
-      ? recentWorkspaces.slice(0, 10).map((workspacePath) => ({
-        label: path.basename(workspacePath) || workspacePath,
-        click: () => sendMenuAction('openWorkspace', { path: workspacePath }),
+      ? recentWorkspaces.slice(0, 10).map((workspaceFilePath) => ({
+        label: `${path.basename(path.dirname(workspaceFilePath)) || '(workspace)'} - ${workspaceFilePath}`,
+        click: () => sendMenuAction('openWorkspace', { path: path.dirname(workspaceFilePath) }),
       }))
       : [{ label: '(none)', enabled: false }]
 

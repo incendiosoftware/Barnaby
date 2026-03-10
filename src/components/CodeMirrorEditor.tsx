@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { EditorView } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
@@ -72,6 +72,16 @@ export function CodeMirrorEditor({
   className = '',
   'data-testid': dataTestId,
 }: CodeMirrorEditorProps) {
+  const onChangeRef = useRef(onChange)
+  const onFocusRef = useRef(onFocus)
+  const onSaveRef = useRef(onSave)
+  const onSaveAsRef = useRef(onSaveAs)
+
+  useEffect(() => { onChangeRef.current = onChange }, [onChange])
+  useEffect(() => { onFocusRef.current = onFocus }, [onFocus])
+  useEffect(() => { onSaveRef.current = onSave }, [onSave])
+  useEffect(() => { onSaveAsRef.current = onSaveAs }, [onSaveAs])
+
   const langSupport = useMemo(() => getLanguageSupport(filename), [filename])
 
   const extensions = useMemo(() => {
@@ -146,21 +156,31 @@ export function CodeMirrorEditor({
     return arr
   }, [extensions, theme, darkMode])
 
+  const handleChange = useCallback((nextValue: string) => {
+    onChangeRef.current?.(nextValue)
+  }, [])
+
+  const handleFocus = useCallback(() => {
+    onFocusRef.current?.()
+  }, [])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault()
+      if (e.shiftKey) onSaveAsRef.current?.()
+      else onSaveRef.current?.()
+    }
+  }, [])
+
   return (
     <CodeMirror
       value={value}
-      onChange={onChange}
+      onChange={handleChange}
       readOnly={readOnly}
       basicSetup={basicSetup}
       extensions={activeExtensions}
-      onFocus={onFocus}
-      onKeyDown={(e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-          e.preventDefault()
-          if (e.shiftKey) onSaveAs?.()
-          else onSave?.()
-        }
-      }}
+      onFocus={handleFocus}
+      onKeyDown={handleKeyDown}
       className={`flex-1 min-h-0 ${className}`.trim()}
       data-testid={dataTestId}
       height="100%"

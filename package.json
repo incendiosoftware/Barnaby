@@ -1,7 +1,7 @@
 {
   "name": "@barnaby.build/barnaby",
   "productName": "Barnaby",
-  "version": "0.0.232",
+  "version": "0.0.233",
   "main": "dist-electron/main/index.js",
   "bin": {
     "barnaby": "bin/barnaby.cjs"
@@ -12,12 +12,21 @@
     "public",
     "build",
     "bin",
+    "docs/screenshots",
     "scripts",
     "package.json"
   ],
   "description": "Barnaby: local agent loops without API keys.",
   "author": "stuart",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/incendiosoftware/Barnaby.git"
+  },
+  "homepage": "https://github.com/incendiosoftware/Barnaby",
+  "bugs": {
+    "url": "https://github.com/incendiosoftware/Barnaby/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -48,7 +57,7 @@
     "release:notes": "node scripts/create-release-notes.mjs",
     "release:prepare": "node scripts/run-with-version-bump.mjs \"npm run release:notes && npm run build:portable:raw\"",
     "postinstall": "node scripts/shortcut-win.mjs && node scripts/rebuild-native.mjs",
-    "publish:npm": "npm run build && npm publish",
+    "publish:npm": "npm run build:dist:raw && npm pack --dry-run && npm publish",
     "package:win": "npm run build:dist && electron-packager . Barnaby --platform=win32 --arch=x64 --out=release/0.0.1/packaged --overwrite --asar --prune=true --icon=build/icon.ico",
     "preview": "vite preview",
     "pretest": "vite build --mode=test",

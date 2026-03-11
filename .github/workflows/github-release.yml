@@ -32,8 +32,10 @@ jobs:
         run: npm run build:release
 
       - name: Upload release artifacts
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release/*/Barnaby_*_portable.exe
-            release/*/Barnaby_*_setup.exe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload ${{ github.event.release.tag_name || format('v{0}', github.ref_name) }} `
+            release\*\Barnaby_*_portable.exe `
+            release\*\Barnaby_*_setup.exe `
+            --clobber

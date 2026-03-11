@@ -189,7 +189,7 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
       ctx.setLayoutMode('vertical')
       ctx.setShowWorkspaceWindow(true)
       ctx.setShowGitWindow(false)
-      ctx.setShowSettingsWindow(false)
+      ctx.setShowSettingsWindow(true)
       ctx.setShowCodeWindow(true)
       ctx.setCodeWindowTab('code')
       ctx.setDockTab('explorer')

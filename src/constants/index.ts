@@ -216,7 +216,7 @@ export const TOKEN_ESTIMATE_THREAD_OVERHEAD_TOKENS = 700
 /** Codex/Codex-style providers: system prompt, tool definitions, file-tree RAG, etc. */
 export const TOKEN_ESTIMATE_CODEX_SYSTEM_OVERHEAD = 3500
 export const APP_STATE_AUTOSAVE_MS = 800
-export const DEFAULT_THEME_ID = 'graphite-void'
+export const DEFAULT_THEME_ID = 'default'
 export const CUSTOM_THEME_ID = 'custom'
 export const DEFAULT_FONT_FAMILY = 'inter'
 export const DEFAULT_FONT_CODE = 'consolas'

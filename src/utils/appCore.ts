@@ -1095,7 +1095,7 @@ export function parsePersistedAppState(
             : 'vertical',
         showWorkspaceWindow: typeof snapshot.showWorkspaceWindow === 'boolean' ? snapshot.showWorkspaceWindow : true,
         showGitWindow: typeof snapshot.showGitWindow === 'boolean' ? snapshot.showGitWindow : false,
-        showSettingsWindow: typeof snapshot.showSettingsWindow === 'boolean' ? snapshot.showSettingsWindow : false,
+        showSettingsWindow: typeof snapshot.showSettingsWindow === 'boolean' ? snapshot.showSettingsWindow : true,
         showCodeWindow: typeof snapshot.showCodeWindow === 'boolean' ? snapshot.showCodeWindow : true,
         codeWindowTab:
           snapshot.codeWindowTab === 'code' || snapshot.codeWindowTab === 'settings' ? snapshot.codeWindowTab : 'code',

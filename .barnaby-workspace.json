@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "app": "Barnaby",
+  "kind": "workspace",
+  "savedAt": 1773220928885,
+  "activeFolderId": "folder-1",
+  "folders": [
+    {
+      "id": "folder-1",
+      "path": ".",
+      "name": "barnaby-app",
+      "settings": {
+        "path": "E:\\Barnaby\\barnaby-app",
+        "defaultModel": "gpt-5.4",
+        "permissionMode": "proceed-always",
+        "sandbox": "workspace-write",
+        "workspaceContext": "",
+        "showWorkspaceContextInPrompt": false,
+        "systemPrompt": "",
+        "allowedCommandPrefixes": [],
+        "allowedAutoReadPrefixes": [],
+        "allowedAutoWritePrefixes": [],
+        "deniedAutoReadPrefixes": [],
+        "deniedAutoWritePrefixes": [],
+        "cursorAllowBuilds": true
+      }
+    }
+  ]
+}

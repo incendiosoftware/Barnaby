@@ -1,11 +1,7 @@
 {
   "version": 3,
-  "phase": "failed",
-  "goal": {
-    "text": "# Untitled Goal Plan\n\n## Goal\nObjective:\nValidate that a user can create, edit, save, load, and execute a multi-step goal plan from the new wizard, then use plan-level controls safely.\n\nSuccess criteria:\n1. Open Orchestrator panel in Goal Run mode and create a new plan via the New button.\n2. Complete all 6 wizard steps with realistic content.\n3. In Step 2, add at least 3 clarifying questions and answers that materially change requirements.\n4. In Step 3, produce 6-10 numbered requirements and reorder at least one requirement.\n5. In Step 4, produce 6-10 tasks and reorder at least one task.\n6. In Step 5, define at least 3 agents with distinct roles.\n7. In Step 6, set non-default execution settings (parallel panels, attempts, iterations, model/provider fields).\n8. Save the plan and confirm it appears under Loaded Plan with the correct title.\n9. Re-open the saved plan and edit at least one requirement, one task, and one agent role; save again.\n10. Run the selected plan and confirm orchestrator starts from the generated structured prompt.\n11. While running, test PAUSE and CANCEL behavior and confirm status messaging is clear.\n12. Test COMMIT and PUSH macro behavior in a controlled way (allow graceful failure if remote/auth is unavailable).\n13. Test ROLLBACK behavior and verify tracked changes are restored; confirm untracked files are not deleted.\n14. Validate that deleting the plan removes it from the selector.\n15. Produce a final validation summary with:\n   - Passed checks\n   - Failed checks\n   - Unexpected behavior\n   - Recommended fixes (if any)\n\nConstraints:\n- Do not use destructive git commands beyond the provided macro controls.\n- Do not remove unrelated workspace files.\n- Keep a concise test log of each step and observed result.\n\nDeliverable:\nReturn a structured markdown report with:\n- Test environment\n- Step-by-step results\n- Final verdict (PASS / PASS WITH ISSUES / FAIL)\n- Top 3 follow-up actions\n\n## Execution Constraints\n- Max parallel panels: 2\n- Max task attempts: 3\n- Iteration budget: 3\n- Worker provider: codex",
-    "sourceFile": null,
-    "createdAt": 1773179603153
-  },
+  "phase": "idle",
+  "goal": null,
   "tasks": [],
   "activePanels": [],
   "config": {
@@ -15,153 +11,11 @@
     "maxParallelPanels": 2,
     "maxTaskAttempts": 3
   },
-  "lastHeartbeat": 1773179648401,
-  "startedAt": 1773179603153,
-  "completedAt": 1773179638420,
-  "error": "Goal run failed. 1/1 tasks failed: Implement goal",
+  "lastHeartbeat": 1773185124520,
+  "startedAt": null,
+  "completedAt": null,
+  "error": null,
   "currentRun": null,
-  "goalRun": {
-    "id": "mml5cq8h-ldc0oi",
-    "goal": "# Untitled Goal Plan\n\n## Goal\nObjective:\nValidate that a user can create, edit, save, load, and execute a multi-step goal plan from the new wizard, then use plan-level controls safely.\n\nSuccess criteria:\n1. Open Orchestrator panel in Goal Run mode and create a new plan via the New button.\n2. Complete all 6 wizard steps with realistic content.\n3. In Step 2, add at least 3 clarifying questions and answers that materially change requirements.\n4. In Step 3, produce 6-10 numbered requirements and reorder at least one requirement.\n5. In Step 4, produce 6-10 tasks and reorder at least one task.\n6. In Step 5, define at least 3 agents with distinct roles.\n7. In Step 6, set non-default execution settings (parallel panels, attempts, iterations, model/provider fields).\n8. Save the plan and confirm it appears under Loaded Plan with the correct title.\n9. Re-open the saved plan and edit at least one requirement, one task, and one agent role; save again.\n10. Run the selected plan and confirm orchestrator starts from the generated structured prompt.\n11. While running, test PAUSE and CANCEL behavior and confirm status messaging is clear.\n12. Test COMMIT and PUSH macro behavior in a controlled way (allow graceful failure if remote/auth is unavailable).\n13. Test ROLLBACK behavior and verify tracked changes are restored; confirm untracked files are not deleted.\n14. Validate that deleting the plan removes it from the selector.\n15. Produce a final validation summary with:\n   - Passed checks\n   - Failed checks\n   - Unexpected behavior\n   - Recommended fixes (if any)\n\nConstraints:\n- Do not use destructive git commands beyond the provided macro controls.\n- Do not remove unrelated workspace files.\n- Keep a concise test log of each step and observed result.\n\nDeliverable:\nReturn a structured markdown report with:\n- Test environment\n- Step-by-step results\n- Final verdict (PASS / PASS WITH ISSUES / FAIL)\n- Top 3 follow-up actions\n\n## Execution Constraints\n- Max parallel panels: 2\n- Max task attempts: 3\n- Iteration budget: 3\n- Worker provider: codex",
-    "status": "failed",
-    "tasks": [
-      {
-        "id": "mml5cx0k-xesmue",
-        "title": "Implement goal",
-        "description": "# Untitled Goal Plan\n\n## Goal\nObjective:\nValidate that a user can create, edit, save, load, and execute a multi-step goal plan from the new wizard, then use plan-level controls safely.\n\nSuccess criteria:\n1. Open Orchestrator panel in Goal Run mode and create a new plan via the New button.\n2. Complete all 6 wizard steps with realistic content.\n3. In Step 2, add at least 3 clarifying questions and answers that materially change requirements.\n4. In Step 3, produce 6-10 numbered requirements and reorder at least one requirement.\n5. In Step 4, produce 6-10 tasks and reorder at least one task.\n6. In Step 5, define at least 3 agents with distinct roles.\n7. In Step 6, set non-default execution settings (parallel panels, attempts, iterations, model/provider fields).\n8. Save the plan and confirm it appears under Loaded Plan with the correct title.\n9. Re-open the saved plan and edit at least one requirement, one task, and one agent role; save again.\n10. Run the selected plan and confirm orchestrator starts from the generated structured prompt.\n11. While running, test PAUSE and CANCEL behavior and confirm status messaging is clear.\n12. Test COMMIT and PUSH macro behavior in a controlled way (allow graceful failure if remote/auth is unavailable).\n13. Test ROLLBACK behavior and verify tracked changes are restored; confirm untracked files are not deleted.\n14. Validate that deleting the plan removes it from the selector.\n15. Produce a final validation summary with:\n   - Passed checks\n   - Failed checks\n   - Unexpected behavior\n   - Recommended fixes (if any)\n\nConstraints:\n- Do not use destructive git commands beyond the provided macro controls.\n- Do not remove unrelated workspace files.\n- Keep a concise test log of each step and observed result.\n\nDeliverable:\nReturn a structured markdown report with:\n- Test environment\n- Step-by-step results\n- Final verdict (PASS / PASS WITH ISSUES / FAIL)\n- Top 3 follow-up actions\n\n## Execution Constraints\n- Max parallel panels: 2\n- Max task attempts: 3\n- Iteration budget: 3\n- Worker provider: codex",
-        "role": "builder",
-        "status": "failed",
-        "dependsOn": [],
-        "attempts": 3,
-        "createdAt": 1773179611940,
-        "startedAt": 1773179629878,
-        "completedAt": 1773179638406
-      }
-    ],
-    "createdAt": 1773179603153,
-    "completedAt": 1773179638420,
-    "summary": "Goal run failed. 1/1 tasks failed: Implement goal"
-  },
-  "log": [
-    {
-      "id": "mml5cq8h-oag7t4",
-      "actor": "user",
-      "kind": "goal",
-      "text": "# Untitled Goal Plan\n\n## Goal\nObjective:\nValidate that a user can create, edit, save, load, and execute a multi-step goal plan from the new wizard, then use plan-level controls safely.\n\nSuccess criteria:\n1. Open Orchestrator panel in Goal Run mode and create a new plan via the New button.\n2. Complete all 6 wizard steps with realistic content.\n3. In Step 2, add at least 3 clarifying questions and answers that materially change requirements.\n4. In Step 3, produce 6-10 numbered requirements and reorder at least one requirement.\n5. In Step 4, produce 6-10 tasks and reorder at least one task.\n6. In Step 5, define at least 3 agents with distinct roles.\n7. In Step 6, set non-default execution settings (parallel panels, attempts, iterations, model/provider fields).\n8. Save the plan and confirm it appears under Loaded Plan with the correct title.\n9. Re-open the saved plan and edit at least one requirement, one task, and one agent role; save again.\n10. Run the selected plan and confirm orchestrator starts from the generated structured prompt.\n11. While running, test PAUSE and CANCEL behavior and confirm status messaging is clear.\n12. Test COMMIT and PUSH macro behavior in a controlled way (allow graceful failure if remote/auth is unavailable).\n13. Test ROLLBACK behavior and verify tracked changes are restored; confirm untracked files are not deleted.\n14. Validate that deleting the plan removes it from the selector.\n15. Produce a final validation summary with:\n   - Passed checks\n   - Failed checks\n   - Unexpected behavior\n   - Recommended fixes (if any)\n\nConstraints:\n- Do not use destructive git commands beyond the provided macro controls.\n- Do not remove unrelated workspace files.\n- Keep a concise test log of each step and observed result.\n\nDeliverable:\nReturn a structured markdown report with:\n- Test environment\n- Step-by-step results\n- Final verdict (PASS / PASS WITH ISSUES / FAIL)\n- Top 3 follow-up actions\n\n## Execution Constraints\n- Max parallel panels: 2\n- Max task attempts: 3\n- Iteration budget: 3\n- Worker provider: codex",
-      "panelId": null,
-      "createdAt": 1773179603153
-    },
-    {
-      "id": "mml5cq8h-8btmqm",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Goal run mml5cq8h-ldc0oi started.",
-      "panelId": null,
-      "createdAt": 1773179603153
-    },
-    {
-      "id": "mml5cq8i-7zpr4b",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Spawning planner agent for task decomposition.",
-      "panelId": null,
-      "createdAt": 1773179603154
-    },
-    {
-      "id": "mml5cx0j-i1621r",
-      "actor": "orchestrator",
-      "kind": "response",
-      "text": "Planner output:\n",
-      "panelId": null,
-      "createdAt": 1773179611939
-    },
-    {
-      "id": "mml5cx0k-1cq47d",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Planner did not produce a valid task list. Using single-task fallback.",
-      "panelId": null,
-      "createdAt": 1773179611940
-    },
-    {
-      "id": "mml5cx0k-6wmfqq",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Decomposed into 1 tasks.",
-      "panelId": null,
-      "createdAt": 1773179611940
-    },
-    {
-      "id": "mml5cx16-kzzqx5",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Launching \"Implement goal\" (builder, attempt 1).",
-      "panelId": null,
-      "createdAt": 1773179611962
-    },
-    {
-      "id": "mml5d3wd-0ofqbp",
-      "actor": "system",
-      "kind": "error",
-      "text": "Task \"Implement goal\" error: Task \"Implement goal\" did not return a terminal [SIGNAL:...] response.",
-      "panelId": null,
-      "createdAt": 1773179620861
-    },
-    {
-      "id": "mml5d3wd-t1rwld",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Retrying \"Implement goal\" after error (1/3).",
-      "panelId": null,
-      "createdAt": 1773179620861
-    },
-    {
-      "id": "mml5d3ws-nor8b9",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Launching \"Implement goal\" (builder, attempt 2).",
-      "panelId": null,
-      "createdAt": 1773179620876
-    },
-    {
-      "id": "mml5dauf-v0dci8",
-      "actor": "system",
-      "kind": "error",
-      "text": "Task \"Implement goal\" error: Task \"Implement goal\" did not return a terminal [SIGNAL:...] response.",
-      "panelId": null,
-      "createdAt": 1773179629863
-    },
-    {
-      "id": "mml5dauf-3xea6z",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Retrying \"Implement goal\" after error (2/3).",
-      "panelId": null,
-      "createdAt": 1773179629863
-    },
-    {
-      "id": "mml5dauu-g1brwy",
-      "actor": "orchestrator",
-      "kind": "status",
-      "text": "Launching \"Implement goal\" (builder, attempt 3).",
-      "panelId": null,
-      "createdAt": 1773179629878
-    },
-    {
-      "id": "mml5dhfq-913d7o",
-      "actor": "system",
-      "kind": "error",
-      "text": "Task \"Implement goal\" error: Task \"Implement goal\" did not return a terminal [SIGNAL:...] response.",
-      "panelId": null,
-      "createdAt": 1773179638406
-    },
-    {
-      "id": "mml5dhg4-2kz0yp",
-      "actor": "orchestrator",
-      "kind": "result",
-      "text": "Goal run failed. 1/1 tasks failed: Implement goal",
-      "panelId": null,
-      "createdAt": 1773179638420
-    }
-  ]
+  "goalRun": null,
+  "log": []
 }

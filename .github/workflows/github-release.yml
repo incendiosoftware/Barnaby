@@ -34,7 +34,7 @@ jobs:
         run: npm test
 
       - name: Build Windows release artifacts
-        run: npm run build:release
+        run: npm run build:release:raw
 
       - name: Upload release artifacts on release event
         if: ${{ github.event_name == 'release' }}

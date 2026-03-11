@@ -54,6 +54,7 @@
     "package": "npm run build:portable",
     "deploy": "npm run package",
     "build:release": "npm run build:dist && electron-builder && node scripts/apply-exe-icon.mjs",
+    "build:release:raw": "npm run build:dist:raw && electron-builder --publish never && node scripts/apply-exe-icon.mjs",
     "release:notes": "node scripts/create-release-notes.mjs",
     "release:prepare": "node scripts/run-with-version-bump.mjs \"npm run release:notes && npm run build:portable:raw\"",
     "postinstall": "node scripts/shortcut-win.mjs && node scripts/rebuild-native.mjs",

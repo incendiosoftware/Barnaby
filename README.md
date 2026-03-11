@@ -1,15 +1,70 @@
 # Barnaby
 
-Barnaby is a desktop AI agent orchestrator for **agentic coordination** — connecting Codex, Claude, Gemini CLIs and OpenRouter APIs to deliver windowed agents, workspace-aware context, and a polished UI experience.
+**Barnaby is a desktop IDE for orchestrating multiple AI coding agents locally.**
 
-- **Agentic coordination**: Run multiple agents in parallel, compare models side-by-side, keep separate conversations per panel
-- **CLI providers**: Codex, Claude, Gemini — use your existing CLI logins, no API keys in Barnaby
-- **API provider**: OpenRouter — free-tier and paid models via API key (ideal when CLI quotas are exhausted)
-- **UI experience**: Split layouts (horizontal, vertical, grid), workspace window, dark/light themes, zoom, activity timeline
+Run Codex, Claude, Gemini, and OpenRouter-backed models side-by-side from a single workspace, with separate panels, shared project context, and an optional orchestrator for longer-running agent workflows.
+
+Barnaby lets developers treat AI agents like a team: design with one, code with another, review with a third.
+
+---
+
+## Screenshot
+
+![Barnaby UI](docs/screenshots/barnaby-main.png)
+
+Additional screenshots:
+
+- [Dark theme](docs/screenshots/barnaby-dark.png)
+- [Light theme](docs/screenshots/barnaby-light.png)
+
+---
+
+## Features
+
+- Run multiple AI agent sessions simultaneously
+- Compare models side-by-side in split or grid layouts
+- Orchestrate workflows between agents from a shared workspace
+- Works with existing CLI tools such as Codex, Claude Code, and Gemini CLI
+- Supports OpenRouter for API-based model access when CLI quotas are exhausted
+- Local-first architecture: your code stays on your machine
+- Multi-window agent and workspace management
+- Built for developers, with explorer, Git, settings, and streaming chat timelines
+
+---
+
+## Why Barnaby?
+
+Most AI coding tools operate one agent at a time.
+
+Barnaby is designed for parallel, role-based workflows where different agents handle different parts of the job while staying anchored to the same codebase.
+
+Example workflow:
+
+- Architecture agent: designs the solution
+- Coding agent: implements the change
+- Review agent: validates behavior and catches regressions
+
+All running in parallel from one desktop workspace.
+
+Barnaby is also pragmatic about provider choice. You can use the CLI tools you already pay for and sign into, or route requests through OpenRouter when you need broader model coverage.
+
+---
 
 ## Installation
 
-Barnaby is currently available by cloning the repository. Requires **Node.js 20+** (recommended: Node 22 LTS) and **npm**.
+Barnaby currently runs by cloning the repository locally.
+
+Requirements:
+
+- Node.js `>=20 <27` (Node 22 LTS recommended)
+- `npm`
+- Optional provider setup:
+  - Codex CLI
+  - Claude CLI / Claude Code
+  - Gemini CLI
+  - OpenRouter API key
+
+Clone and run in development:
 
 ```sh
 git clone https://github.com/incendiosoftware/Barnaby.git
@@ -18,88 +73,17 @@ npm install
 npm run dev
 ```
 
-If the postinstall step reports "Native module rebuild skipped", the terminal may still work via prebuilt binaries. If not, see [Built-in terminal note](#built-in-terminal-note).
+Build a desktop package:
 
-### Orchestrator plugin (optional)
+```sh
+npm run build
+```
 
-The Orchestrator is an optional add-on for autonomous agent loops. It is **not** bundled with Barnaby. See [barnaby.build](https://barnaby.build) for details.
+Releases:
 
----
+- https://github.com/incendiosoftware/Barnaby/releases
 
-Stuart Mackereth  
-https://barnaby.build  
-incendiosoftware@gmail.com  
-Incendio Trading Limited  
-
-## Screenshots
-
-<p align="center">
-  <img src="docs/screenshots/barnaby-dark.png" width="45%" alt="Barnaby dark" />
-  <img src="docs/screenshots/barnaby-light.png" width="45%" alt="Barnaby light" />
-</p>
-
-## Overview
-
-Barnaby provides:
-
-- **Multiple agent panels** with split layouts (horizontal, vertical, grid)
-- **Workspace window** with agent orchestrator, file explorer, Git status, and workspace settings
-- **Workspace selection** and per-workspace model defaults
-- **Provider routing** for Codex, Claude, Gemini (CLI) and OpenRouter (API)
-- **Connectivity checks** for each provider
-- **Streaming chat** with markdown, code blocks, and collapsible activity timeline
-- **Queue-aware sending** and auto-scroll
-- **View menu**: layout, workspace window toggle, zoom, fullscreen
-
-## Why Barnaby
-
-Barnaby unifies **CLI-based** providers (Codex, Claude, Gemini) and **API-based** OpenRouter so you can orchestrate agents without vendor lock-in.
-
-- **Agentic coordination**: Multiple agents side-by-side, workspace-aware context, parallel conversations
-- **Windowed agents**: Split layouts so you can compare models or keep contexts separate
-- **CLI providers**: Use your provider subscriptions via their CLI; Barnaby does not handle keys or billing
-- **OpenRouter**: API key in Barnaby settings; access free-tier and paid models when CLI quotas are exhausted
-
-Compared to single-chat tools: Barnaby gives you parallel windowed agents and workspace-aware orchestration.
-
-## Orchestrator (optional add-on)
-
-The **Orchestrator** is an optional plugin that extends Barnaby beyond single-turn chat. It is a persistent management engine for **autonomous agent loops** — set a goal, define guardrails, and let agents work until the task is complete.
-
-**What it does:**
-- **Cross-agent state sync** — Agents share context across panels (e.g. backend signals schema changes to frontend)
-- **Goal persistence** — Stores a hierarchy of goals; pauses and resumes on failure or rate limits
-- **Deterministic guardrails** — Intercepts output to verify linting and security rules before committing to the workspace
-
-The Orchestrator is **not** bundled with Barnaby. See [barnaby.build](https://barnaby.build) for more details.
-
-## Prerequisites
-
-- **CLI providers** (optional): Codex, Claude, and/or Gemini CLI installed and authenticated
-- **API provider** (optional): OpenRouter API key from https://openrouter.ai/keys
-
-### Built-in terminal note
-
-The embedded terminal uses `node-pty`, which ships with prebuilt binaries for Windows, macOS, and Linux. No extra tools are needed. If the prebuilds don't load on your platform, `npm install` will attempt a source rebuild (requires Python 3 and C++ build tools). This is rare — the prebuilds work on most systems.
-
-## Provider Coverage
-
-| Provider   | Type | Setup                                      |
-|------------|------|--------------------------------------------|
-| Codex      | CLI  | Install CLI, sign in via terminal          |
-| Claude     | CLI  | Install CLI, sign in via terminal          |
-| Gemini     | CLI  | Install CLI, sign in with Google          |
-| OpenRouter | API  | API key in Barnaby connectivity settings  |
-
-OpenRouter offers free-tier models (e.g. Llama, Mistral) and paid models; useful when CLI quotas are exhausted.
-
-## CLI Setup (Codex, Claude, Gemini)
-
-For CLI providers, required CLIs must be installed, signed in, and resolvable from your terminal.
-
-1. Install each CLI from its official docs.
-2. Open a new terminal after install.
-3. Verify CLIs are available on `PATH`:
+CLI sanity check after installing providers:
 
 ```sh
 codex --version
@@ -107,41 +91,72 @@ claude --version
 gemini --version
 ```
 
-4. Authenticate each CLI (follow the provider's login flow).
-5. Sanity-check outside Barnaby by running one simple prompt in each CLI you plan to use.
+If the postinstall step reports that a native rebuild was skipped, the embedded terminal will usually still work via prebuilt binaries. Source rebuilds are only needed on platforms where prebuilds are unavailable.
 
-## OpenRouter Setup
+---
 
-1. Get an API key from https://openrouter.ai/keys
-2. In Barnaby: open connectivity settings, select OpenRouter, enter your API key
-3. Choose a model (e.g. free-tier Llama 3.3 70B) and connect
+## Architecture
 
-## Development
-
-| Command | Meaning | Script |
-|---------|---------|--------|
-| **run dev** | Run in dev mode | `npm run dev` |
-| **build** | Build without version bump | `npm run build` |
-
-## Project Structure
+Barnaby acts as a local orchestration layer for AI agent processes and provider integrations.
 
 ```text
-docs/            Documentation (AGENTS.md, BACKLOG.md, STATUS_LOG.md)
-electron/       Electron main and preload
-src/            React renderer UI
-public/         Static assets
-release/        Packaged outputs
+Barnaby Desktop UI
+        |
+        v
+  Workspace + Panel Manager
+        |
+        v
+ Provider / Agent Runtime Layer
+   |         |         |         |
+   v         v         v         v
+ Codex    Claude    Gemini   OpenRouter
+  CLI       CLI       CLI        API
 ```
 
-## Notes
+At a high level:
 
-- Workspace root should be the repository root unless you want broader file scope.
-- If Codex fails with `codex app-server closed`, run `codex app-server` manually in terminal to inspect.
+- `src/` contains the React renderer UI for panels, workspace tools, chat, and layout management
+- `electron/main/` manages desktop runtime concerns, provider clients, permissions, updates, and local orchestration
+- `electron/preload/` exposes the desktop bridge between the Electron main process and the renderer
+- The optional orchestrator plugin extends Barnaby with autonomous agent loops, shared state, and goal persistence
 
-## Manual Test Checklist
+Barnaby is local-first by design. Agent processes run on your machine, workspace context stays in your environment, and provider authentication remains with the CLI tools or API keys you configure.
 
-- Multi-instance: open two Barnaby executables and confirm both launch
-- Workspace lock: instance A opens workspace X; instance B tries X → blocked with in-use message
-- Different workspaces: instance A on X, instance B on Y → allowed
-- Lock release: close A, confirm B can open X
-- Crash-stale-lock: force-close A, wait for stale timeout, confirm another instance can claim X
+---
+
+## Roadmap
+
+Current capabilities:
+
+- Multi-agent workspace
+- CLI integration for Codex, Claude, and Gemini
+- OpenRouter model access
+- Local orchestration and workspace-aware context
+- Windowed desktop UI with split layouts and workspace tooling
+
+Planned improvements:
+
+- Richer agent collaboration workflows
+- Better remote and background agent control
+- Plugin ecosystem expansion
+- Stronger automation and orchestration primitives
+- More onboarding polish and demos for new users
+
+---
+
+## Contributing
+
+Contributions and feedback are welcome.
+
+Open an issue or submit a pull request if you want to help improve Barnaby.
+
+Additional docs:
+
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+
+---
+
+## License
+
+MIT

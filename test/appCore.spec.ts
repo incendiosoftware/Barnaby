@@ -1,6 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import { extractInteractionModeChange, syncOutsideWorkspaceBuildWarning } from '../src/utils/appCore'
+import {
+  extractInteractionModeChange,
+  parseApplicationSettings,
+  parsePersistedAppState,
+  syncOutsideWorkspaceBuildWarning,
+} from '../src/utils/appCore'
 import type { ChatMessage } from '../src/types'
+
+function withMockLocalStorage<T>(fn: () => T): T {
+  const original = globalThis.localStorage
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: () => null,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+      clear: () => undefined,
+    },
+  })
+  try {
+    return fn()
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: original,
+    })
+  }
+}
 
 function makeMessages(): ChatMessage[] {
   return [
@@ -42,5 +68,37 @@ describe('extractInteractionModeChange', () => {
   it('ignores unrelated content', () => {
     expect(extractInteractionModeChange('Implemented the requested change.')).toBeNull()
     expect(extractInteractionModeChange({ payload: { status: 'ready' } })).toBeNull()
+  })
+})
+
+describe('parseApplicationSettings', () => {
+  it('defaults alwaysOpenLastWorkspace to false', () => {
+    const parsed = withMockLocalStorage(() => parseApplicationSettings(null))
+
+    expect(parsed.alwaysOpenLastWorkspace).toBe(false)
+  })
+
+  it('preserves alwaysOpenLastWorkspace when provided', () => {
+    const parsed = withMockLocalStorage(() => parseApplicationSettings({ alwaysOpenLastWorkspace: true }))
+
+    expect(parsed.alwaysOpenLastWorkspace).toBe(true)
+  })
+})
+
+describe('parsePersistedAppState', () => {
+  it('parses workspace history even without session restore payloads', () => {
+    const parsed = withMockLocalStorage(() =>
+      parsePersistedAppState(
+        {
+          workspaceList: ['E:/one', 'E:/two'],
+          applicationSettings: {
+            alwaysOpenLastWorkspace: true,
+          },
+        },
+        'E:/fallback',
+      ))
+
+    expect(parsed?.workspaceList).toEqual(['E:/one', 'E:/two'])
+    expect(parsed?.applicationSettings?.alwaysOpenLastWorkspace).toBe(true)
   })
 })

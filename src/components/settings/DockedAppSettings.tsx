@@ -699,6 +699,18 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
                 />
                 Restore windows, layout, chats, and editor tabs after restart or crash
               </label>
+              <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+                <input
+                  type="checkbox"
+                  checked={applicationSettings.alwaysOpenLastWorkspace}
+                  onChange={(e) =>
+                    setApplicationSettings((prev) => ({
+                      ...prev,
+                      alwaysOpenLastWorkspace: e.target.checked,
+                    }))}
+                />
+                Always open the last workspace instead of showing the workspace chooser
+              </label>
             </section>
 
             <section className="space-y-2">

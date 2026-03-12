@@ -325,18 +325,7 @@ export function createWorkspaceSettingsController(
     }
 
     if (workspaceRootRef.current === pathToDelete) {
-      let switched = false
-      for (const nextRoot of remaining) {
-        const opened = await applyWorkspaceRoot(nextRoot, { showFailureAlert: false, rebindPanels: false })
-        if (opened) {
-          applyWorkspaceSnapshot(opened)
-          switched = true
-          break
-        }
-      }
-      if (!switched) {
-        setWorkspaceRoot('')
-      }
+      setWorkspaceRoot('')
     }
     setShowWorkspaceModal(false)
   }

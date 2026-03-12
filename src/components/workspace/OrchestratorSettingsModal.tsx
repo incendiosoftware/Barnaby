@@ -46,10 +46,28 @@ export function OrchestratorSettingsModal({
   setOrchestratorInstallStatus,
   getModelOptions,
 }: OrchestratorSettingsModalProps) {
+  const [savePending, setSavePending] = React.useState(false)
   if (!visible) return null
 
   const orchestratorPlugin = loadedPlugins.find((p) => p.pluginId === 'orchestrator')
   const workerPool = orchestratorSettings.workerPool
+  const persistLicenseDraft = React.useCallback(async () => {
+    const draft = orchestratorLicenseKeyDraft.trim()
+    if (!draft) return
+    await api.setOrchestratorLicenseKey?.(draft)
+    const state = await api.getOrchestratorLicenseKeyState?.()
+    setOrchestratorLicenseKeyState(state ?? { hasKey: true })
+  }, [api, orchestratorLicenseKeyDraft, setOrchestratorLicenseKeyState])
+
+  const handleSaveAndClose = React.useCallback(async () => {
+    setSavePending(true)
+    try {
+      await persistLicenseDraft()
+      onClose()
+    } finally {
+      setSavePending(false)
+    }
+  }, [onClose, persistLicenseDraft])
 
   return (
     <div className={MODAL_BACKDROP_CLASS}>
@@ -132,20 +150,13 @@ export function OrchestratorSettingsModal({
                 value={orchestratorLicenseKeyDraft}
                 onChange={(e) => setOrchestratorLicenseKeyDraft(e.target.value)}
                 onBlur={async () => {
-                  if (orchestratorLicenseKeyDraft.trim()) {
-                    await api.setOrchestratorLicenseKey?.(orchestratorLicenseKeyDraft.trim())
-                    setOrchestratorLicenseKeyState({ hasKey: true })
-                  }
+                  await persistLicenseDraft()
                 }}
               />
               <button
                 type="button"
                 className={UI_BUTTON_PRIMARY_CLASS}
-                onClick={async () => {
-                  await api.setOrchestratorLicenseKey?.(orchestratorLicenseKeyDraft.trim())
-                  const state = await api.getOrchestratorLicenseKeyState?.()
-                  setOrchestratorLicenseKeyState(state ?? null)
-                }}
+                onClick={() => void persistLicenseDraft()}
               >
                 Save license
               </button>
@@ -342,6 +353,24 @@ export function OrchestratorSettingsModal({
               ))}
             </div>
           </section>
+        </div>
+        <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+            onClick={onClose}
+            disabled={savePending}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={UI_BUTTON_PRIMARY_CLASS}
+            onClick={() => void handleSaveAndClose()}
+            disabled={savePending}
+          >
+            {savePending ? 'Saving...' : 'Save and close'}
+          </button>
         </div>
       </div>
     </div>

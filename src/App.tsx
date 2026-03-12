@@ -1227,24 +1227,21 @@ export default function App() {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      if (!applicationSettings.restoreSessionOnStartup) {
-        appStateHydratedRef.current = true
-        setAppStateHydrated(true)
-        return
-      }
       try {
         const loaded = await api.loadAppState?.()
         if (cancelled || !loaded) return
         const restored = parsePersistedAppState(loaded, workspaceRootRef.current || getInitialWorkspaceRoot(), getModelProvider)
         if (!restored) return
 
-        workspaceSnapshotsRef.current = restored.workspaceSnapshotsByRoot
         if (restored.workspaceList && restored.workspaceList.length > 0) {
           setWorkspaceList((prev) => {
             const merged = [...new Set([...restored.workspaceList!, ...prev])]
             return merged.length > 0 ? merged : prev
           })
         }
+        if (!applicationSettings.restoreSessionOnStartup) return
+
+        workspaceSnapshotsRef.current = restored.workspaceSnapshotsByRoot
         if (restored.workspaceRoot) {
           setWorkspaceRoot(restored.workspaceRoot)
         }
@@ -1988,9 +1985,22 @@ export default function App() {
     let disposed = false
     const bootstrapWorkspace = async () => {
       const preferredRoot = workspaceRootRef.current?.trim()
+      const recentWorkspaces = workspaceListRef.current.map((item) => item.trim()).filter(Boolean)
       if (!preferredRoot) {
+        if (recentWorkspaces.length > 0) {
+          if (applicationSettings.alwaysOpenLastWorkspace) {
+            const opened = await applyWorkspaceRoot(recentWorkspaces[0], { showFailureAlert: false, rebindPanels: false })
+            if (disposed) return
+            if (opened) {
+              applyWorkspaceSnapshot(opened)
+              return
+            }
+          }
+          openWorkspacePicker('Select a workspace to get started.')
+          return
+        }
         if (getInitialSetupWizardDone()) {
-          openWorkspacePicker('Select a workspace folder to get started.')
+          openWorkspacePicker('Select a workspace to get started.')
           return
         }
         const chatHistory = await api.loadChatHistory?.()
@@ -2000,7 +2010,7 @@ export default function App() {
           (appState != null && typeof appState === 'object')
         if (hasPriorUse) {
           localStorage.setItem(SETUP_WIZARD_DONE_STORAGE_KEY, '1')
-          openWorkspacePicker('Select a workspace folder to get started.')
+          openWorkspacePicker('Select a workspace to get started.')
         } else {
           openSetupWizard()
         }
@@ -2023,20 +2033,13 @@ export default function App() {
         return
       }
 
-      for (const candidate of workspaceListRef.current) {
-        const next = candidate.trim()
-        if (!next || next === preferredRoot) continue
-        const opened = await applyWorkspaceRoot(next, { showFailureAlert: false, rebindPanels: false })
-        if (disposed) return
-        if (opened) {
-          applyWorkspaceSnapshot(opened)
-          return
-        }
-      }
-
       if (!disposed) {
         setWorkspaceRoot('')
-        openWorkspacePicker(ALL_WORKSPACES_LOCKED_PROMPT)
+        openWorkspacePicker(
+          applicationSettings.alwaysOpenLastWorkspace && recentWorkspaces.length > 1
+            ? ALL_WORKSPACES_LOCKED_PROMPT
+            : 'Select a workspace to get started.',
+        )
       }
     }
 
@@ -2050,7 +2053,7 @@ export default function App() {
     return () => {
       disposed = true
     }
-  }, [appStateHydrated])
+  }, [appStateHydrated, api, applicationSettings.alwaysOpenLastWorkspace, applyWorkspaceRoot, applyWorkspaceSnapshot, openSetupWizard, openWorkspacePicker])
 
   useEffect(() => {
     if (startupReadyNotifiedRef.current) return

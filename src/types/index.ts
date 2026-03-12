@@ -238,6 +238,7 @@ export type DiagnosticsMessageColors = {
 
 export type ApplicationSettings = {
   restoreSessionOnStartup: boolean
+  alwaysOpenLastWorkspace: boolean
   themeId: string
   /** @deprecated Use fontChat. Kept for migration. */
   fontFamily?: string
@@ -317,6 +318,7 @@ export type PersistedAgentPanelState = {
 export type PersistedAppState = {
   workspaceRoot?: unknown
   workspaceList?: unknown
+  recentWorkspaceFiles?: unknown
   workspaceSnapshotsByRoot?: unknown
   layoutMode?: unknown
   showWorkspaceWindow?: unknown
@@ -360,6 +362,7 @@ export type WorkspaceUiSnapshot = {
 export type ParsedAppState = {
   workspaceRoot: string | null
   workspaceList: string[] | null
+  recentWorkspaceFiles?: string[] | null
   workspaceSnapshotsByRoot: Record<string, WorkspaceUiSnapshot>
   panels: AgentPanelState[]
   editorPanels: EditorPanelState[]

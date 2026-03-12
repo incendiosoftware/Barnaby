@@ -779,6 +779,7 @@ export function parseApplicationSettings(parsed: Partial<ApplicationSettings> | 
 
   const defaults: ApplicationSettings = {
     restoreSessionOnStartup: false,
+    alwaysOpenLastWorkspace: false,
     themeId: DEFAULT_THEME_ID,
     fontChat: DEFAULT_FONT_FAMILY,
     fontChatSize: 14,
@@ -801,6 +802,8 @@ export function parseApplicationSettings(parsed: Partial<ApplicationSettings> | 
   return {
     restoreSessionOnStartup:
       typeof parsed.restoreSessionOnStartup === 'boolean' ? parsed.restoreSessionOnStartup : false,
+    alwaysOpenLastWorkspace:
+      typeof parsed.alwaysOpenLastWorkspace === 'boolean' ? parsed.alwaysOpenLastWorkspace : false,
     themeId: (() => {
       if (typeof parsed.themeId === 'string' && THEMES.some((t) => t.id === parsed.themeId)) return parsed.themeId
       return getInitialThemeId()
@@ -1069,6 +1072,11 @@ export function parsePersistedAppState(
       .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
       .map((x) => x.trim())
     : null
+  const recentWorkspaceFiles = Array.isArray(rec.recentWorkspaceFiles)
+    ? rec.recentWorkspaceFiles
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      .map((x) => x.trim())
+    : null
   const workspaceSnapshotsByRoot: ParsedAppState['workspaceSnapshotsByRoot'] = {}
   if (rec.workspaceSnapshotsByRoot && typeof rec.workspaceSnapshotsByRoot === 'object') {
     const snapshotsRecord = rec.workspaceSnapshotsByRoot as Record<string, unknown>
@@ -1190,6 +1198,7 @@ export function parsePersistedAppState(
   return {
     workspaceRoot,
     workspaceList,
+    recentWorkspaceFiles,
     workspaceSnapshotsByRoot,
     panels,
     editorPanels,

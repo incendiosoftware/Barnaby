@@ -465,7 +465,6 @@ export function useAppRuntimeEvents(ctx: any) {
         return
       }
       if (action === 'closeWorkspace') {
-        if (workspaceList.length <= 1) return
         void workspaceSettings.deleteWorkspace(workspaceRoot)
         return
       }

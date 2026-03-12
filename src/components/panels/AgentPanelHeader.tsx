@@ -106,12 +106,8 @@ export function AgentPanelHeader({
           aria-label="Split panel"
         >
           <svg width="18" height="16" viewBox="0 0 18 16" fill="none" aria-label="Split Panel">
-            <path d="M5.75 8H1.5" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" />
-            <path d="M3.9 5.75 1.5 8l2.4 2.25" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M12.25 8h4.25" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" />
-            <path d="M14.1 5.75 16.5 8l-2.4 2.25" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M7.7 1.75v12.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            <path d="M10.3 1.75v12.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M7 2.4v11.2M7 2.4h-1.9M7 13.6h-1.9" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M11 2.4v11.2M11 2.4h1.9M11 13.6h1.9" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
         <div className="w-1" />
@@ -155,28 +151,21 @@ export function AgentPanelHeader({
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path
-              d="M5.35 2.5H3.9c-.77 0-1.4.63-1.4 1.4v8.2c0 .77.63 1.4 1.4 1.4h8.2c.77 0 1.4-.63 1.4-1.4v-1.35"
+              d="M4 12.8V3.8h7v5.1"
               stroke="currentColor"
               strokeWidth="1.4"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
             <path
-              d="M5.2 2.5h4.05c.5 0 .9.4.9.9v1.1"
+              d="M11 8.9v2.2"
               stroke="currentColor"
               strokeWidth="1.4"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
             <path
-              d="M8.7 4.3 12.95 8.55"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M12.95 5.35v3.2h-3.2"
+              d="M9.9 10.1 11 11.2l1.1-1.1"
               stroke="currentColor"
               strokeWidth="1.4"
               strokeLinecap="round"

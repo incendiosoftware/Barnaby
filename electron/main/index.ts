@@ -299,8 +299,24 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   ? path.join(process.env.APP_ROOT, 'public')
   : RENDERER_DIST
 
-const WINDOWS_APP_USER_MODEL_ID = 'com.agentorchestrator.app'
+const WINDOWS_APP_USER_MODEL_ID = 'build.barnaby.app'
 const WINDOWS_DISPLAY_NAME = 'Barnaby'
+
+function getReleaseVersion() {
+  const packagePaths = [
+    path.join(process.env.APP_ROOT, 'package.json'),
+    path.join(app.getAppPath(), 'package.json'),
+  ]
+  for (const pkgPath of packagePaths) {
+    try {
+      const raw = fs.readFileSync(pkgPath, 'utf8')
+      const parsed = JSON.parse(raw) as { version?: unknown }
+      if (typeof parsed.version === 'string' && parsed.version.trim()) return parsed.version.trim()
+    } catch {
+    }
+  }
+  return app.getVersion()
+}
 
 // Disable GPU Acceleration for Windows 7
 if (os.release().startsWith('6.1')) app.disableHardwareAcceleration()
@@ -408,7 +424,7 @@ function getWindowWorkspaceLabel(workspaceRoot: string) {
 }
 
 function getMainWindowTitle(workspaceRoot: string) {
-  const titleSuffix = VITE_DEV_SERVER_URL ? '(DEV)' : `(V${app.getVersion()})`
+  const titleSuffix = VITE_DEV_SERVER_URL ? `(DEV ${getReleaseVersion()})` : `(v${getReleaseVersion()})`
   return `Barnaby ${titleSuffix} - ${getWindowWorkspaceLabel(workspaceRoot)}`
 }
 
@@ -443,7 +459,7 @@ function splashFallbackHtmlDataUrl(splashImagePath: string) {
     appendRuntimeLog('splash-image-base64-failed', { splashImagePath, error: errorMessage(err) }, 'warn')
   }
 
-  const version = app.getVersion()
+  const version = getReleaseVersion()
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -526,7 +542,7 @@ function createSplashWindow() {
   const injectSplashVersion = () => {
     splash.webContents
       .executeJavaScript(
-        `(function(){var el=document.getElementById('version');if(el)el.textContent=${JSON.stringify(app.getVersion())};})()`,
+        `(function(){var el=document.getElementById('version');if(el)el.textContent=${JSON.stringify(getReleaseVersion())};})()`,
       )
       .catch(() => { })
   }
@@ -3053,6 +3069,16 @@ async function gitBuild(workspaceRoot: string, _selectedPaths?: string[]): Promi
   return { ok: result.ok, error: result.error }
 }
 
+async function gitRelease(workspaceRoot: string, _selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }> {
+  const root = path.resolve(workspaceRoot)
+  const pkgPath = path.join(root, 'package.json')
+  if (!fs.existsSync(pkgPath)) return { ok: false, error: 'No package.json found.' }
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> }
+  if (!pkg?.scripts?.['release:prepare']) return { ok: false, error: 'No release:prepare script in package.json.' }
+  const result = await runShellCommand(root, 'npm', ['run', 'release:prepare'])
+  return { ok: result.ok, error: result.error }
+}
+
 async function gitRollback(workspaceRoot: string, selectedPaths?: string[]): Promise<{ ok: boolean; error?: string }> {
   const root = path.resolve(workspaceRoot)
   const status = await getGitStatus(root)
@@ -4156,6 +4182,10 @@ ipcMain.handle('agentorchestrator:gitBuild', async (_evt, workspaceRoot: string,
   return gitBuild(workspaceRoot, selectedPaths)
 })
 
+ipcMain.handle('agentorchestrator:gitRelease', async (_evt, workspaceRoot: string, selectedPaths?: string[]) => {
+  return gitRelease(workspaceRoot, selectedPaths)
+})
+
 ipcMain.handle('agentorchestrator:gitRollback', async (_evt, workspaceRoot: string, selectedPaths?: string[]) => {
   return gitRollback(workspaceRoot, selectedPaths)
 })
@@ -4390,7 +4420,7 @@ function createAboutWindow() {
     appendRuntimeLog('about-splash-base64-failed', { splashImagePath, error: errorMessage(err) }, 'warn')
   }
 
-  const version = app.getVersion()
+  const version = getReleaseVersion()
   const appName = 'Barnaby'
   const description = 'Barnaby is an autonomous agent desktop for developers. It orchestrates parallel agent loops directly through your local CLI subscriptions.'
   const blurb = 'No API keys, no middleman. Connect to Codex, Claude, and Gemini via your existing terminal sessions. Experience workspace-aware agents with flexible split layouts and intelligent provider routing.'

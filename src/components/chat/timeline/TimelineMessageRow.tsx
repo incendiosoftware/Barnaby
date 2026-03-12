@@ -190,6 +190,8 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
             style={linkStyle}
             onClick={(e) => {
               if (!target) return
+              const selection = window.getSelection()
+              if (selection && !selection.isCollapsed && selection.toString()) return
               e.preventDefault()
               void onChatLinkClick(target)
             }}

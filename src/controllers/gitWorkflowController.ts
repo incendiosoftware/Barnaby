@@ -5,6 +5,7 @@
 
 import type React from 'react'
 import type { GitOperation, GitStatusEntry, GitStatusState } from '../types'
+import { describeGitOperationPreflight } from '../utils/gitOperationPreflight'
 
 export interface GitWorkflowApi {
   getGitStatus: (workspaceRoot: string) => Promise<GitStatusState>
@@ -17,7 +18,7 @@ export interface GitWorkflowApi {
 
 export interface GitWorkflowControllerContext {
   workspaceRoot: string | null
-  gitStatus: { entries: GitStatusEntry[] } | null
+  gitStatus: GitStatusState | null
   selectedGitPaths: string[]
   gitSelectionAnchorPath: string | null
   gitOperationPending: GitOperation | null
@@ -102,6 +103,13 @@ export function createGitWorkflowController(ctx: GitWorkflowControllerContext): 
   async function runGitOperation(op: GitOperation, candidatePaths?: string[]) {
     if (!workspaceRoot || gitOperationPending) return
     const selectedPaths = resolveGitSelection(candidatePaths)
+    const preflight = describeGitOperationPreflight({
+      op,
+      workspaceRoot,
+      gitStatus,
+      selectedPaths,
+    })
+    if (!globalThis.confirm(preflight.confirmMessage)) return
     setGitOperationPending(op)
     setGitOperationSuccess(null)
     setGitStatusError(null)

@@ -105,13 +105,13 @@ export function AgentPanelHeader({
           title={splitTitle ?? (panelsCount >= MAX_PANELS ? `Maximum ${MAX_PANELS} panels` : 'Split panel')}
           aria-label="Split panel"
         >
-          <svg width="22" height="18" viewBox="0 0 22 18" fill="none" aria-label="Split Panel">
-            <path d="M7 9H1.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-            <path d="M4.5 6 1.5 9l3 3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M15 9h5.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-            <path d="m17.5 6 3 3-3 3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M9.25 1.75v14.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="square" />
-            <path d="M12.75 1.75v14.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="square" />
+          <svg width="18" height="16" viewBox="0 0 18 16" fill="none" aria-label="Split Panel">
+            <path d="M5.75 8H1.5" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" />
+            <path d="M3.9 5.75 1.5 8l2.4 2.25" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M12.25 8h4.25" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" />
+            <path d="M14.1 5.75 16.5 8l-2.4 2.25" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M7.7 1.75v12.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M10.3 1.75v12.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
           </svg>
         </button>
         <div className="w-1" />
@@ -155,22 +155,30 @@ export function AgentPanelHeader({
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path
-              d="M8.7 2.1a4.2 4.2 0 0 0-4.2 4.2c0 .6.12 1.18.35 1.72L3 10.1c-.2.22-.26.52-.15.8.1.28.37.46.67.46h1.36l.38 2.02c.05.3.31.51.61.51h3.55a.63.63 0 0 0 .61-.79l-.72-2.55a4.2 4.2 0 0 0-.61-8.46Z"
+              d="M5.35 2.5H3.9c-.77 0-1.4.63-1.4 1.4v8.2c0 .77.63 1.4 1.4 1.4h8.2c.77 0 1.4-.63 1.4-1.4v-1.35"
               stroke="currentColor"
-              strokeWidth="1.2"
+              strokeWidth="1.4"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
             <path
-              d="M8.55 4.4a1.9 1.9 0 1 0 1.83 2.45"
+              d="M5.2 2.5h4.05c.5 0 .9.4.9.9v1.1"
               stroke="currentColor"
-              strokeWidth="1.2"
+              strokeWidth="1.4"
               strokeLinecap="round"
+              strokeLinejoin="round"
             />
             <path
-              d="m11.05 4.55-.18 1.45-1.36-.27"
+              d="M8.7 4.3 12.95 8.55"
               stroke="currentColor"
-              strokeWidth="1.2"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M12.95 5.35v3.2h-3.2"
+              stroke="currentColor"
+              strokeWidth="1.4"
               strokeLinecap="round"
               strokeLinejoin="round"
             />

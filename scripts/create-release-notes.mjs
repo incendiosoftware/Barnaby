@@ -10,13 +10,16 @@ if (!version) {
   throw new Error('package.json version is missing.')
 }
 
+const notesDir = path.join(root, 'docs', 'releases')
 const notesFilename = `RELEASE_NOTES_${version}.md`
-const notesPath = path.join(root, notesFilename)
+const notesPath = path.join(notesDir, notesFilename)
 
 if (fs.existsSync(notesPath)) {
-  console.log(`Release notes already exist: ${notesFilename}`)
+  console.log(`Release notes already exist: docs/releases/${notesFilename}`)
   process.exit(0)
 }
+
+fs.mkdirSync(notesDir, { recursive: true })
 
 const now = new Date()
 const month = now.toLocaleString('en-US', { month: 'long' })
@@ -44,4 +47,4 @@ const template = `# Barnaby ${version} - Release Notes
 `
 
 fs.writeFileSync(notesPath, template, 'utf8')
-console.log(`Created ${notesFilename}`)
+console.log(`Created docs/releases/${notesFilename}`)

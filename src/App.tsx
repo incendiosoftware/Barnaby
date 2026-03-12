@@ -2396,10 +2396,11 @@ export default function App() {
     el.style.overflowY = el.scrollHeight > INPUT_MAX_HEIGHT_PX ? 'auto' : 'hidden'
   }
 
-  function hasSelectedTextInChatHistory(container: HTMLElement) {
+  function getSelectedTextInChatHistory(container: HTMLElement): string {
     const selection = window.getSelection()
-    if (!selection || selection.isCollapsed) return false
-    if (!selection.toString()) return false
+    if (!selection || selection.isCollapsed) return ''
+    const selectedText = selection.toString()
+    if (!selectedText) return ''
     for (let idx = 0; idx < selection.rangeCount; idx += 1) {
       const range = selection.getRangeAt(idx)
       if (range.collapsed) continue
@@ -2408,16 +2409,23 @@ export default function App() {
         container.contains(range.endContainer) ||
         container.contains(range.commonAncestorContainer)
       ) {
-        return true
+        return selectedText
       }
     }
-    return false
+    return ''
   }
 
   function onChatHistoryContextMenu(e: React.MouseEvent<HTMLDivElement>) {
-    if (!hasSelectedTextInChatHistory(e.currentTarget)) return
+    if (!getSelectedTextInChatHistory(e.currentTarget)) return
     e.preventDefault()
     void api.showContextMenu?.('chat-selection')
+  }
+
+  function onChatHistoryCopy(e: React.ClipboardEvent<HTMLDivElement>) {
+    const selectedText = getSelectedTextInChatHistory(e.currentTarget)
+    if (!selectedText) return
+    e.clipboardData.setData('text/plain', selectedText)
+    e.preventDefault()
   }
 
   function onInputPanelContextMenu(e: React.MouseEvent<HTMLTextAreaElement>) {

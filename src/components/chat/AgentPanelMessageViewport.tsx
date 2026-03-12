@@ -9,6 +9,7 @@ export interface AgentPanelMessageViewportProps {
   registerRef: (el: HTMLDivElement | null) => void
   onScroll: () => void
   onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => void
+  onCopy: (e: React.ClipboardEvent<HTMLDivElement>) => void
   panelTextStyle: React.CSSProperties
   children: React.ReactNode
 }
@@ -17,6 +18,7 @@ export function AgentPanelMessageViewport({
   registerRef,
   onScroll,
   onContextMenu,
+  onCopy,
   panelTextStyle,
   children,
 }: AgentPanelMessageViewportProps) {
@@ -25,6 +27,7 @@ export function AgentPanelMessageViewport({
       ref={registerRef}
       onScroll={onScroll}
       onContextMenu={onContextMenu}
+      onCopy={onCopy}
       className="theme-scrollable flex-1 overflow-y-auto overflow-x-hidden pl-3 pr-4 py-3 space-y-2.5 min-h-0"
       data-theme-scrollable="true"
       style={{ scrollbarGutter: 'stable', ...panelTextStyle }}

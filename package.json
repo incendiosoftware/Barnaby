@@ -1,7 +1,7 @@
 {
   "name": "@barnaby.build/barnaby",
   "productName": "Barnaby",
-  "version": "0.0.234",
+  "version": "0.0.235",
   "main": "dist-electron/main/index.js",
   "bin": {
     "barnaby": "bin/barnaby.cjs"
@@ -56,7 +56,7 @@
     "build:release": "npm run build:dist && electron-builder && node scripts/apply-exe-icon.mjs",
     "build:release:raw": "npm run build:dist:raw && electron-builder --publish never && node scripts/apply-exe-icon.mjs",
     "release:notes": "node scripts/create-release-notes.mjs",
-    "release:prepare": "node scripts/run-with-version-bump.mjs \"npm run release:notes && npm run build:portable:raw\"",
+    "release:prepare": "node scripts/validate-version-files.mjs && node scripts/run-with-version-bump.mjs \"npm run release:notes && npm run build:portable:raw\"",
     "postinstall": "node scripts/shortcut-win.mjs && node scripts/rebuild-native.mjs",
     "publish:npm": "npm run build:dist:raw && npm pack --dry-run && npm publish",
     "package:win": "npm run build:dist && electron-packager . Barnaby --platform=win32 --arch=x64 --out=release/0.0.1/packaged --overwrite --asar --prune=true --icon=build/icon.ico",

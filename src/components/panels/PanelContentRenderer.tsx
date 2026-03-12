@@ -140,6 +140,7 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         registerRef={(el) => ctx.registerMessageViewport(w.id, el)}
         onScroll={() => ctx.onMessageViewportScroll(w.id)}
         onContextMenu={ctx.onChatHistoryContextMenu}
+        onCopy={ctx.onChatHistoryCopy}
         panelTextStyle={panelTextStyle}
       >
         <ChatTimeline

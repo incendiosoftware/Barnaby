@@ -13,7 +13,8 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { MODAL_BACKDROP_CLASS, MODAL_CARD_CLASS, UI_CLOSE_ICON_BUTTON_CLASS } from '../../constants'
-import type { OrchestratorSettings } from '../../types'
+import type { GitStatusState, OrchestratorSettings } from '../../types'
+import { describeGitOperationPreflight } from '../../utils/gitOperationPreflight'
 
 export interface OrchestratorPaneProps {
   pluginDisplayName: string
@@ -139,6 +140,7 @@ type OrchestratorApi = {
     suggestedFileName: string,
     content: string,
   ) => Promise<{ ok: boolean; canceled?: boolean; path?: string; error?: string }>
+  getGitStatus?: (workspaceRoot: string) => Promise<GitStatusState>
   gitCommit?: (workspaceRoot: string, selectedPaths?: string[]) => Promise<{ ok: boolean; error?: string }>
   gitPush?: (workspaceRoot: string, selectedPaths?: string[]) => Promise<{ ok: boolean; error?: string }>
   gitRollback?: (workspaceRoot: string, selectedPaths?: string[]) => Promise<{ ok: boolean; error?: string }>
@@ -1224,6 +1226,32 @@ export function OrchestratorPane({
     const api = getOrchestratorApi()
     if (typeof api.gitPush !== 'function') {
       setStatusMessage('COMMIT and PUSH is not available in this build.')
+      return
+    }
+    let gitStatus: GitStatusState | null = null
+    if (typeof api.getGitStatus === 'function') {
+      try {
+        gitStatus = await api.getGitStatus(workspaceRoot)
+      } catch {
+        gitStatus = null
+      }
+    }
+    const preflight = describeGitOperationPreflight({
+      op: 'push',
+      workspaceRoot,
+      gitStatus,
+      selectedPaths: gitStatus?.entries.map((entry) => entry.relativePath) ?? [],
+    })
+    const confirmed = globalThis.confirm([
+      preflight.title,
+      '',
+      'This shortcut is labeled COMMIT and PUSH.',
+      'It is expected to commit current workspace changes first and then push.',
+      '',
+      ...preflight.details,
+    ].join('\n'))
+    if (!confirmed) {
+      setStatusMessage('COMMIT and PUSH canceled.')
       return
     }
     const result = await api.gitPush(workspaceRoot)

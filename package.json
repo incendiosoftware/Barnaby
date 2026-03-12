@@ -1,7 +1,7 @@
 {
   "name": "@barnaby.build/barnaby",
   "productName": "Barnaby",
-  "version": "0.0.237",
+  "version": "0.0.238",
   "main": "dist-electron/main/index.js",
   "bin": {
     "barnaby": "bin/barnaby.cjs"

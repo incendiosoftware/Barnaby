@@ -88,7 +88,7 @@ const THEME_SEEDS: ThemeSeed[] = [
     accentOnPrimary: 'hsl(0, 0%, 98%)',
     accentTint: 'hsl(220, 24%, 94%)',
     bgBase: 'hsl(0, 0%, 95%)',
-    bgSurface: 'hsl(0, 0%, 98%)',
+    bgSurface: '#ffffff',
   },
   {
     id: 'rose-quartz',
@@ -100,7 +100,7 @@ const THEME_SEEDS: ThemeSeed[] = [
     accentOnPrimary: 'hsl(0, 0%, 99%)',
     accentTint: 'hsl(340, 28%, 93%)',
     bgBase: 'hsl(340, 20%, 93%)',
-    bgSurface: 'hsl(340, 20%, 97%)',
+    bgSurface: '#ffffff',
   },
   {
     id: 'azure-wash',
@@ -112,7 +112,7 @@ const THEME_SEEDS: ThemeSeed[] = [
     accentOnPrimary: 'hsl(0, 0%, 99%)',
     accentTint: 'hsl(210, 48%, 93%)',
     bgBase: 'hsl(210, 25%, 93%)',
-    bgSurface: 'hsl(210, 25%, 97%)',
+    bgSurface: '#ffffff',
   },
   {
     id: 'sage-mist',
@@ -124,7 +124,7 @@ const THEME_SEEDS: ThemeSeed[] = [
     accentOnPrimary: 'hsl(0, 0%, 99%)',
     accentTint: 'hsl(145, 28%, 93%)',
     bgBase: 'hsl(150, 15%, 93%)',
-    bgSurface: 'hsl(150, 15%, 97%)',
+    bgSurface: '#ffffff',
   },
   {
     id: 'lilac-haze',
@@ -136,7 +136,7 @@ const THEME_SEEDS: ThemeSeed[] = [
     accentOnPrimary: 'hsl(0, 0%, 99%)',
     accentTint: 'hsl(266, 34%, 93%)',
     bgBase: 'hsl(270, 20%, 93%)',
-    bgSurface: 'hsl(270, 20%, 97%)',
+    bgSurface: '#ffffff',
   },
   {
     id: 'warm-parchment',
@@ -148,7 +148,7 @@ const THEME_SEEDS: ThemeSeed[] = [
     accentOnPrimary: 'hsl(0, 0%, 99%)',
     accentTint: 'hsl(40, 48%, 92%)',
     bgBase: 'hsl(35, 30%, 92%)',
-    bgSurface: 'hsl(35, 30%, 96%)',
+    bgSurface: '#ffffff',
   },
   {
     id: 'graphite-void',

@@ -434,11 +434,23 @@ export function extractHexColor(value: string): string | null {
   }
   const fullHex = raw.match(/^#([0-9a-fA-F]{6})$/)
   if (fullHex) return `#${fullHex[1].toLowerCase()}`
-  const rgb = raw.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[\d.]+\s*)?\)$/i)
-  if (!rgb) return null
-  const [r, g, b] = [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])]
   const toHex = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0')
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+  const rgb = raw.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[\d.]+\s*)?\)$/i)
+  if (rgb) {
+    const [r, g, b] = [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])]
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+  }
+  // Resolve hsl(), color-mix(), and other CSS color functions via the browser
+  if (typeof document !== 'undefined') {
+    const el = document.createElement('span')
+    el.style.color = raw
+    document.body.appendChild(el)
+    const computed = getComputedStyle(el).color
+    document.body.removeChild(el)
+    const m = computed.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/)
+    if (m) return `#${toHex(Number(m[1]))}${toHex(Number(m[2]))}${toHex(Number(m[3]))}`
+  }
+  return null
 }
 
 export function getNextFontScale(current: number, deltaY: number) {

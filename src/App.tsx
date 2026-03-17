@@ -4224,7 +4224,14 @@ export default function App() {
     clearPanelTurnComplete,
     upsertPanelToHistory,
   }), [workspaceRoot, applicationSettings, api, connectWindowWithRetry, connectWindow, formatConnectionError])
-  const { sendToAgent, closePanel, switchModel } = agentPipelineCtrl
+  const { sendToAgent, closePanel: closePanelRaw, switchModel } = agentPipelineCtrl
+
+  const closePanel = async (panelId: string, opts?: { skipUpsertToHistory?: boolean }) => {
+    await closePanelRaw(panelId, opts)
+    // Notify orchestrator task list about closed panel
+    const w = window as unknown as { __orchestratorPanelCloseCheck?: (id: string) => void }
+    w.__orchestratorPanelCloseCheck?.(panelId)
+  }
 
   function kickQueuedMessage(winId: string) {
     let nextText = ''
@@ -4322,6 +4329,25 @@ export default function App() {
             setShowWorkspaceWindow(true)
             setFocusedEditorId(null)
             setActivePanelId(panelId)
+          }}
+          onCreateTaskPanel={async (title, injectedPrompt) => {
+            const id = newId()
+            const panelWorkspace = workspaceRoot
+            const ws = workspaceSettingsByPath[panelWorkspace]
+            const p = makeDefaultPanel(id, panelWorkspace)
+            if (ws?.defaultModel) p.model = ws.defaultModel
+            p.provider = getModelProvider(p.model)
+            p.messages = withModelBanner(p.messages, p.model)
+            p.title = title
+            p.pendingInputs = [injectedPrompt]
+            setPanels((prev) => {
+              if (prev.length >= MAX_PANELS) return prev
+              return [...prev, p]
+            })
+            setActivePanelId(id)
+            setShowWorkspaceWindow(true)
+            setFocusedEditorId(null)
+            return id
           }}
           orchestratorSettings={orchestratorSettings}
           setOrchestratorSettings={setOrchestratorSettings}

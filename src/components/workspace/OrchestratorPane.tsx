@@ -23,6 +23,8 @@ export interface OrchestratorPaneProps {
   workspaceRoot: string
   onOpenSettings: () => void
   onOpenAgentPanel?: (panelId: string) => void
+  onCreateTaskPanel?: (title: string, injectedPrompt: string) => Promise<string | null>
+  onPanelClosed?: (panelId: string) => void
   orchestratorSettings: OrchestratorSettings
   setOrchestratorSettings: React.Dispatch<React.SetStateAction<OrchestratorSettings>>
   onClose?: () => void
@@ -83,7 +85,16 @@ interface OrchestratorStateSnapshot {
   error: string | null
 }
 
-type OrchestratorMode = 'goal-run' | 'review'
+type OrchestratorMode = 'goal-run' | 'review' | 'task-list'
+
+type TaskListItemStatus = 'pending' | 'in-progress' | 'done'
+
+interface TaskListItem {
+  id: string
+  name: string
+  status: TaskListItemStatus
+  panelId?: string
+}
 
 type GoalWizardStep = 1 | 2 | 3 | 4 | 5 | 6
 
@@ -144,6 +155,8 @@ type OrchestratorApi = {
   gitCommit?: (workspaceRoot: string, selectedPaths?: string[]) => Promise<{ ok: boolean; error?: string }>
   gitPush?: (workspaceRoot: string, selectedPaths?: string[]) => Promise<{ ok: boolean; error?: string }>
   gitRollback?: (workspaceRoot: string, selectedPaths?: string[]) => Promise<{ ok: boolean; error?: string }>
+  readWorkspaceTextFile?: (workspaceRoot: string, relativePath: string) => Promise<{ content: string } | null>
+  writeWorkspaceFile?: (workspaceRoot: string, relativePath: string, content: string) => Promise<{ relativePath: string; size: number } | null>
 }
 
 const MODE_LABELS: Record<OrchestratorMode, { label: string; placeholder: string; button: string; importLabel: string }> = {
@@ -159,7 +172,16 @@ const MODE_LABELS: Record<OrchestratorMode, { label: string; placeholder: string
     button: 'Start Review',
     importLabel: 'Import Review',
   },
+  'task-list': {
+    label: 'Task List',
+    placeholder: '',
+    button: '',
+    importLabel: '',
+  },
 }
+
+const TASK_LIST_STORAGE_DIR = '.barnaby/orchestrator/tasks'
+const TASK_LIST_FILE = `${TASK_LIST_STORAGE_DIR}/task-list.json`
 
 function getOrchestratorApi(): OrchestratorApi {
   return ((window as unknown as { agentOrchestrator?: OrchestratorApi; fireharness?: OrchestratorApi }).agentOrchestrator
@@ -883,6 +905,8 @@ export function OrchestratorPane({
   workspaceRoot,
   onOpenSettings,
   onOpenAgentPanel,
+  onCreateTaskPanel,
+  onPanelClosed,
   orchestratorSettings,
   setOrchestratorSettings,
   onClose,
@@ -902,8 +926,142 @@ export function OrchestratorPane({
   const [wizardMode, setWizardMode] = useState<'create' | 'edit'>('create')
   const [wizardStep, setWizardStep] = useState<GoalWizardStep>(1)
   const [wizardDraft, setWizardDraft] = useState<GoalPlan>(() => createBlankGoalPlan(orchestratorSettings))
+  const [taskListItems, setTaskListItems] = useState<TaskListItem[]>([])
+  const [taskListLoaded, setTaskListLoaded] = useState(false)
+  const [taskEditingId, setTaskEditingId] = useState<string | null>(null)
+  const [taskEditDraft, setTaskEditDraft] = useState('')
+  const [taskNewDraft, setTaskNewDraft] = useState('')
+  const taskListItemsRef = useRef(taskListItems)
+  taskListItemsRef.current = taskListItems
   const summaryRef = useRef<HTMLDivElement>(null)
   const modeConfig = MODE_LABELS[mode]
+
+  // ── Task list file persistence ─────────────────────────────────────
+
+  const loadTaskList = useCallback(async () => {
+    if (!workspaceRoot) return
+    const api = getOrchestratorApi()
+    if (typeof api.readWorkspaceTextFile !== 'function') return
+    try {
+      const result = await api.readWorkspaceTextFile(workspaceRoot, TASK_LIST_FILE)
+      if (result?.content) {
+        const parsed = JSON.parse(result.content) as TaskListItem[]
+        if (Array.isArray(parsed)) {
+          setTaskListItems(parsed)
+        }
+      }
+    } catch {
+      // File doesn't exist yet — start empty. Create folder structure.
+      if (typeof api.writeWorkspaceFile === 'function') {
+        await api.writeWorkspaceFile(workspaceRoot, `${TASK_LIST_STORAGE_DIR}/.gitkeep`, '').catch(() => {})
+        await api.writeWorkspaceFile(workspaceRoot, '.barnaby/orchestrator/goals/.gitkeep', '').catch(() => {})
+        await api.writeWorkspaceFile(workspaceRoot, '.barnaby/orchestrator/comparative-reviews/.gitkeep', '').catch(() => {})
+      }
+    }
+    setTaskListLoaded(true)
+  }, [workspaceRoot])
+
+  const saveTaskList = useCallback(async (items: TaskListItem[]) => {
+    if (!workspaceRoot) return
+    const api = getOrchestratorApi()
+    if (typeof api.writeWorkspaceFile !== 'function') return
+    try {
+      await api.writeWorkspaceFile(workspaceRoot, TASK_LIST_FILE, JSON.stringify(items, null, 2))
+    } catch {
+      // Best-effort write
+    }
+  }, [workspaceRoot])
+
+  useEffect(() => {
+    if (mode === 'task-list' && !taskListLoaded) {
+      void loadTaskList()
+    }
+  }, [mode, taskListLoaded, loadTaskList])
+
+  const updateTaskListAndSave = useCallback((updater: (prev: TaskListItem[]) => TaskListItem[]) => {
+    setTaskListItems((prev) => {
+      const next = updater(prev)
+      void saveTaskList(next)
+      return next
+    })
+  }, [saveTaskList])
+
+  const addTask = useCallback((name: string) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    updateTaskListAndSave((prev) => [...prev, { id: makeLocalId('task'), name: trimmed, status: 'pending' }])
+  }, [updateTaskListAndSave])
+
+  const deleteTask = useCallback((taskId: string) => {
+    updateTaskListAndSave((prev) => prev.filter((t) => t.id !== taskId))
+  }, [updateTaskListAndSave])
+
+  const updateTaskName = useCallback((taskId: string, name: string) => {
+    updateTaskListAndSave((prev) => prev.map((t) => t.id === taskId ? { ...t, name } : t))
+  }, [updateTaskListAndSave])
+
+  const updateTaskStatus = useCallback((taskId: string, status: TaskListItemStatus) => {
+    updateTaskListAndSave((prev) => prev.map((t) => t.id === taskId ? { ...t, status } : t))
+  }, [updateTaskListAndSave])
+
+  const moveTask = useCallback((fromIndex: number, delta: -1 | 1) => {
+    updateTaskListAndSave((prev) => moveItem(prev, fromIndex, delta))
+  }, [updateTaskListAndSave])
+
+  const startOrContinueTask = useCallback(async (task: TaskListItem) => {
+    if (!onCreateTaskPanel || !workspaceRoot) return
+
+    const logRelPath = `${TASK_LIST_STORAGE_DIR}/${task.id}-log.md`
+    const injectedPrompt = `Please continue with this task: ${task.name}. Provide current status as per log ${logRelPath}, and request next steps from user.\n\nIMPORTANT: Update your progress to the log file at \`${logRelPath}\` as you work. When done, ask the user if the task is complete.`
+
+    const panelId = await onCreateTaskPanel(task.name, injectedPrompt)
+    if (panelId) {
+      updateTaskListAndSave((prev) =>
+        prev.map((t) => t.id === task.id ? { ...t, status: 'in-progress', panelId } : t),
+      )
+      // Create initial log file if it doesn't exist
+      const api = getOrchestratorApi()
+      if (typeof api.readWorkspaceTextFile === 'function') {
+        try {
+          await api.readWorkspaceTextFile(workspaceRoot, logRelPath)
+        } catch {
+          // File doesn't exist, create it
+          if (typeof api.writeWorkspaceFile === 'function') {
+            const initialLog = `# Task Log: ${task.name}\n\nCreated: ${new Date().toISOString()}\n\n## Progress\n\n- Task started\n`
+            await api.writeWorkspaceFile(workspaceRoot, logRelPath, initialLog).catch(() => {})
+          }
+        }
+      }
+    }
+  }, [onCreateTaskPanel, workspaceRoot, updateTaskListAndSave])
+
+  const markTaskComplete = useCallback((taskId: string) => {
+    updateTaskListAndSave((prev) => prev.map((t) => t.id === taskId ? { ...t, status: 'done', panelId: undefined } : t))
+  }, [updateTaskListAndSave])
+
+  // Listen for panel close events to prompt task completion
+  const panelCloseCheckRef = useRef<(panelId: string) => void>()
+  panelCloseCheckRef.current = (panelId: string) => {
+    const task = taskListItemsRef.current.find((t) => t.panelId === panelId && t.status === 'in-progress')
+    if (!task) return
+    const isComplete = globalThis.confirm(`Is the task "${task.name}" complete?`)
+    if (isComplete) {
+      markTaskComplete(task.id)
+    } else {
+      updateTaskListAndSave((prev) =>
+        prev.map((t) => t.id === task.id ? { ...t, panelId: undefined } : t),
+      )
+    }
+  }
+
+  // Expose panel close check to parent via a stable callback on window
+  useEffect(() => {
+    const w = window as unknown as { __orchestratorPanelCloseCheck?: (panelId: string) => void }
+    w.__orchestratorPanelCloseCheck = (panelId: string) => {
+      panelCloseCheckRef.current?.(panelId)
+    }
+    return () => { delete w.__orchestratorPanelCloseCheck }
+  }, [])
 
   useEffect(() => {
     try {
@@ -1617,6 +1775,156 @@ export function OrchestratorPane({
               </DashboardRow>
             )}
 
+            {/* Task List view */}
+            {mode === 'task-list' && (
+              <div className="space-y-3">
+                <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Manage standalone tasks. Start/Continue opens a chat panel that picks up where you left off.
+                </div>
+
+                {/* Add new task */}
+                <div className="flex gap-2">
+                  <input
+                    className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-xs px-2.5 py-1.5 placeholder:text-neutral-400 dark:placeholder:text-neutral-500"
+                    value={taskNewDraft}
+                    placeholder="New task name..."
+                    onChange={(e) => setTaskNewDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        addTask(taskNewDraft)
+                        setTaskNewDraft('')
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs hover:bg-blue-700 disabled:opacity-50"
+                    disabled={!taskNewDraft.trim()}
+                    onClick={() => {
+                      addTask(taskNewDraft)
+                      setTaskNewDraft('')
+                    }}
+                  >
+                    Add
+                  </button>
+                </div>
+
+                {/* Task list */}
+                {taskListItems.length === 0 && taskListLoaded && (
+                  <div className="py-4 text-center text-xs text-neutral-400 dark:text-neutral-500 italic">
+                    No tasks yet. Add one above.
+                  </div>
+                )}
+                <div className="space-y-1.5">
+                  {taskListItems.map((task, index) => (
+                    <div
+                      key={task.id}
+                      className="flex items-center gap-2 rounded-md border border-neutral-200 dark:border-neutral-700 px-2.5 py-2 bg-white dark:bg-neutral-800/60"
+                    >
+                      {/* Status indicator */}
+                      <span className="text-sm shrink-0" title={task.status}>
+                        {task.status === 'done' ? '\u2705' : task.status === 'in-progress' ? '\u{1F504}' : '\u23F3'}
+                      </span>
+
+                      {/* Name (editable) */}
+                      {taskEditingId === task.id ? (
+                        <input
+                          className="flex-1 rounded-md border border-blue-400 dark:border-blue-600 bg-white dark:bg-neutral-800 text-xs px-2 py-1"
+                          value={taskEditDraft}
+                          autoFocus
+                          onChange={(e) => setTaskEditDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              updateTaskName(task.id, taskEditDraft)
+                              setTaskEditingId(null)
+                            } else if (e.key === 'Escape') {
+                              setTaskEditingId(null)
+                            }
+                          }}
+                          onBlur={() => {
+                            updateTaskName(task.id, taskEditDraft)
+                            setTaskEditingId(null)
+                          }}
+                        />
+                      ) : (
+                        <span
+                          className={`flex-1 text-xs cursor-pointer ${task.status === 'done' ? 'line-through text-neutral-400 dark:text-neutral-500' : 'text-neutral-700 dark:text-neutral-200'}`}
+                          onDoubleClick={() => {
+                            setTaskEditingId(task.id)
+                            setTaskEditDraft(task.name)
+                          }}
+                          title="Double-click to edit"
+                        >
+                          {task.name}
+                        </span>
+                      )}
+
+                      {/* Action buttons */}
+                      <div className="flex items-center gap-1 shrink-0">
+                        {task.status !== 'done' && (
+                          <button
+                            type="button"
+                            className="h-6 px-2 rounded border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-300 text-[10px] hover:bg-green-100 dark:hover:bg-green-900/40"
+                            onClick={() => { void startOrContinueTask(task) }}
+                            title="Start or continue this task in a new chat panel"
+                          >
+                            {task.status === 'in-progress' ? 'Continue' : 'Start'}
+                          </button>
+                        )}
+                        {task.status === 'in-progress' && (
+                          <button
+                            type="button"
+                            className="h-6 px-2 rounded border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 text-[10px] hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                            onClick={() => markTaskComplete(task.id)}
+                            title="Mark as done"
+                          >
+                            Done
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="h-6 px-1.5 rounded border border-neutral-300 dark:border-neutral-600 text-neutral-500 dark:text-neutral-400 text-[10px] hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-30"
+                          onClick={() => moveTask(index, -1)}
+                          disabled={index === 0}
+                          title="Move up"
+                        >
+                          {'\u25B2'}
+                        </button>
+                        <button
+                          type="button"
+                          className="h-6 px-1.5 rounded border border-neutral-300 dark:border-neutral-600 text-neutral-500 dark:text-neutral-400 text-[10px] hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-30"
+                          onClick={() => moveTask(index, 1)}
+                          disabled={index === taskListItems.length - 1}
+                          title="Move down"
+                        >
+                          {'\u25BC'}
+                        </button>
+                        <button
+                          type="button"
+                          className="h-6 px-1.5 rounded border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 text-[10px] hover:bg-red-50 dark:hover:bg-red-950/30"
+                          onClick={() => deleteTask(task.id)}
+                          title="Delete task"
+                        >
+                          {'\u2715'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Summary stats */}
+                {taskListItems.length > 0 && (
+                  <div className="flex items-center gap-3 text-[10px] text-neutral-400 dark:text-neutral-500 pt-1">
+                    <span>{taskListItems.length} tasks</span>
+                    <span>{taskListItems.filter(t => t.status === 'done').length} done</span>
+                    <span>{taskListItems.filter(t => t.status === 'in-progress').length} active</span>
+                    <span>{taskListItems.filter(t => t.status === 'pending').length} pending</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Goal display */}
             {goalText && (
               <DashboardRow label="Goal">
@@ -1729,8 +2037,8 @@ export function OrchestratorPane({
             )}
           </div>
 
-          {/* Input area */}
-          <div className="shrink-0 px-3 py-2.5 border-t border-neutral-200/80 dark:border-neutral-800">
+          {/* Input area (hidden in task-list mode) */}
+          {mode !== 'task-list' && <div className="shrink-0 px-3 py-2.5 border-t border-neutral-200/80 dark:border-neutral-800">
             <div className="text-[10px] text-neutral-400 dark:text-neutral-500 mb-1.5 font-medium uppercase tracking-wide">
               {isRunning ? 'Interrupt Orchestrator:' : `${modeConfig.label} Prompt:`}
             </div>
@@ -1752,7 +2060,7 @@ export function OrchestratorPane({
                 {startingRun ? 'Starting...' : isRunning ? 'Submit' : modeConfig.button}
               </button>
             </div>
-          </div>
+          </div>}
         </>
       )}
       <GoalWizardModal

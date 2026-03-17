@@ -312,7 +312,7 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
 
   async function applyWorkspaceRoot(
     nextRoot: string,
-    options?: { showFailureAlert?: boolean; rebindPanels?: boolean; onFailure?: (failure: WorkspaceApplyFailure) => void },
+    options?: { showFailureAlert?: boolean; rebindPanels?: boolean; onFailure?: (failure: WorkspaceApplyFailure) => void; skipRootStateUpdate?: boolean },
   ) {
     const targetRoot = nextRoot.trim()
     if (!targetRoot) return null
@@ -337,9 +337,11 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
     ctx.activeWorkspaceLockRef.current = resolvedRoot
     if (previousLockedRoot && previousLockedRoot !== resolvedRoot) void ctx.api.releaseWorkspace(previousLockedRoot).catch(() => {})
     if (ctx.workspaceRootRef.current === resolvedRoot) return resolvedRoot
-    ctx.setWorkspaceRoot(resolvedRoot)
-    if (rebindPanels) {
-      ctx.setPanels((prev) => prev.map((p) => ({ ...p, cwd: resolvedRoot, connected: false, status: 'Workspace changed. Reconnect on next send.' })))
+    if (!options?.skipRootStateUpdate) {
+      ctx.setWorkspaceRoot(resolvedRoot)
+      if (rebindPanels) {
+        ctx.setPanels((prev) => prev.map((p) => ({ ...p, cwd: resolvedRoot, connected: false, status: 'Workspace changed. Reconnect on next send.' })))
+      }
     }
     return resolvedRoot
   }
@@ -366,6 +368,7 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
       showFailureAlert: !fromPicker,
       rebindPanels: false,
       onFailure: fromPicker ? (f) => handleWorkspacePickerFailure(targetRoot, f) : undefined,
+      skipRootStateUpdate: true,
     }).finally(() => {
       if (fromPicker) ctx.setWorkspacePickerOpening(null)
     })
@@ -375,6 +378,9 @@ export function createWorkspaceLifecycleController(ctx: WorkspaceLifecycleContex
       closeWorkspacePicker()
     }
     await Promise.all(panelIds.map((id) => ctx.api.disconnect(id).catch(() => {})))
+    // Update workspaceRoot and panels in the same synchronous batch so React
+    // never renders a frame with the new root but stale old-workspace panels.
+    ctx.setWorkspaceRoot(openedRoot)
     ctx.setPanels([])
     ctx.setEditorPanels([])
     ctx.setActivePanelId('default')

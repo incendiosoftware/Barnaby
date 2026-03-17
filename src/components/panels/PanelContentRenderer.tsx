@@ -133,7 +133,7 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         onViewRawConversation={() => ctx.openRawConversationInspector(w.id)}
         onDownloadTranscript={() => ctx.downloadPanelTranscript(w.id)}
         showContinueConversationButton
-        onContinueConversation={() => inputLocked ? ctx.continueLockedConversation(w.id) : ctx.nudgeConversation(w.id)}
+        onContinueConversation={() => ctx.continueLockedConversation(w.id)}
         onClose={() => ctx.closePanel(w.id)}
       />
 

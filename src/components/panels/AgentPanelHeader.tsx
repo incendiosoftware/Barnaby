@@ -152,9 +152,9 @@ export function AgentPanelHeader({
             title="Continue conversation"
             aria-label="Continue conversation"
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-              <path d="M8 2.5a5.5 5.5 0 1 1-3.9 9.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M4.1 9.5v2.9h2.9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10h-2.5c0 4.14-3.36 7.5-7.5 7.5S4.5 16.14 4.5 12 7.86 4.5 12 4.5V2z" />
+              <path d="M12 2l4.5 4.5L12 11V2z" />
             </svg>
           </button>
         )}

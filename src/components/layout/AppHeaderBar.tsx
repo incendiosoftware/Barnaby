@@ -1,5 +1,5 @@
 import React from 'react'
-import type { ChatHistoryEntry, LayoutMode, ModelInterface, ConnectivityProvider } from '../../types'
+import type { LayoutMode, ModelInterface, ConnectivityProvider } from '../../types'
 import { PanelBottomIcon } from '../icons'
 
 interface AppHeaderBarProps {
@@ -17,14 +17,7 @@ interface AppHeaderBarProps {
   UI_ICON_BUTTON_CLASS: string
   openWorkspaceSettings: (mode: 'new' | 'edit') => void
   openManageWorkspaces: () => void
-  historyDropdownRef: React.RefObject<HTMLDivElement>
-  historyDropdownOpen: boolean
-  setHistoryDropdownOpen: React.Dispatch<React.SetStateAction<boolean>>
-  workspaceScopedHistory: ChatHistoryEntry[]
-  openChatFromHistory: (id: string) => void
-  downloadHistoryTranscript: (id: string) => void | Promise<void>
-  formatHistoryOptionLabel: (entry: ChatHistoryEntry) => string
-  setDeleteHistoryIdPending: React.Dispatch<React.SetStateAction<string | null>>
+  onOpenChatHistory: () => void
   createAgentPanel: (opts?: { sourcePanelId?: string; initialModel?: string }) => void
   layoutMode: LayoutMode
   setLayoutMode: React.Dispatch<React.SetStateAction<LayoutMode>>
@@ -48,14 +41,7 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
     UI_ICON_BUTTON_CLASS,
     openWorkspaceSettings,
     openManageWorkspaces,
-    historyDropdownRef,
-    historyDropdownOpen,
-    setHistoryDropdownOpen,
-    workspaceScopedHistory,
-    openChatFromHistory,
-    downloadHistoryTranscript,
-    formatHistoryOptionLabel,
-    setDeleteHistoryIdPending,
+    onOpenChatHistory,
     createAgentPanel,
     layoutMode,
     setLayoutMode,
@@ -167,68 +153,18 @@ export function AppHeaderBar(props: AppHeaderBarProps) {
             </svg>
           </button>
           <div className="mx-2 h-6 w-px" style={separatorStyle} />
-          <span style={subtleLabelStyle}>History</span>
-          <div ref={historyDropdownRef} className="relative shrink-0">
-            <button
-              type="button"
-              className={`h-9 px-3 rounded-lg shadow-sm w-[45vw] max-w-[540px] min-w-[270px] text-left flex items-center justify-between gap-2 ${UI_INPUT_CLASS}`}
-              onClick={() => setHistoryDropdownOpen((o) => !o)}
-            >
-              <span className="truncate">Open chat...</span>
-              <svg width="12" height="12" viewBox="0 0 10 10" className={`shrink-0 transition-transform ${historyDropdownOpen ? 'rotate-180' : ''}`}>
-                <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-              </svg>
-            </button>
-            {historyDropdownOpen && (
-              <div className="absolute top-full left-0 right-0 mt-1 rounded-lg border shadow-lg z-50 max-h-64 overflow-auto min-w-[270px]" style={dropdownStyle}>
-                {workspaceScopedHistory.length === 0 ? (
-                  <div className="px-3 py-2 text-sm" style={{ color: 'var(--theme-text-tertiary)' }}>No conversations yet</div>
-                ) : (
-                  workspaceScopedHistory.map((entry) => (
-                    <div
-                      key={entry.id}
-                      className="flex items-center gap-1.5 group px-3 py-1.5 cursor-pointer text-sm"
-                      style={{ color: 'var(--theme-text-primary)' }}
-                      onClick={() => openChatFromHistory(entry.id)}
-                    >
-                      <span className="flex-1 min-w-0 truncate">
-                        {formatHistoryOptionLabel(entry)}
-                      </span>
-                      <button
-                        type="button"
-                        className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md border-0 text-neutral-500 hover:bg-emerald-100 hover:text-emerald-700 dark:text-neutral-400 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void downloadHistoryTranscript(entry.id)
-                        }}
-                        title="Download transcript"
-                        aria-label="Download transcript"
-                      >
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                          <path d="M6 1.8V7.4M6 7.4L3.8 5.2M6 7.4L8.2 5.2M2.2 9.4H9.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md border-0 text-neutral-500 hover:bg-red-100 hover:text-red-700 dark:text-neutral-400 dark:hover:bg-red-950/40 dark:hover:text-red-300"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setDeleteHistoryIdPending(entry.id)
-                          setHistoryDropdownOpen(false)
-                        }}
-                        title="Delete conversation"
-                        aria-label="Delete conversation"
-                      >
-                        <svg width="11" height="11" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                          <path d="M2 2L8 8M8 2L2 8" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
+          <button
+            type="button"
+            className={`h-9 px-3 rounded-lg shadow-sm text-left flex items-center gap-2 ${UI_INPUT_CLASS}`}
+            onClick={onOpenChatHistory}
+            title="Open chat history"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="shrink-0">
+              <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M8 4.5V8.5L10.5 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span className="text-xs">History</span>
+          </button>
           {/* Dropdown container */}
           <div ref={newChatDropdownRef} className="relative shrink-0">
             <button

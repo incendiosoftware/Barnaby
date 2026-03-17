@@ -96,4 +96,13 @@ html {
   background: var(--theme-scrollbar-track);
 }
 
+/* Ensure code block children are always selectable */
+[data-chat-code-rollup] ~ div pre,
+[data-chat-code-rollup] ~ div pre *,
+[data-chat-code-rollup] ~ div code,
+[data-chat-code-rollup] ~ div code * {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
 /* Intentionally no custom drag cursors. */

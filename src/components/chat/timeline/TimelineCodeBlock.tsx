@@ -2,7 +2,7 @@
  * Collapsible code block with syntax highlighting or diff view.
  */
 
-import React from 'react'
+import React, { useCallback, useState } from 'react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import type { StandaloneTheme } from '../../../types'
@@ -29,6 +29,15 @@ export const TimelineCodeBlock = React.memo(function TimelineCodeBlock({
   activeTheme,
 }: TimelineCodeBlockProps) {
   const lineCount = normalized ? normalized.split('\n').length : 0
+  const [copyLabel, setCopyLabel] = useState<'Copy' | 'Copied!'>('Copy')
+
+  const handleCopy = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    void navigator.clipboard.writeText(normalized).then(() => {
+      setCopyLabel('Copied!')
+      setTimeout(() => setCopyLabel('Copy'), 1500)
+    })
+  }, [normalized])
   const diffLines = normalized.split('\n')
   const shellStyle: React.CSSProperties = {
     borderColor: 'var(--theme-border-default)',
@@ -71,7 +80,17 @@ export const TimelineCodeBlock = React.memo(function TimelineCodeBlock({
             </span>
           )}
         </span>
-        <svg
+        <span className="inline-flex items-center gap-2">
+          <span
+            role="button"
+            tabIndex={-1}
+            className="rounded px-1.5 py-0.5 text-[10px] leading-none hover:opacity-70 cursor-pointer"
+            style={diffBadgeStyle}
+            onClick={handleCopy}
+          >
+            {copyLabel}
+          </span>
+          <svg
           width="12"
           height="12"
           viewBox="0 0 12 12"
@@ -81,11 +100,12 @@ export const TimelineCodeBlock = React.memo(function TimelineCodeBlock({
         >
           <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
+        </span>
       </button>
       {isOpen && (
         <div className="rounded-b-lg overflow-hidden border-t" style={bodyStyle}>
           {isDiff ? (
-            <div className="p-3 overflow-auto max-h-80 whitespace-pre select-text" style={diffSurfaceStyle}>
+            <div className="p-3 overflow-auto max-h-80 whitespace-pre select-text cursor-text" style={diffSurfaceStyle}>
               <code className="block text-[12px] leading-5 font-code select-text" style={diffCodeStyle}>
                 {diffLines.map((line, idx) => (
                   <div
@@ -116,6 +136,8 @@ export const TimelineCodeBlock = React.memo(function TimelineCodeBlock({
                 fontFamily: 'var(--app-font-code)',
                 background: syntaxBackground,
                 userSelect: 'text',
+                WebkitUserSelect: 'text',
+                cursor: 'text',
               }}
               showLineNumbers={true}
               wrapLines={false}

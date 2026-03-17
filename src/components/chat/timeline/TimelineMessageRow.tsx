@@ -2,14 +2,14 @@
  * Message row - user/assistant/system/thinking with markdown, code blocks, attachments.
  */
 
-import React, { useCallback, useRef } from 'react'
+import React, { useCallback, useMemo, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { AgentInteractionMode, ChatRole, MessageFormat, PastedImageAttachment, StandaloneTheme } from '../../../types'
 import type { TimelineUnit } from '../../../chat/timelineTypes'
 import { TimelineCodeBlock } from './TimelineCodeBlock'
 import { COLLAPSIBLE_CODE_MIN_LINES, INTERACTION_MODE_META } from '../../../constants'
-import { LIMIT_WARNING_PREFIX, looksLikeDiff, toLocalFileUrl } from '../../../utils/appCore'
+import { LIMIT_WARNING_PREFIX, looksLikeDiff, toLocalFileUrl, linkifyFilePathsInMarkdown } from '../../../utils/appCore'
 
 export interface TimelineMessageRowProps {
   unit: TimelineUnit
@@ -215,6 +215,11 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
     ]
   )
 
+  const linkifiedContent = useMemo(
+    () => (role === 'assistant' && format === 'markdown' ? linkifyFilePathsInMarkdown(content) : content),
+    [content, role, format]
+  )
+
   const hasFencedCodeBlocks = content.includes('```')
   const assistantMessageContainerStyle =
     role === 'assistant' && !shouldCollapseThinking
@@ -312,7 +317,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
               {role === 'assistant' && format === 'markdown' ? (
                 <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-headings:my-1 prose-ul:my-0.5 prose-li:my-0 prose-code:text-[currentColor] font-chat select-text">
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={createMarkdownComponents(true)}>
-                    {content}
+                    {linkifiedContent}
                   </ReactMarkdown>
                 </div>
               ) : (
@@ -337,7 +342,7 @@ export const TimelineMessageRow = React.memo(function TimelineMessageRow(props: 
         ) : role === 'assistant' && format === 'markdown' ? (
           <div className="prose prose-neutral dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-p:my-0.5 prose-p:leading-snug prose-ul:my-0.5 prose-li:my-0 prose-code:text-[currentColor] font-chat select-text">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={createMarkdownComponents(false)}>
-              {content}
+              {linkifiedContent}
             </ReactMarkdown>
             {isLastAssistantMessage && isStreaming && (
               <span className="inline-block ml-0.5 w-2 h-4 bg-current opacity-80 animate-pulse motion-reduce:animate-none" aria-hidden>▊</span>

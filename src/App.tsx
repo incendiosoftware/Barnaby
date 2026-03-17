@@ -230,6 +230,7 @@ import { AppHeaderBar } from './components/layout/AppHeaderBar'
 import { DockedAppSettings } from './components/settings/DockedAppSettings'
 import { DockZone } from './components/dock/DockZone'
 import { AppModals } from './components/modals/AppModals'
+import { ChatHistoryModal } from './components/modals/ChatHistoryModal'
 import {
   applyThemeOverrides,
   applyWorkspaceTextDraftField,
@@ -242,7 +243,6 @@ import {
   extractHexColor,
   filterMessagesForPresentation,
   formatError,
-  formatHistoryOptionLabel,
   formatLimitResetHint,
   formatRateLimitLabel,
   formatToolTrace,
@@ -470,7 +470,7 @@ export default function App() {
   const [timelineOpenByUnitId, setTimelineOpenByUnitId] = useState<Record<string, boolean>>({})
   const [timelinePinnedCodeByUnitId, setTimelinePinnedCodeByUnitId] = useState<Record<string, boolean>>({})
   const [chatHistory, setChatHistory] = useState<ChatHistoryEntry[]>(() => getInitialChatHistory())
-  const [historyDropdownOpen, setHistoryDropdownOpen] = useState(false)
+  const [showChatHistoryModal, setShowChatHistoryModal] = useState(false)
   const [deleteHistoryIdPending, setDeleteHistoryIdPending] = useState<string | null>(null)
   const [selectedHistoryId, setSelectedHistoryId] = useState<string>('')
   const [deleteAllHistoryChecked, setDeleteAllHistoryChecked] = useState(false)
@@ -511,12 +511,6 @@ export default function App() {
     })
   }, [])
 
-  const workspaceScopedHistory = useMemo(() => {
-    const normalizedWorkspaceRoot = normalizeWorkspacePathForCompare(workspaceRoot || '')
-    return chatHistory.filter(
-      (entry) => normalizeWorkspacePathForCompare(entry.workspaceRoot || '') === normalizedWorkspaceRoot,
-    )
-  }, [chatHistory, workspaceRoot])
   const managedWorkspacePaths = useMemo(() => {
     const seen = new Set<string>()
     const add = (value: string, out: string[]) => {
@@ -641,7 +635,6 @@ export default function App() {
   const flushAppStateSaveRef = useRef<(() => void) | null>(null)
   const workspaceSnapshotsRef = useRef<Record<string, WorkspaceUiSnapshot>>({})
   const startupReadyNotifiedRef = useRef(false)
-  const historyDropdownRef = useRef<HTMLDivElement>(null)
   const codeWindowSettingsHostRef = useRef<HTMLDivElement | null>(null)
   const lastScrollToUserMessageRef = useRef<{ panelId: string; messageId: string } | null>(null)
 
@@ -1014,16 +1007,6 @@ export default function App() {
   useEffect(() => { workspaceFormRef.current = workspaceForm }, [workspaceForm])
 
   // ── UI side-effects ───────────────────────────────────────────────
-  useEffect(() => {
-    if (!historyDropdownOpen) return
-    const onMouseDown = (e: MouseEvent) => {
-      if (historyDropdownRef.current && !historyDropdownRef.current.contains(e.target as Node)) {
-        setHistoryDropdownOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', onMouseDown)
-    return () => document.removeEventListener('mousedown', onMouseDown)
-  }, [historyDropdownOpen])
   useEffect(() => {
     if (appSettingsView === 'mcp-servers') void refreshMcpServers()
   }, [appSettingsView])
@@ -2121,12 +2104,12 @@ export default function App() {
   )
 
   function openChatFromHistory(historyId: string) {
-    const entry = workspaceScopedHistory.find((x) => x.id === historyId)
+    const entry = chatHistory.find((x) => x.id === historyId)
     if (!entry) return
     const existing = panelsRef.current.find((x) => x.historyId === historyId)
     if (existing) {
       setActivePanelId(existing.id)
-      setHistoryDropdownOpen(false)
+      setShowChatHistoryModal(false)
       setFocusedEditorId(null)
       return
     }
@@ -2180,7 +2163,7 @@ export default function App() {
       ]
     })
     setActivePanelId(panelId)
-    setHistoryDropdownOpen(false)
+    setShowChatHistoryModal(false)
     setFocusedEditorId(null)
   }
 
@@ -2244,7 +2227,7 @@ export default function App() {
   }
 
   async function downloadHistoryTranscript(historyId: string) {
-    const entry = workspaceScopedHistory.find((x) => x.id === historyId)
+    const entry = chatHistory.find((x) => x.id === historyId)
     if (!entry) return
     if (!api.saveTranscriptFile) {
       alert('Transcript download is not available in this build.')
@@ -2259,7 +2242,7 @@ export default function App() {
     const transcript = buildHistoryTranscript(entry)
     const result = await api.saveTranscriptFile(entry.workspaceRoot || workspaceRoot, suggestedFileName, transcript)
     if (result?.ok) {
-      setHistoryDropdownOpen(false)
+      setShowChatHistoryModal(false)
       return
     }
     if (!result?.canceled) {
@@ -2384,8 +2367,8 @@ export default function App() {
 
       const transcriptHref = toLocalFileUrl(result.path)
       const continuePrompt = transcriptHref
-        ? `Please review the existing conversation here: [${result.path}](${transcriptHref}), and continue.`
-        : `Please review the existing conversation here: ${result.path}, and continue.`
+        ? `Please review the prior conversation here: [${result.path}](${transcriptHref}), and continue.`
+        : `Please review the prior conversation, and continue.`
 
       let shouldSendImmediately = false
       let snapshotForHistory: AgentPanelState | null = null
@@ -2486,7 +2469,7 @@ export default function App() {
     setDeleteHistoryIdPending(null)
     setDeleteAllHistoryChecked(false)
     setDeleteThisAndOlderChecked(false)
-    setHistoryDropdownOpen(false)
+    setShowChatHistoryModal(false)
   }
 
   function archivePanelToHistory(panel: AgentPanelState) {
@@ -4369,14 +4352,7 @@ export default function App() {
         UI_ICON_BUTTON_CLASS={UI_ICON_BUTTON_CLASS}
         openWorkspaceSettings={workspaceSettings.openWorkspaceSettings}
         openManageWorkspaces={() => setShowManageWorkspacesModal(true)}
-        historyDropdownRef={historyDropdownRef}
-        historyDropdownOpen={historyDropdownOpen}
-        setHistoryDropdownOpen={setHistoryDropdownOpen}
-        workspaceScopedHistory={workspaceScopedHistory}
-        openChatFromHistory={openChatFromHistory}
-        downloadHistoryTranscript={downloadHistoryTranscript}
-        formatHistoryOptionLabel={formatHistoryOptionLabel}
-        setDeleteHistoryIdPending={setDeleteHistoryIdPending}
+        onOpenChatHistory={() => setShowChatHistoryModal(true)}
         createAgentPanel={(opts) => createAgentPanel(opts)}
         layoutMode={layoutMode}
         setLayoutMode={setLayoutMode}
@@ -4908,6 +4884,16 @@ export default function App() {
         showOnlyResponsiveModels={showOnlyResponsiveModels}
         setShowOnlyResponsiveModels={setShowOnlyResponsiveModels}
         onModelsCatalogLoaded={markCatalogModelsConfirmed}
+      />
+
+      <ChatHistoryModal
+        open={showChatHistoryModal}
+        onClose={() => setShowChatHistoryModal(false)}
+        chatHistory={chatHistory}
+        workspaceRoot={workspaceRoot}
+        openChatFromHistory={openChatFromHistory}
+        downloadHistoryTranscript={downloadHistoryTranscript}
+        setDeleteHistoryIdPending={setDeleteHistoryIdPending}
       />
 
       <AppModals

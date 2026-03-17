@@ -509,6 +509,69 @@ export function formatToolTrace(raw: string): string {
   return `${cleanTool}: ${detail.length > 70 ? detail.slice(0, 67) + '...' : detail}`
 }
 
+/**
+ * Pre-process markdown to auto-link bare file paths so they become clickable.
+ * Skips fenced code blocks and inline code spans.
+ */
+export function linkifyFilePathsInMarkdown(md: string): string {
+  // Common source/doc file extensions worth linkifying
+  const EXT = /\.(tsx?|jsx?|mjs|cjs|json|ya?ml|toml|md|mdx|css|scss|less|html?|vue|svelte|py|rs|go|java|kt|rb|sh|bat|ps1|sql|graphql|gql|proto|txt|cfg|ini|env|lock|log|xml|svg|png|jpg|jpeg|gif|ico|woff2?|ttf|eot)$/i
+  // Match file-path-like tokens: must contain a `/` or `\` and end with a known extension
+  // Also allow Windows absolute paths like C:\foo\bar.ts
+  const PATH_RE = /(?:[a-zA-Z]:[\\/])?(?:[\w.@~-]+[\\/])+[\w.@~-]+\.\w+(?::\d+(?::\d+)?)?/g
+
+  const lines = md.split('\n')
+  let inFence = false
+  const result: string[] = []
+
+  for (const line of lines) {
+    if (/^```/.test(line.trimStart())) {
+      inFence = !inFence
+      result.push(line)
+      continue
+    }
+    if (inFence) {
+      result.push(line)
+      continue
+    }
+    // Process this line - replace file paths outside of backtick spans and existing markdown links
+    result.push(linkifyPathsInLine(line, PATH_RE, EXT))
+  }
+  return result.join('\n')
+}
+
+function linkifyPathsInLine(line: string, pathRe: RegExp, extRe: RegExp): string {
+  // Split the line into segments: backtick code spans, markdown links, and plain text
+  // We only linkify within plain text segments
+  const segments: { text: string; isProtected: boolean }[] = []
+  let lastIndex = 0
+  // Match inline code (`...`) and markdown links ([...](...))
+  const protectedRe = /`[^`]+`|\[[^\]]*\]\([^)]*\)/g
+  let m: RegExpExecArray | null
+  while ((m = protectedRe.exec(line)) !== null) {
+    if (m.index > lastIndex) {
+      segments.push({ text: line.slice(lastIndex, m.index), isProtected: false })
+    }
+    segments.push({ text: m[0], isProtected: true })
+    lastIndex = m.index + m[0].length
+  }
+  if (lastIndex < line.length) {
+    segments.push({ text: line.slice(lastIndex), isProtected: false })
+  }
+
+  return segments
+    .map((seg) => {
+      if (seg.isProtected) return seg.text
+      return seg.text.replace(pathRe, (match) => {
+        // Strip trailing line:col for extension check
+        const pathOnly = match.replace(/:\d+(?::\d+)?$/, '')
+        if (!extRe.test(pathOnly)) return match
+        return `[${match}](${pathOnly})`
+      })
+    })
+    .join('')
+}
+
 export function fileNameFromRelativePath(relativePath: string) {
   const parts = relativePath.split('/')
   return parts[parts.length - 1] || relativePath

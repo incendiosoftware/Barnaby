@@ -40,6 +40,9 @@ function normalizeWorkspaceSettingsForm(form: WorkspaceSettings): WorkspaceSetti
     deniedAutoReadPrefixes: normalizeAllowedCommandPrefixes(form.deniedAutoReadPrefixes),
     deniedAutoWritePrefixes: normalizeAllowedCommandPrefixes(form.deniedAutoWritePrefixes),
     cursorAllowBuilds: form.cursorAllowBuilds === true,
+    promptShortcuts: Array.isArray(form.promptShortcuts)
+      ? form.promptShortcuts.filter((s) => typeof s === 'string' && s.trim().length > 0).map((s) => s.slice(0, 80))
+      : [],
   }
 }
 
@@ -60,7 +63,8 @@ function workspaceFormsEqual(a: WorkspaceSettings, b: WorkspaceSettings): boolea
     left.allowedAutoWritePrefixes.join('\n') === right.allowedAutoWritePrefixes.join('\n') &&
     left.deniedAutoReadPrefixes.join('\n') === right.deniedAutoReadPrefixes.join('\n') &&
     left.deniedAutoWritePrefixes.join('\n') === right.deniedAutoWritePrefixes.join('\n') &&
-    (left.cursorAllowBuilds ?? false) === (right.cursorAllowBuilds ?? false)
+    (left.cursorAllowBuilds ?? false) === (right.cursorAllowBuilds ?? false) &&
+    (left.promptShortcuts ?? []).join('\n') === (right.promptShortcuts ?? []).join('\n')
   )
 }
 

@@ -120,6 +120,9 @@ export interface ChatInputSectionProps {
   onSetInteractionMode: (mode: AgentInteractionMode) => void
   onSwitchModel: (modelId: string) => void
   onSummarizeContext: () => void
+  promptShortcuts: string[]
+  onInsertShortcut: (text: string) => void
+  onDeleteShortcut: (index: number) => void
 }
 
 interface PopoverPosition {
@@ -172,9 +175,16 @@ export function ChatInputSection({
   onSetInteractionMode,
   onSwitchModel,
   onSummarizeContext,
+  promptShortcuts,
+  onInsertShortcut,
+  onDeleteShortcut,
 }: ChatInputSectionProps) {
   const modeButtonRef = useRef<HTMLButtonElement | null>(null)
   const modelButtonRef = useRef<HTMLButtonElement | null>(null)
+  const shortcutsButtonRef = useRef<HTMLButtonElement | null>(null)
+  const [showShortcuts, setShowShortcuts] = useState(false)
+  const [shortcutsPosition, setShortcutsPosition] = useState<PopoverPosition | null>(null)
+  const [shortcutContextMenu, setShortcutContextMenu] = useState<{ index: number; x: number; y: number } | null>(null)
   const [modePopoverPosition, setModePopoverPosition] = useState<PopoverPosition | null>(null)
   const [modelPopoverPosition, setModelPopoverPosition] = useState<PopoverPosition | null>(null)
   const lockTitle = 'This chat is read-only. Use Continue conversation to unlock and keep going.'
@@ -342,6 +352,18 @@ export function ChatInputSection({
     }
   }, [settingsPopover])
 
+  useEffect(() => {
+    if (!showShortcuts && !shortcutContextMenu) return undefined
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target?.closest?.('[data-settings-popover-root="true"]')) return
+      setShowShortcuts(false)
+      setShortcutContextMenu(null)
+    }
+    window.addEventListener('mousedown', handleClick)
+    return () => window.removeEventListener('mousedown', handleClick)
+  }, [showShortcuts, shortcutContextMenu])
+
   return (
     <div className="relative z-10 border-t px-[15px] py-2.5" style={containerStyle}>
       {panel.attachments.length > 0 && (
@@ -494,6 +516,105 @@ export function ChatInputSection({
                 </button>
                 )
               })}
+            </div>,
+            document.body,
+          )}
+        </div>
+        <div className="flex-1" />
+        <div className="relative" data-settings-popover-root="true">
+          <button
+            type="button"
+            ref={shortcutsButtonRef}
+            className="h-7 inline-flex items-center gap-1 rounded-md border px-1.5 text-[11px] transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+            style={showShortcuts ? pickerButtonActiveStyle : pickerButtonStyle}
+            title="Prompt shortcuts"
+            onClick={() => {
+              const next = !showShortcuts
+              setShowShortcuts(next)
+              if (next && shortcutsButtonRef.current) {
+                const rect = shortcutsButtonRef.current.getBoundingClientRect()
+                const width = 260
+                const nextLeft = Math.min(
+                  Math.max(12, rect.right - width),
+                  Math.max(12, window.innerWidth - width - 12),
+                )
+                setShortcutsPosition({
+                  top: Math.max(12, rect.top - 6),
+                  left: nextLeft,
+                  width,
+                })
+              }
+            }}
+            disabled={inputLocked}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+              <path d="M2 3.5H10M2 6H7M2 8.5H9" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+            </svg>
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden>
+              <path d="M2 3L4 5L6 3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {showShortcuts && shortcutsPosition && createPortal(
+            <div
+              data-settings-popover-root="true"
+              className="fixed z-[240] overflow-y-auto rounded-lg border p-1.5 backdrop-blur"
+              style={{
+                top: shortcutsPosition.top,
+                left: shortcutsPosition.left,
+                width: shortcutsPosition.width,
+                maxHeight: 'min(16rem, calc(100vh - 24px))',
+                transform: 'translateY(-100%)',
+                ...popoverStyle,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {promptShortcuts.length === 0 ? (
+                <div className="px-2 py-2 text-[11px]" style={{ color: 'var(--theme-text-tertiary)' }}>
+                  No shortcuts yet. Right-click a message to add one.
+                </div>
+              ) : (
+                promptShortcuts.map((text, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    className="w-full flex items-center gap-2 appearance-none border-0 text-left text-[11px] px-2 py-1.5 rounded text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                    onClick={() => {
+                      onInsertShortcut(text)
+                      setShowShortcuts(false)
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setShortcutContextMenu({ index: idx, x: e.clientX, y: e.clientY })
+                    }}
+                    title={text}
+                  >
+                    <span className="truncate">{text}</span>
+                  </button>
+                ))
+              )}
+            </div>,
+            document.body,
+          )}
+          {shortcutContextMenu && createPortal(
+            <div
+              className="fixed z-[250] rounded-md border p-1 shadow-lg backdrop-blur"
+              style={{
+                top: shortcutContextMenu.y,
+                left: shortcutContextMenu.x,
+                ...popoverStyle,
+              }}
+            >
+              <button
+                type="button"
+                className="w-full flex items-center gap-2 appearance-none border-0 text-left text-[11px] px-3 py-1.5 rounded text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
+                onClick={() => {
+                  onDeleteShortcut(shortcutContextMenu.index)
+                  setShortcutContextMenu(null)
+                }}
+              >
+                Delete shortcut
+              </button>
             </div>,
             document.body,
           )}

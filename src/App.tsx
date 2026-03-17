@@ -475,6 +475,9 @@ export default function App() {
   const [selectedHistoryId, setSelectedHistoryId] = useState<string>('')
   const [deleteAllHistoryChecked, setDeleteAllHistoryChecked] = useState(false)
   const [deleteThisAndOlderChecked, setDeleteThisAndOlderChecked] = useState(false)
+  const [chatContextMenu, setChatContextMenu] = useState<{
+    x: number; y: number; selectedText: string; messageText: string
+  } | null>(null)
 
   const modelList = modelConfig.interfaces.filter((m) => m.enabled).map((m) => m.id)
   const sessionFallbackModelsByProvider = useMemo<Record<ModelProvider, string[]>>(() => {
@@ -2439,6 +2442,37 @@ export default function App() {
     }
   }
 
+  function nudgeConversation(panelId: string) {
+    const panel = panelsRef.current.find((p) => p.id === panelId)
+    if (!panel || panel.streaming) return
+    stickToBottomByPanelRef.current.set(panelId, true)
+    const userMessage: ChatMessage = {
+      id: newId(),
+      role: 'user',
+      content: AUTO_CONTINUE_PROMPT,
+      interactionMode: panel.interactionMode,
+      format: 'markdown',
+      createdAt: Date.now(),
+    }
+    setPanels((prev) =>
+      prev.map((x) => {
+        if (x.id !== panelId) return x
+        return {
+          ...x,
+          input: '',
+          streaming: true,
+          status: 'Preparing message...',
+          messages: [...x.messages, userMessage],
+        }
+      }),
+    )
+    lastScrollToUserMessageRef.current = { panelId, messageId: userMessage.id }
+    clearPanelTurnComplete(panelId)
+    seedPanelActivity(panelId)
+    markPanelActivity(panelId, { type: 'turnStart' })
+    void sendToAgent(panelId, AUTO_CONTINUE_PROMPT)
+  }
+
   async function deleteHistoryEntry(
     historyId: string,
     opts: { deleteAll?: boolean; deleteThisAndOlder?: boolean },
@@ -2470,6 +2504,44 @@ export default function App() {
     setDeleteAllHistoryChecked(false)
     setDeleteThisAndOlderChecked(false)
     setShowChatHistoryModal(false)
+  }
+
+  function renameChatHistoryEntry(id: string, newTitle: string) {
+    setChatHistory((prev) =>
+      prev.map((e) => (e.id === id ? { ...e, title: newTitle } : e)),
+    )
+  }
+
+  const activePromptShortcuts = useMemo(() => {
+    const ws = workspaceSettingsByPath[workspaceRoot]
+    return ws?.promptShortcuts ?? []
+  }, [workspaceSettingsByPath, workspaceRoot])
+
+  function addPromptShortcut(text: string) {
+    const trimmed = text.trim().slice(0, 80)
+    if (!trimmed) return
+    setWorkspaceSettingsByPath((prev) => {
+      const ws = prev[workspaceRoot]
+      if (!ws) return prev
+      const existing = ws.promptShortcuts ?? []
+      if (existing.includes(trimmed)) return prev
+      const next = [...existing, trimmed].slice(0, 50)
+      const updated = { ...ws, promptShortcuts: next }
+      queueMicrotask(() => void api.writeWorkspaceConfig?.(workspaceRoot, updated).catch(() => {}))
+      return { ...prev, [workspaceRoot]: updated }
+    })
+  }
+
+  function deletePromptShortcut(index: number) {
+    setWorkspaceSettingsByPath((prev) => {
+      const ws = prev[workspaceRoot]
+      if (!ws) return prev
+      const existing = ws.promptShortcuts ?? []
+      const next = existing.filter((_, i) => i !== index)
+      const updated = { ...ws, promptShortcuts: next }
+      queueMicrotask(() => void api.writeWorkspaceConfig?.(workspaceRoot, updated).catch(() => {}))
+      return { ...prev, [workspaceRoot]: updated }
+    })
   }
 
   function archivePanelToHistory(panel: AgentPanelState) {
@@ -2570,9 +2642,24 @@ export default function App() {
   }
 
   function onChatHistoryContextMenu(e: React.MouseEvent<HTMLDivElement>) {
-    if (!getSelectedTextInChatHistory(e.currentTarget)) return
     e.preventDefault()
-    void api.showContextMenu?.('chat-selection')
+    const selectedText = getSelectedTextInChatHistory(e.currentTarget)
+    // Walk up from the click target to find the nearest message unit
+    let messageText = ''
+    let el = e.target as HTMLElement | null
+    while (el && el !== e.currentTarget) {
+      if (el.dataset?.unitId) {
+        messageText = (el.textContent || '').trim()
+        break
+      }
+      el = el.parentElement
+    }
+    setChatContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      selectedText,
+      messageText,
+    })
   }
 
   function onChatHistoryCopy(e: React.ClipboardEvent<HTMLDivElement>) {
@@ -4345,7 +4432,7 @@ export default function App() {
         headerDockToggleButtonClass={headerDockToggleButtonClass}
         showTerminalBar={showTerminalBar}
         setShowTerminalBar={setShowTerminalBar}
-        workspaceList={workspaceList}
+        workspaceList={managedWorkspacePaths}
         workspaceRoot={workspaceRoot}
         requestWorkspaceSwitch={requestWorkspaceSwitch}
         UI_INPUT_CLASS={UI_INPUT_CLASS}
@@ -4894,6 +4981,7 @@ export default function App() {
         openChatFromHistory={openChatFromHistory}
         downloadHistoryTranscript={downloadHistoryTranscript}
         setDeleteHistoryIdPending={setDeleteHistoryIdPending}
+        renameChatHistoryEntry={renameChatHistoryEntry}
       />
 
       <AppModals
@@ -4970,6 +5058,57 @@ export default function App() {
         modelConfig={modelConfig}
         getModelOptions={getModelOptions}
       />
+
+      {chatContextMenu && createPortal(
+        <div
+          className="fixed inset-0 z-[300]"
+          onClick={() => setChatContextMenu(null)}
+          onContextMenu={(e) => { e.preventDefault(); setChatContextMenu(null) }}
+        >
+          <div
+            className="fixed z-[301] rounded-md border p-1 shadow-lg backdrop-blur"
+            style={{
+              top: chatContextMenu.y,
+              left: chatContextMenu.x,
+              backgroundColor: 'var(--theme-bg-elevated)',
+              borderColor: 'var(--theme-border-default)',
+              color: 'var(--theme-text-primary)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {chatContextMenu.selectedText && (
+              <button
+                type="button"
+                className="w-full flex items-center gap-2 appearance-none border-0 text-left text-[11px] px-3 py-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                onClick={() => {
+                  void navigator.clipboard.writeText(chatContextMenu.selectedText)
+                  setChatContextMenu(null)
+                }}
+              >
+                Copy
+              </button>
+            )}
+            {chatContextMenu.messageText && (
+              <button
+                type="button"
+                className="w-full flex items-center gap-2 appearance-none border-0 text-left text-[11px] px-3 py-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                onClick={() => {
+                  addPromptShortcut(chatContextMenu.messageText)
+                  setChatContextMenu(null)
+                }}
+              >
+                Add Shortcut
+              </button>
+            )}
+            {!chatContextMenu.selectedText && !chatContextMenu.messageText && (
+              <div className="px-3 py-1.5 text-[11px]" style={{ color: 'var(--theme-text-tertiary)' }}>
+                No actions available
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   )
 
@@ -5014,6 +5153,7 @@ export default function App() {
           openRawConversationInspector,
           downloadPanelTranscript,
           continueLockedConversation,
+          nudgeConversation,
           closePanel,
           registerMessageViewport,
           onMessageViewportScroll,
@@ -5046,6 +5186,8 @@ export default function App() {
           parseInteractionMode,
           getPanelSecurityState,
           estimatePanelContextUsage,
+          promptShortcuts: activePromptShortcuts,
+          deletePromptShortcut,
           setActivePanelId,
           setFocusedEditorId,
           onPanelWheel: (e: React.WheelEvent, panelId: string) => {

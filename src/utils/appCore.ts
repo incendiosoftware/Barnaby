@@ -2047,6 +2047,9 @@ export function normalizeWorkspaceSettingsFromPartial(
     deniedAutoReadPrefixes: hasDeniedAutoReadPrefixes ? deniedAutoReadPrefixes : effectiveDefaults.deniedAutoReadPrefixes,
     deniedAutoWritePrefixes: hasDeniedAutoWritePrefixes ? deniedAutoWritePrefixes : effectiveDefaults.deniedAutoWritePrefixes,
     cursorAllowBuilds,
+    promptShortcuts: Array.isArray(v?.promptShortcuts)
+      ? v.promptShortcuts.filter((s): s is string => typeof s === 'string' && s.trim().length > 0).map((s) => s.slice(0, 80))
+      : [],
   }
 }
 

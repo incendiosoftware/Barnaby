@@ -132,8 +132,8 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         onSplit={() => ctx.splitAgentPanel(w.id)}
         onViewRawConversation={() => ctx.openRawConversationInspector(w.id)}
         onDownloadTranscript={() => ctx.downloadPanelTranscript(w.id)}
-        showContinueConversationButton={inputLocked}
-        onContinueConversation={() => ctx.continueLockedConversation(w.id)}
+        showContinueConversationButton
+        onContinueConversation={() => inputLocked ? ctx.continueLockedConversation(w.id) : ctx.nudgeConversation(w.id)}
         onClose={() => ctx.closePanel(w.id)}
       />
 
@@ -266,6 +266,17 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         onSummarizeContext={() => {
           if (inputLocked) return
           ctx.summarizeSessionContext(w.id)
+        }}
+        promptShortcuts={ctx.promptShortcuts ?? []}
+        onInsertShortcut={(text: string) => {
+          if (inputLocked) return
+          ctx.setPanels((prev: AgentPanelState[]) =>
+            prev.map((x) => (x.id === w.id ? { ...x, input: text } : x)),
+          )
+          queueMicrotask(() => ctx.autoResizeTextarea(w.id))
+        }}
+        onDeleteShortcut={(index: number) => {
+          ctx.deletePromptShortcut?.(index)
         }}
       />
     </AgentPanelShell>

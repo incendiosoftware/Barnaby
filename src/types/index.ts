@@ -147,6 +147,7 @@ export type WorkspaceSettings = {
   deniedAutoReadPrefixes: string[]
   deniedAutoWritePrefixes: string[]
   cursorAllowBuilds?: boolean
+  promptShortcuts?: string[]
 }
 
 export type WorkspaceSettingsTextDraft = {

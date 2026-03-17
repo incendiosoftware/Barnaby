@@ -65,12 +65,14 @@ export const TimelineCodeBlock = React.memo(function TimelineCodeBlock({
 
   return (
     <div className="group my-2 rounded-lg border select-text" style={shellStyle}>
-      <button
-        type="button"
+      <div
         data-chat-code-rollup="true"
-        className="w-full text-left cursor-pointer px-3 py-2.5 text-[11px] font-medium flex items-center justify-between gap-2 bg-transparent border-0 outline-none hover:opacity-80"
+        className="w-full text-left cursor-pointer px-3 py-2.5 text-[11px] font-medium flex items-center justify-between gap-2 hover:opacity-80"
         style={headerStyle}
         onClick={onToggle}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle() } }}
       >
         <span className="inline-flex items-center gap-1.5">
           <span>{lang} - {lineCount} lines</span>
@@ -81,27 +83,26 @@ export const TimelineCodeBlock = React.memo(function TimelineCodeBlock({
           )}
         </span>
         <span className="inline-flex items-center gap-2">
-          <span
-            role="button"
-            tabIndex={-1}
-            className="rounded px-1.5 py-0.5 text-[10px] leading-none hover:opacity-70 cursor-pointer"
+          <button
+            type="button"
+            className="rounded px-1.5 py-0.5 text-[10px] leading-none hover:opacity-70 cursor-pointer bg-transparent border-0 outline-none"
             style={diffBadgeStyle}
             onClick={handleCopy}
           >
             {copyLabel}
-          </span>
+          </button>
           <svg
-          width="12"
-          height="12"
-          viewBox="0 0 12 12"
-          fill="none"
-          className={`shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
-          aria-hidden
-        >
-          <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            className={`shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+            aria-hidden
+          >
+            <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
         </span>
-      </button>
+      </div>
       {isOpen && (
         <div className="rounded-b-lg overflow-hidden border-t" style={bodyStyle}>
           {isDiff ? (
@@ -139,8 +140,11 @@ export const TimelineCodeBlock = React.memo(function TimelineCodeBlock({
                 WebkitUserSelect: 'text',
                 cursor: 'text',
               }}
+              codeTagProps={{ style: { userSelect: 'text', WebkitUserSelect: 'text' } as React.CSSProperties }}
               showLineNumbers={true}
-              wrapLines={false}
+              wrapLines={true}
+              lineNumberStyle={{ userSelect: 'none', WebkitUserSelect: 'none', minWidth: '2.5em' } as React.CSSProperties}
+              lineProps={{ style: { display: 'flex', flexWrap: 'wrap' } as React.CSSProperties }}
             >
               {normalized}
             </SyntaxHighlighter>

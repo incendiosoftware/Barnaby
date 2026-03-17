@@ -164,6 +164,7 @@ type WorkspaceConfigSettingsPayload = {
   deniedAutoReadPrefixes?: string[]
   deniedAutoWritePrefixes?: string[]
   cursorAllowBuilds?: boolean
+  promptShortcuts?: string[]
 }
 
 type BarnabyWorkspaceFolder = {
@@ -800,6 +801,7 @@ function defaultWorkspaceConfigSettings(folderPath: string): WorkspaceConfigSett
     deniedAutoReadPrefixes: [],
     deniedAutoWritePrefixes: [],
     cursorAllowBuilds: true,
+    promptShortcuts: [],
   }
 }
 
@@ -4075,6 +4077,12 @@ function sanitizeWorkspaceConfigSettings(folderPath: string, raw: unknown): Work
     deniedAutoReadPrefixes: normalizeWorkspaceConfigPrefixes(source.deniedAutoReadPrefixes),
     deniedAutoWritePrefixes: normalizeWorkspaceConfigPrefixes(source.deniedAutoWritePrefixes),
     cursorAllowBuilds: source.cursorAllowBuilds === true,
+    promptShortcuts: Array.isArray(source.promptShortcuts)
+      ? (source.promptShortcuts as unknown[])
+          .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+          .map((s) => s.slice(0, 80))
+          .slice(0, 50)
+      : [],
   }
 }
 

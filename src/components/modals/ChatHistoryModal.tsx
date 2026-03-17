@@ -4,7 +4,7 @@ import {
   MODAL_CARD_CLASS,
   UI_CLOSE_ICON_BUTTON_CLASS,
   UI_INPUT_CLASS,
-  UI_BUTTON_SECONDARY_CLASS,
+  UI_SELECT_CLASS,
 } from '../../constants'
 import type { ChatHistoryEntry } from '../../types'
 import { normalizeWorkspacePathForCompare } from '../../utils/appCore'
@@ -17,6 +17,7 @@ export interface ChatHistoryModalProps {
   openChatFromHistory: (id: string) => void
   downloadHistoryTranscript: (id: string) => void | Promise<void>
   setDeleteHistoryIdPending: React.Dispatch<React.SetStateAction<string | null>>
+  renameChatHistoryEntry: (id: string, newTitle: string) => void
 }
 
 export function ChatHistoryModal(props: ChatHistoryModalProps) {
@@ -28,21 +29,41 @@ export function ChatHistoryModal(props: ChatHistoryModalProps) {
     openChatFromHistory,
     downloadHistoryTranscript,
     setDeleteHistoryIdPending,
+    renameChatHistoryEntry,
   } = props
 
   const [query, setQuery] = useState('')
-  const [scopeAll, setScopeAll] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const SCOPE_CURRENT = '__current__'
+  const SCOPE_ALL = '__all__'
+  const [workspaceFilter, setWorkspaceFilter] = useState<string>(SCOPE_CURRENT)
 
   const normalizedRoot = useMemo(
     () => normalizeWorkspacePathForCompare(workspaceRoot || ''),
     [workspaceRoot],
   )
 
+  const uniqueWorkspaces = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const e of chatHistory) {
+      const norm = normalizeWorkspacePathForCompare(e.workspaceRoot || '')
+      if (!map.has(norm)) map.set(norm, e.workspaceRoot)
+    }
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]))
+  }, [chatHistory])
+
+  const showWorkspaceColumn = workspaceFilter !== SCOPE_CURRENT
+
   const filtered = useMemo(() => {
     let entries = chatHistory
-    if (!scopeAll) {
+    if (workspaceFilter === SCOPE_CURRENT) {
       entries = entries.filter(
         (e) => normalizeWorkspacePathForCompare(e.workspaceRoot || '') === normalizedRoot,
+      )
+    } else if (workspaceFilter !== SCOPE_ALL) {
+      entries = entries.filter(
+        (e) => normalizeWorkspacePathForCompare(e.workspaceRoot || '') === workspaceFilter,
       )
     }
     const q = query.trim().toLowerCase()
@@ -56,7 +77,7 @@ export function ChatHistoryModal(props: ChatHistoryModalProps) {
       }
       return false
     })
-  }, [chatHistory, scopeAll, normalizedRoot, query])
+  }, [chatHistory, workspaceFilter, normalizedRoot, query])
 
   if (!open) return null
 
@@ -75,6 +96,13 @@ export function ChatHistoryModal(props: ChatHistoryModalProps) {
       hour: '2-digit',
       minute: '2-digit',
     })
+  }
+
+  function commitRename() {
+    if (editingId && editTitle.trim()) {
+      renameChatHistoryEntry(editingId, editTitle.trim())
+    }
+    setEditingId(null)
   }
 
   function shortWorkspace(ws: string) {
@@ -98,7 +126,7 @@ export function ChatHistoryModal(props: ChatHistoryModalProps) {
         </div>
 
         <div className="px-4 py-3 flex items-center gap-3 border-b border-neutral-200 dark:border-neutral-800 shrink-0">
-          <div className="relative flex-1">
+          <div className="relative flex-1 min-w-0">
             <svg
               className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400 dark:text-neutral-500 pointer-events-none"
               width="14" height="14" viewBox="0 0 16 16" fill="none"
@@ -114,14 +142,22 @@ export function ChatHistoryModal(props: ChatHistoryModalProps) {
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <label className="flex items-center gap-1.5 text-xs whitespace-nowrap" style={{ color: 'var(--theme-text-secondary)' }}>
-            <input
-              type="checkbox"
-              checked={scopeAll}
-              onChange={(e) => setScopeAll(e.target.checked)}
-            />
-            All workspaces
-          </label>
+          <select
+            className={`text-xs shrink-0 max-w-[180px] ${UI_SELECT_CLASS}`}
+            value={workspaceFilter}
+            onChange={(e) => setWorkspaceFilter(e.target.value)}
+          >
+            <option value={SCOPE_CURRENT}>Current workspace</option>
+            <option value={SCOPE_ALL}>All workspaces</option>
+            {uniqueWorkspaces.length > 1 && (
+              <>
+                <option disabled>───────────</option>
+                {uniqueWorkspaces.map(([norm, raw]) => (
+                  <option key={norm} value={norm}>{shortWorkspace(raw)}</option>
+                ))}
+              </>
+            )}
+          </select>
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto">
@@ -136,7 +172,7 @@ export function ChatHistoryModal(props: ChatHistoryModalProps) {
                   <th className="px-4 py-2 font-medium">Title</th>
                   <th className="px-2 py-2 font-medium w-[140px]">Date</th>
                   <th className="px-2 py-2 font-medium w-[100px]">Model</th>
-                  {scopeAll && <th className="px-2 py-2 font-medium w-[120px]">Workspace</th>}
+                  {showWorkspaceColumn && <th className="px-2 py-2 font-medium w-[120px]">Workspace</th>}
                   <th className="px-2 py-2 font-medium w-[80px] text-right">Actions</th>
                 </tr>
               </thead>
@@ -148,9 +184,24 @@ export function ChatHistoryModal(props: ChatHistoryModalProps) {
                     onClick={() => handleOpen(entry.id)}
                   >
                     <td className="px-4 py-2">
-                      <div className="truncate max-w-[340px]" title={entry.title}>
-                        {entry.title}
-                      </div>
+                      {editingId === entry.id ? (
+                        <input
+                          autoFocus
+                          className={`w-full text-sm px-1.5 py-0.5 rounded border border-blue-400 dark:border-blue-600 bg-white dark:bg-neutral-900 outline-none`}
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitRename()
+                            if (e.key === 'Escape') setEditingId(null)
+                          }}
+                          onBlur={commitRename}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <div className="truncate max-w-[340px]" title={entry.title}>
+                          {entry.title}
+                        </div>
+                      )}
                       <div className="text-[11px] mt-0.5" style={{ color: 'var(--theme-text-tertiary)' }}>
                         {entry.messages.length} message{entry.messages.length !== 1 ? 's' : ''}
                       </div>
@@ -163,13 +214,27 @@ export function ChatHistoryModal(props: ChatHistoryModalProps) {
                         {entry.model}
                       </span>
                     </td>
-                    {scopeAll && (
+                    {showWorkspaceColumn && (
                       <td className="px-2 py-2 text-xs font-mono" style={{ color: 'var(--theme-text-secondary)' }} title={entry.workspaceRoot}>
                         {shortWorkspace(entry.workspaceRoot)}
                       </td>
                     )}
                     <td className="px-2 py-2 text-right">
                       <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md border-0 text-neutral-500 hover:bg-blue-100 hover:text-blue-700 dark:text-neutral-400 dark:hover:bg-blue-950/40 dark:hover:text-blue-300"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setEditingId(entry.id)
+                            setEditTitle(entry.title)
+                          }}
+                          title="Rename conversation"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                            <path d="M7.5 2.5L9.5 4.5M1.5 10.5H3.5L9.5 4.5L7.5 2.5L1.5 8.5V10.5Z" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
                         <button
                           type="button"
                           className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-md border-0 text-neutral-500 hover:bg-emerald-100 hover:text-emerald-700 dark:text-neutral-400 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300"

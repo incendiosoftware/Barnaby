@@ -4144,7 +4144,11 @@ ipcMain.handle('agentorchestrator:readWorkspaceFile', async (_evt, workspaceRoot
 })
 
 ipcMain.handle('agentorchestrator:readWorkspaceTextFile', async (_evt, workspaceRoot: string, relativePath: string) => {
-  return readWorkspaceTextFile(workspaceRoot, relativePath)
+  try {
+    return readWorkspaceTextFile(workspaceRoot, relativePath)
+  } catch {
+    return { relativePath: relativePath ?? '', size: 0, binary: false, content: '', notFound: true }
+  }
 })
 
 ipcMain.handle('agentorchestrator:writeWorkspaceFile', async (_evt, workspaceRoot: string, relativePath: string, content: string) => {

@@ -132,7 +132,8 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
         onSplit={() => ctx.splitAgentPanel(w.id)}
         onViewRawConversation={() => ctx.openRawConversationInspector(w.id)}
         onDownloadTranscript={() => ctx.downloadPanelTranscript(w.id)}
-        onRemember={() => ctx.downloadPanelTranscript(w.id, true)}
+        showContinueConversationButton={inputLocked}
+        onContinueConversation={() => ctx.continueLockedConversation(w.id)}
         onClose={() => ctx.closePanel(w.id)}
       />
 

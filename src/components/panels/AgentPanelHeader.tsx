@@ -26,7 +26,8 @@ export interface AgentPanelHeaderProps {
   onSplit: () => void
   onViewRawConversation?: () => void
   onDownloadTranscript: () => void
-  onRemember: () => void
+  showContinueConversationButton?: boolean
+  onContinueConversation?: () => void
   onClose: () => void
 }
 
@@ -45,7 +46,8 @@ export function AgentPanelHeader({
   onSplit,
   onViewRawConversation,
   onDownloadTranscript,
-  onRemember,
+  showContinueConversationButton,
+  onContinueConversation,
   onClose,
 }: AgentPanelHeaderProps) {
   const showDropZone = draggingPanelId && draggingPanelId !== panel.id && dragOverTarget === `agent-${panel.id}`
@@ -139,40 +141,23 @@ export function AgentPanelHeader({
             <path d="M8 2.4V9.8M8 9.8L5 6.8M8 9.8L11 6.8M2.8 12.6H13.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
-        <button
-          className={[
-            'h-8 w-9 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',
-            'hover:opacity-90 active:opacity-80',
-          ].join(' ')}
-          style={iconButtonStyle}
-          onClick={onRemember}
-          title="Remember conversation"
-          aria-label="Remember conversation"
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path
-              d="M4 12.8V3.8h7v5.1"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M11 8.9v2.2"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M9.9 10.1 11 11.2l1.1-1.1"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+        {showContinueConversationButton && onContinueConversation && (
+          <button
+            className={[
+              'h-8 px-2.5 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none text-xs font-medium',
+              'hover:opacity-90 active:opacity-80',
+            ].join(' ')}
+            style={iconButtonStyle}
+            onClick={onContinueConversation}
+            title="Continue conversation"
+            aria-label="Continue conversation"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+              <path d="M8 2.5a5.5 5.5 0 1 1-3.9 9.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M4.1 9.5v2.9h2.9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
         <button
           className={[
             'h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-md border-0 transition-colors focus:outline-none',

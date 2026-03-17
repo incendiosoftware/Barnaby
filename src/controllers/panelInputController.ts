@@ -193,7 +193,7 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
         prev.map((x) =>
           x.id !== winId
             ? x
-            : { ...x, status: 'This chat is read-only. Start a new chat to continue.' },
+            : { ...x, status: 'This chat is read-only. Click Continue conversation in the panel header.' },
         ),
       )
       return

@@ -2145,7 +2145,7 @@ export default function App() {
     restoredMessages.push({
       id: newId(),
       role: 'system',
-      content: 'This chat was loaded from history and is locked (read-only). To continue, start a new chat.',
+      content: 'This chat was loaded from history and is locked (read-only). Click Continue conversation in the panel header to unlock and resume.',
       format: 'text',
       createdAt: Date.now(),
     })
@@ -2267,7 +2267,7 @@ export default function App() {
     }
   }
 
-  async function downloadPanelTranscript(panelId: string, andRemember?: boolean) {
+  async function downloadPanelTranscript(panelId: string) {
     const panel = panelsRef.current.find((p) => p.id === panelId)
     if (!panel) return
     if (!api.saveTranscriptDirect) {
@@ -2323,14 +2323,136 @@ export default function App() {
               },
           ),
         )
-        if (andRemember) {
-          void sendToAgent(panelId, `Please review chat history: ${result.path}`)
-        }
       } else {
         alert(result?.error ? `Could not save transcript: ${result.error}` : 'Could not save transcript.')
       }
     } catch (err) {
       alert(`Could not save transcript: ${formatError(err)}`)
+    }
+  }
+
+  async function continueLockedConversation(panelId: string) {
+    const panel = panelsRef.current.find((p) => p.id === panelId)
+    if (!panel) return
+    if (!api.saveTranscriptDirect) {
+      alert('Transcript export is not available in this build.')
+      return
+    }
+
+    const title = getConversationPrecis(panel) || 'Untitled chat'
+    const safeTitle = toSafeTranscriptFileSegment(title)
+    const lines: string[] = []
+    lines.push('# Barnaby Conversation Transcript')
+    lines.push('')
+    lines.push(`Title: ${title}`)
+    lines.push(`Exported: ${new Date().toLocaleString()}`)
+    lines.push(`Workspace: ${panel.cwd || workspaceRoot || '(unknown)'}`)
+    lines.push(`Model: ${panel.model || '(unknown)'}`)
+    lines.push(`Permissions: ${panel.permissionMode}`)
+    lines.push(`Sandbox: ${panel.sandbox}`)
+    lines.push('')
+    lines.push('---')
+    lines.push('')
+    const messages = stripSyntheticAutoContinueMessages(panel.messages)
+    for (let i = 0; i < messages.length; i++) {
+      const message = messages[i]
+      const roleLabel = message.role === 'assistant' ? 'Assistant' : message.role === 'user' ? 'User' : 'System'
+      const createdAtLabel = formatTranscriptTime(message.createdAt)
+      lines.push(`## ${i + 1}. ${roleLabel}${createdAtLabel ? ` (${createdAtLabel})` : ''}`)
+      lines.push('')
+      const content = String(message.content ?? '').trim()
+      lines.push(content || '(no text)')
+      if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+        lines.push('')
+        lines.push('Attachments:')
+        for (const attachment of message.attachments) {
+          const label = attachment.label || 'attachment'
+          const filePath = attachment.path || '(no path)'
+          lines.push(`- ${label}: ${filePath}`)
+        }
+      }
+      lines.push('')
+    }
+    const transcript = lines.join('\n')
+
+    try {
+      const result = await api.saveTranscriptDirect(panel.cwd || workspaceRoot, safeTitle, transcript)
+      if (!result?.ok || !result.path) {
+        alert(result?.error ? `Could not save transcript: ${result.error}` : 'Could not save transcript.')
+        return
+      }
+
+      const transcriptHref = toLocalFileUrl(result.path)
+      const continuePrompt = transcriptHref
+        ? `Please review the existing conversation here: [${result.path}](${transcriptHref}), and continue.`
+        : `Please review the existing conversation here: ${result.path}, and continue.`
+
+      let shouldSendImmediately = false
+      let snapshotForHistory: AgentPanelState | null = null
+      let userMessageId: string | null = null
+      stickToBottomByPanelRef.current.set(panelId, true)
+      setPanels((prev) =>
+        prev.map((x) => {
+          if (x.id !== panelId) return x
+          if (x.streaming || x.pendingInputs.length > 0) {
+            const updated: AgentPanelState = {
+              ...x,
+              historyLocked: false,
+              status: 'Continue prompt queued to run next.',
+              pendingInputs: [continuePrompt, ...x.pendingInputs],
+              messages: [
+                ...x.messages,
+                {
+                  id: newId(),
+                  role: 'system',
+                  content: `${TRANSCRIPT_SAVED_PREFIX} ${result.path}`,
+                  format: 'text',
+                  createdAt: Date.now(),
+                },
+              ],
+            }
+            snapshotForHistory = updated
+            return updated
+          }
+
+          const userMessage: ChatMessage = {
+            id: newId(),
+            role: 'user',
+            content: continuePrompt,
+            interactionMode: x.interactionMode,
+            format: 'markdown',
+            createdAt: Date.now(),
+          }
+          userMessageId = userMessage.id
+          shouldSendImmediately = true
+          const updated: AgentPanelState = {
+            ...x,
+            historyLocked: false,
+            input: '',
+            attachments: [],
+            streaming: true,
+            status: 'Preparing message...',
+            messages: [
+              ...x.messages,
+              { id: newId(), role: 'system', content: `${TRANSCRIPT_SAVED_PREFIX} ${result.path}`, format: 'text', createdAt: Date.now() },
+              userMessage,
+            ],
+          }
+          snapshotForHistory = updated
+          return updated
+        }),
+      )
+      if (snapshotForHistory) upsertPanelToHistory(snapshotForHistory)
+      if (userMessageId) {
+        lastScrollToUserMessageRef.current = { panelId, messageId: userMessageId }
+      }
+      if (!shouldSendImmediately) return
+      clearPanelTurnComplete(panelId)
+      seedPanelActivity(panelId)
+      markPanelActivity(panelId, { type: 'turnStart' })
+      void sendToAgent(panelId, continuePrompt)
+    } catch (err) {
+      alert(`Could not continue this chat: ${formatError(err)}`)
     }
   }
 
@@ -4905,6 +5027,7 @@ export default function App() {
           splitAgentPanel,
           openRawConversationInspector,
           downloadPanelTranscript,
+          continueLockedConversation,
           closePanel,
           registerMessageViewport,
           onMessageViewportScroll,

@@ -44,6 +44,29 @@ Use these exact flows when the user asks:
 - **package** (bump + distributable): `npm run package`
 - **Full prep** (bump + notes + build): `npm run release:prepare`
 
+## Publishing Pipeline (GitHub + npm)
+
+**NEVER run `npm publish` locally.** npm publishing is handled by GitHub Actions using the `NPM_TOKEN` repo secret. Local npm auth tokens are not used and may be expired.
+
+When the user asks to deploy, release, or publish, follow these steps in order:
+
+1. **Build locally** — `npm run package` (bumps version) or `npm run build` (no bump).
+2. **Create release notes** — Write `docs/releases/RELEASE_NOTES_{version}.md` (or run `npm run release:notes` for a template).
+3. **Validate versions** — `node scripts/validate-version-files.mjs` (ensures package.json and package-lock.json match).
+4. **Commit** — Stage changed files, commit with message `Release v{version}`.
+5. **Push** — `git push origin HEAD`.
+6. **Tag** — `git tag v{version}` then `git push origin v{version}`.
+7. **Create GitHub Release** — `gh release create v{version} --title "Barnaby v{version}" --notes-file "docs/releases/RELEASE_NOTES_{version}.md" --target main`.
+
+Steps 6–7 trigger two CI workflows automatically:
+
+| Workflow | File | What it does |
+|----------|------|--------------|
+| npm publish | `.github/workflows/npm-publish.yml` | Builds, tests, publishes `@barnaby.build/barnaby` to npm |
+| GitHub Release assets | `.github/workflows/github-release.yml` | Builds Windows portable + setup EXEs and uploads to the release |
+
+After creating the release, check workflow status at: `https://github.com/incendiosoftware/Barnaby/actions`.
+
 ## Plan Mode Workflow
 
 - If the user sets `Mode: Plan`, do not make code or file changes in that turn unless they explicitly switch modes or approve implementation.

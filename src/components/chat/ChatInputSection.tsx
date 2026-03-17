@@ -177,7 +177,7 @@ export function ChatInputSection({
   const modelButtonRef = useRef<HTMLButtonElement | null>(null)
   const [modePopoverPosition, setModePopoverPosition] = useState<PopoverPosition | null>(null)
   const [modelPopoverPosition, setModelPopoverPosition] = useState<PopoverPosition | null>(null)
-  const lockTitle = 'This chat is read-only. Start a new chat to continue.'
+  const lockTitle = 'This chat is read-only. Use Continue conversation to unlock and keep going.'
   const sendButtonDisabled = inputLocked || (!isBusy && !hasInput)
   const summarizeDisabled = inputLocked || isBusy
   const interactionModeBadgeClass =
@@ -504,7 +504,7 @@ export function ChatInputSection({
           ref={textareaRef}
           className="flex-1 min-w-0 resize-none rounded-xl border px-3 py-2 outline-none font-chat placeholder:text-neutral-500 dark:placeholder:text-neutral-400"
           style={inputStyle}
-          placeholder={inputLocked ? 'This chat is read-only. Start a new chat to continue.' : 'Message the agent...'}
+          placeholder={inputLocked ? 'This chat is read-only. Click Continue conversation in the header.' : 'Message the agent...'}
           rows={1}
           value={panel.input}
           disabled={inputLocked}

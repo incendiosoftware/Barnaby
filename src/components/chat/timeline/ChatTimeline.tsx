@@ -137,7 +137,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
                   <button
                     type="button"
                     className="h-6 w-6 inline-flex items-center justify-center rounded border-0 bg-white/90 text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-900/50"
-                    title={actionsLocked ? 'This chat is read-only. Start a new chat to continue.' : 'Edit queued message'}
+                    title={actionsLocked ? 'This chat is read-only. Click Continue conversation in the header.' : 'Edit queued message'}
                     aria-label="Edit queued message"
                     onClick={() => onBeginQueuedMessageEdit(i)}
                     disabled={actionsLocked}
@@ -150,7 +150,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
                   <button
                     type="button"
                     className="h-6 w-6 inline-flex items-center justify-center rounded border-0 bg-white/80 text-amber-700 hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-amber-900/50 dark:text-amber-200 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300"
-                    title={actionsLocked ? 'This chat is read-only. Start a new chat to continue.' : 'Inject now - send to agent immediately'}
+                    title={actionsLocked ? 'This chat is read-only. Click Continue conversation in the header.' : 'Inject now - send to agent immediately'}
                     aria-label="Inject now"
                     onClick={() => onInjectQueuedMessage(i)}
                     disabled={actionsLocked}
@@ -162,7 +162,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
                   <button
                     type="button"
                     className="h-6 w-6 inline-flex items-center justify-center rounded border-0 bg-white/80 text-amber-700 hover:bg-red-50 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-amber-900/50 dark:text-amber-200 dark:hover:bg-red-950/40 dark:hover:text-red-400"
-                    title={actionsLocked ? 'This chat is read-only. Start a new chat to continue.' : 'Remove from queue'}
+                    title={actionsLocked ? 'This chat is read-only. Click Continue conversation in the header.' : 'Remove from queue'}
                     aria-label="Remove from queue"
                     onClick={() => onRemoveQueuedMessage(i)}
                     disabled={actionsLocked}

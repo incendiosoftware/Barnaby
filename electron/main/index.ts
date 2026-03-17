@@ -3529,39 +3529,44 @@ const CONCISE_RESPONSE_PREFIX =
   '[Response style: Be extremely brief. Prefer bullet points over paragraphs. Use single newlines between items, not blank lines. No multi-paragraph blocks.]\n\n'
 
 ipcMain.handle('agentorchestrator:sendMessageEx', async (_evt, agentWindowId: string, payload: { text: string; imagePaths?: string[]; priorMessagesForContext?: Array<{ role: string; content: string }>; interactionMode?: string; responseStyle?: 'concise' | 'standard' | 'detailed' }) => {
-  const client = agentClients.get(agentWindowId)
-  if (!client) {
-    throw new Error('Agent not connected. Try reconnecting the panel or switching the model.')
-  }
-  let text = typeof payload?.text === 'string' ? payload.text : ''
-  const responseStyle = payload?.responseStyle === 'concise' || payload?.responseStyle === 'standard' || payload?.responseStyle === 'detailed' ? payload.responseStyle : undefined
-  if (responseStyle === 'concise') {
-    text = CONCISE_RESPONSE_PREFIX + text
-  }
-  const imagePaths = Array.isArray(payload?.imagePaths) ? payload.imagePaths.filter((p): p is string => typeof p === 'string' && p.trim().length > 0) : []
-  const priorMessages = Array.isArray(payload?.priorMessagesForContext) ? payload.priorMessagesForContext : []
-  const interactionMode = typeof payload?.interactionMode === 'string' ? payload.interactionMode : undefined
-  const gitStatus = await getGitStatusPromptForAgent(agentWindowId)
-  const sendOptions = (interactionMode || gitStatus) ? { interactionMode, gitStatus } : undefined
-  if (client instanceof CodexAppServerClient) {
-    if (priorMessages.length > 0) {
-      const prefix = formatPriorMessagesForContext(priorMessages)
-      if (prefix) text = prefix + text
+  try {
+    const client = agentClients.get(agentWindowId)
+    if (!client) {
+      throw new Error('Agent not connected. Try reconnecting the panel or switching the model.')
     }
-    if (gitStatus) {
-      text = `[Git status]\n${gitStatus.trim()}\n\n${text}`
+    let text = typeof payload?.text === 'string' ? payload.text : ''
+    const responseStyle = payload?.responseStyle === 'concise' || payload?.responseStyle === 'standard' || payload?.responseStyle === 'detailed' ? payload.responseStyle : undefined
+    if (responseStyle === 'concise') {
+      text = CONCISE_RESPONSE_PREFIX + text
     }
-  }
-  if (imagePaths.length > 0) {
-    const withImages = client as { sendUserMessageWithImages?: (t: string, paths: string[], opts?: { interactionMode?: string; gitStatus?: string }) => Promise<void> }
-    if (typeof withImages.sendUserMessageWithImages !== 'function') {
-      throw new Error('Selected provider does not support image attachments in this app yet.')
+    const imagePaths = Array.isArray(payload?.imagePaths) ? payload.imagePaths.filter((p): p is string => typeof p === 'string' && p.trim().length > 0) : []
+    const priorMessages = Array.isArray(payload?.priorMessagesForContext) ? payload.priorMessagesForContext : []
+    const interactionMode = typeof payload?.interactionMode === 'string' ? payload.interactionMode : undefined
+    const gitStatus = await getGitStatusPromptForAgent(agentWindowId)
+    const sendOptions = (interactionMode || gitStatus) ? { interactionMode, gitStatus } : undefined
+    if (client instanceof CodexAppServerClient) {
+      if (priorMessages.length > 0) {
+        const prefix = formatPriorMessagesForContext(priorMessages)
+        if (prefix) text = prefix + text
+      }
+      if (gitStatus) {
+        text = `[Git status]\n${gitStatus.trim()}\n\n${text}`
+      }
     }
-    await withImages.sendUserMessageWithImages(text, imagePaths, sendOptions)
+    if (imagePaths.length > 0) {
+      const withImages = client as { sendUserMessageWithImages?: (t: string, paths: string[], opts?: { interactionMode?: string; gitStatus?: string }) => Promise<void> }
+      if (typeof withImages.sendUserMessageWithImages !== 'function') {
+        throw new Error('Selected provider does not support image attachments in this app yet.')
+      }
+      await withImages.sendUserMessageWithImages(text, imagePaths, sendOptions)
+      return {}
+    }
+    await (client as { sendUserMessage: (t: string, opts?: { interactionMode?: string; gitStatus?: string }) => Promise<void> }).sendUserMessage(text, sendOptions)
     return {}
+  } catch (err) {
+    if (_evt.sender.isDestroyed()) return {}
+    throw err
   }
-  await (client as { sendUserMessage: (t: string, opts?: { interactionMode?: string; gitStatus?: string }) => Promise<void> }).sendUserMessage(text, sendOptions)
-  return {}
 })
 
 ipcMain.handle('agentorchestrator:loadChatHistory', async () => {
@@ -4588,18 +4593,9 @@ function setAppMenu() {
       submenu: [
         { label: 'New Agent', accelerator: 'CmdOrCtrl+Shift+N', click: () => sendMenuAction('newAgentWindow') },
         { label: 'New Workspace', click: () => sendMenuAction('newWorkspace') },
+        { label: 'Add Folder to Current Workspace', click: () => sendMenuAction('addFolderToWorkspace') },
         { label: 'New File', accelerator: 'CmdOrCtrl+N', click: () => sendMenuAction('newFile') },
         { type: 'separator' },
-        {
-          label: 'Open Agent',
-          click: () => {
-            void openAgentHistoryFolder().then((result) => {
-              if (!result.ok && result.error) {
-                dialog.showErrorBox('Open Agent', `Could not open agent history folder:\n${result.error}`)
-              }
-            })
-          },
-        },
         { label: 'Open Workspace', click: () => sendMenuAction('openWorkspacePicker') },
         { label: 'Open File', click: () => sendMenuAction('openFile') },
         { label: 'Open Recent', submenu: recentSubmenu },

@@ -21,7 +21,7 @@ export function normalizeDockLayout(layout: DockLayoutState | null | undefined):
   const bottomTab = layout.bottomTab ?? 'terminal'
   const leftBottomTabs = layout.leftBottomTabs ?? ['workspace-folder', 'workspace-settings']
   const rightTabs = layout.rightTabs ?? ['application-settings', 'source-control']
-  const bottomTabs = layout.bottomTabs ?? ['terminal', 'debug-output']
+  const bottomTabs = layout.bottomTabs ?? ['terminal']
 
   if ((visible as Record<DockPanelId, boolean>).orchestrator) {
     zones['left-top'] = [leftTopTab === 'orchestrator' ? 'orchestrator' : leftTopTab]

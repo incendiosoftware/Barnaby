@@ -797,6 +797,7 @@ export function parseApplicationSettings(parsed: Partial<ApplicationSettings> | 
     editorWordWrap: true,
     customiseStandardThemes: false,
     enableMessageSizeLog: false,
+    showDebugLogPanel: false,
   }
   if (!parsed || typeof parsed !== 'object') return defaults
   return {
@@ -827,6 +828,7 @@ export function parseApplicationSettings(parsed: Partial<ApplicationSettings> | 
     editorWordWrap: typeof parsed.editorWordWrap === 'boolean' ? parsed.editorWordWrap : true,
     customiseStandardThemes: Boolean(parsed.customiseStandardThemes),
     enableMessageSizeLog: Boolean(parsed.enableMessageSizeLog),
+    showDebugLogPanel: Boolean(parsed.showDebugLogPanel),
   }
 }
 

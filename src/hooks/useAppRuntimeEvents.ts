@@ -4,6 +4,7 @@ import {
   classifyContextCompactionNotification,
   extractInteractionModeChange,
   getModelPingKey,
+  normalizeWorkspacePathForCompare,
   withContextCompactionNotice,
 } from '../utils/appCore'
 import { INTERACTION_MODE_META } from '../constants'
@@ -13,6 +14,7 @@ export function useAppRuntimeEvents(ctx: any) {
     api,
     workspaceList,
     workspaceRoot,
+    setWorkspaceList,
     reconnectPanelRef,
     appendPanelDebug,
     markPanelActivity,
@@ -445,6 +447,41 @@ export function useAppRuntimeEvents(ctx: any) {
       }
       if (action === 'newWorkspace') {
         workspaceSettings.openWorkspaceSettings('new')
+        return
+      }
+      if (action === 'addFolderToWorkspace') {
+        if (!workspaceRoot?.trim()) {
+          openWorkspacePicker('Select or create a workspace first.')
+          return
+        }
+        void (async () => {
+          const selected = await api.openFolderDialog?.()
+          if (!selected?.trim()) return
+          const selectedPath = selected.trim()
+          setWorkspaceList((prev: string[]) => {
+            const ordered = [...prev]
+            const normalizedCurrent = normalizeWorkspacePathForCompare(workspaceRoot)
+            const normalizedSelected = normalizeWorkspacePathForCompare(selectedPath)
+            const withoutSelected = ordered.filter(
+              (item) => normalizeWorkspacePathForCompare(item) !== normalizedSelected,
+            )
+            const currentIndex = withoutSelected.findIndex(
+              (item) => normalizeWorkspacePathForCompare(item) === normalizedCurrent,
+            )
+            if (currentIndex > 0) {
+              const [currentPath] = withoutSelected.splice(currentIndex, 1)
+              withoutSelected.unshift(currentPath)
+            } else if (currentIndex < 0) {
+              withoutSelected.unshift(workspaceRoot)
+            }
+            return [...withoutSelected, selectedPath]
+          })
+          try {
+            await api.writeWorkspaceConfig?.(selectedPath)
+          } catch {
+            // best effort only
+          }
+        })()
         return
       }
       if (action === 'openWorkspacePicker') {

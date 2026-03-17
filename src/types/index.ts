@@ -258,6 +258,7 @@ export type ApplicationSettings = {
   editorWordWrap: boolean
   customiseStandardThemes: boolean
   enableMessageSizeLog: boolean
+  showDebugLogPanel: boolean
 }
 
 export type OrchestratorSettings = {

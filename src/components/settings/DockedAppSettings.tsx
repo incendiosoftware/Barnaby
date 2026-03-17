@@ -2117,18 +2117,19 @@ export function DockedAppSettings(props: DockedAppSettingsProps) {
               <div className="text-xs text-neutral-600 dark:text-neutral-400">
                 Runtime logs and persisted state are stored in your Barnaby user data folder.
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  className="px-2.5 py-1.5 rounded-md border border-neutral-200 bg-neutral-100 hover:bg-neutral-200 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-neutral-300"
-                  onClick={() => void api.openDebugOutputWindow?.()}
-                >
-                  Open Debug Output Window
-                </button>
-                <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                  Separate window for live crash-resistant log monitoring
-                </span>
-              </div>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(applicationSettings.showDebugLogPanel)}
+                  onChange={(e) =>
+                    setApplicationSettings((prev) => ({
+                      ...prev,
+                      showDebugLogPanel: e.target.checked,
+                    }))
+                  }
+                />
+                Show debug log in bottom dock
+              </label>
               {diagnosticsActionStatus && (
                 <div className="text-xs text-neutral-600 dark:text-neutral-400">{diagnosticsActionStatus}</div>
               )}

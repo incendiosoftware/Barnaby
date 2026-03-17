@@ -517,6 +517,22 @@ export default function App() {
       (entry) => normalizeWorkspacePathForCompare(entry.workspaceRoot || '') === normalizedWorkspaceRoot,
     )
   }, [chatHistory, workspaceRoot])
+  const managedWorkspacePaths = useMemo(() => {
+    const seen = new Set<string>()
+    const add = (value: string, out: string[]) => {
+      const trimmed = value.trim()
+      if (!trimmed) return
+      const key = normalizeWorkspacePathForCompare(trimmed)
+      if (!key || seen.has(key)) return
+      seen.add(key)
+      out.push(trimmed)
+    }
+    const out: string[] = []
+    add(workspaceRoot || '', out)
+    for (const path of workspaceList) add(path, out)
+    for (const entry of chatHistory) add(entry.workspaceRoot || '', out)
+    return out
+  }, [chatHistory, workspaceList, workspaceRoot])
   function getModelOptions(includeCurrent?: string, filterProvider?: ModelProvider): string[] {
     const seen = new Set<string>()
     const base: string[] = []
@@ -751,12 +767,37 @@ export default function App() {
         return { ...prev, zones: z }
       }
       if (!('bottom' in z) && !('bottom-left' in z) && !('bottom-right' in z)) {
-        z.bottom = ['terminal', 'debug-output']
+        z.bottom = ['terminal']
         return { ...prev, zones: z, activeTab: { ...layout.activeTab, bottom: 'terminal' } }
       }
       return prev
     })
   }
+
+  useEffect(() => {
+    setDockLayout((prev) => {
+      const layout = normalizeDockLayout(prev)
+      const zones = { ...layout.zones }
+      if (applicationSettings.showDebugLogPanel) {
+        const bottomZones = ['bottom', 'bottom-left', 'bottom-right'] as const
+        const alreadyPresent = bottomZones.some((z) => zones[z]?.includes('debug-output'))
+        if (alreadyPresent) return prev
+        const targetZone = bottomZones.find((z) => zones[z]?.includes('terminal')) ?? 'bottom'
+        zones[targetZone] = [...(zones[targetZone] ?? []), 'debug-output']
+        return { ...layout, zones }
+      } else {
+        let changed = false
+        for (const zk of Object.keys(zones) as Array<keyof typeof zones>) {
+          if (zones[zk]?.includes('debug-output')) {
+            zones[zk] = zones[zk]!.filter((t) => t !== 'debug-output')
+            if (zones[zk]!.length === 0) delete zones[zk]
+            changed = true
+          }
+        }
+        return changed ? { ...layout, zones } : prev
+      }
+    })
+  }, [applicationSettings.showDebugLogPanel])
 
   function toggleDockPanel(panelId: string) {
     const id = panelId as DockPanelId
@@ -993,10 +1034,15 @@ export default function App() {
     }
   }, [draggingPanelId])
 
-  // Keep workspaceRoot in the list when it changes (e.g. manually selected)
+  // Keep workspaceRoot at the front of the list when it changes.
   useEffect(() => {
-    if (!workspaceRoot || workspaceList.includes(workspaceRoot)) return
-    setWorkspaceList((prev) => [...new Set([workspaceRoot, ...prev])])
+    const nextRoot = workspaceRoot.trim()
+    if (!nextRoot) return
+    const normalizedNext = normalizeWorkspacePathForCompare(nextRoot)
+    setWorkspaceList((prev) => {
+      const without = prev.filter((item) => normalizeWorkspacePathForCompare(item) !== normalizedNext)
+      return [nextRoot, ...without]
+    })
   }, [workspaceRoot])
 
   useEffect(() => {
@@ -3058,6 +3104,7 @@ export default function App() {
     api,
     workspaceList,
     workspaceRoot,
+    setWorkspaceList,
     reconnectPanelRef,
     appendPanelDebug,
     markPanelActivity,
@@ -4792,6 +4839,7 @@ export default function App() {
         workspacePickerError={workspacePickerError}
         setWorkspacePickerError={setWorkspacePickerError}
         workspaceList={workspaceList}
+        managedWorkspacePaths={managedWorkspacePaths}
         setWorkspaceList={setWorkspaceList}
         workspaceRoot={workspaceRoot}
         workspaceSettingsByPath={workspaceSettingsByPath}

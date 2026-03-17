@@ -42,7 +42,7 @@ import {
   normalizeWorkspacePathForCompare,
 } from '../../utils/appCore'
 
-const WORKSPACE_CONFIG_FILENAME = '.agentorchestrator.json'
+const WORKSPACE_BUNDLE_FILENAME = '.barnaby-workspace.json'
 
 export interface AppModalsProps {
   api: any
@@ -102,6 +102,7 @@ export interface AppModalsProps {
   workspacePickerError: string | null
   setWorkspacePickerError: React.Dispatch<React.SetStateAction<string | null>>
   workspaceList: string[]
+  managedWorkspacePaths: string[]
   setWorkspaceList: React.Dispatch<React.SetStateAction<string[]>>
   workspaceRoot: string
   workspaceSettingsByPath: Record<string, any>
@@ -155,7 +156,7 @@ export function AppModals(props: AppModalsProps) {
     workspacePickerPrompt, setWorkspacePickerPrompt,
     workspacePickerOpening, setWorkspacePickerOpening,
     workspacePickerError, setWorkspacePickerError,
-    workspaceList, setWorkspaceList,
+    workspaceList, managedWorkspacePaths, setWorkspaceList,
     workspaceRoot, workspaceSettingsByPath, setWorkspaceSettingsByPath,
     openWorkspacePicker, closeWorkspacePicker,
     requestWorkspaceSwitch, confirmWorkspaceSwitch,
@@ -184,15 +185,16 @@ export function AppModals(props: AppModalsProps) {
     cursorAllowBuilds: true,
   })
 
-  const workspaceManagerRows = workspaceList.map((workspacePath) => ({
+  const workspaceManagerRows = managedWorkspacePaths.map((workspacePath) => ({
     workspacePath,
-    configPath: `${workspacePath}\\${WORKSPACE_CONFIG_FILENAME}`,
+    configPath: `${workspacePath}\\${WORKSPACE_BUNDLE_FILENAME}`,
     settings:
       (workspaceSettingsByPath[workspacePath] as WorkspaceSettingsType | undefined) ??
       buildDefaultWorkspaceSettings(workspacePath),
     isCurrent:
       normalizeWorkspacePathForCompare(workspacePath) === normalizeWorkspacePathForCompare(workspaceRoot),
   }))
+  const workspacePickerPaths = managedWorkspacePaths.length > 0 ? managedWorkspacePaths : workspaceList
 
   const [returnToManageWorkspacesOnClose, setReturnToManageWorkspacesOnClose] = React.useState(false)
 
@@ -709,7 +711,7 @@ export function AppModals(props: AppModalsProps) {
                       disabled={Boolean(workspacePickerOpening)}
                       onClick={async () => {
                         setWorkspacePickerError(null)
-                        for (const p of workspaceList) {
+                        for (const p of workspacePickerPaths) {
                           setWorkspacePickerOpening(p)
                           try {
                             const result = await api.claimWorkspace?.(p)
@@ -735,7 +737,7 @@ export function AppModals(props: AppModalsProps) {
                 </div>
               )}
               <div className="space-y-1">
-                {workspaceList.map((p) => (
+                {workspacePickerPaths.map((p) => (
                   (() => {
                     const isCurrent =
                       normalizeWorkspacePathForCompare(p) === normalizeWorkspacePathForCompare(workspaceRoot)
@@ -774,10 +776,8 @@ export function AppModals(props: AppModalsProps) {
                     ...prev,
                     [selected]: nextSettings,
                   }))
-                  requestWorkspaceSwitch(selected, 'picker')
-                  try {
-                    await api.writeWorkspaceConfig?.(selected, nextSettings)
-                  } catch { }
+                  closeWorkspacePicker()
+                  workspaceSettings.openWorkspaceSettingsForPath?.(selected)
                 }}
                 disabled={Boolean(workspacePickerOpening)}
               >
@@ -1079,7 +1079,7 @@ export function AppModals(props: AppModalsProps) {
             </div>
             <div className="p-4 space-y-3 text-sm">
               <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                Barnaby keeps a workspace list and stores each config at <span className="font-mono">{WORKSPACE_CONFIG_FILENAME}</span>.
+                Barnaby keeps a workspace list and stores the workspace definition at <span className="font-mono">{WORKSPACE_BUNDLE_FILENAME}</span>.
               </div>
               {workspaceManagerRows.length === 0 ? (
                 <div className="rounded border border-dashed border-neutral-300 dark:border-neutral-700 px-3 py-4 text-center text-neutral-500 dark:text-neutral-400">
@@ -1183,11 +1183,9 @@ export function AppModals(props: AppModalsProps) {
                   const nextSettings = buildDefaultWorkspaceSettings(selected)
                   setWorkspaceList((prev) => (prev.includes(selected) ? prev : [selected, ...prev]))
                   setWorkspaceSettingsByPath((prev: any) => ({ ...prev, [selected]: nextSettings }))
-                  try {
-                    await api.writeWorkspaceConfig?.(selected, nextSettings)
-                  } catch {
-                    // best effort only
-                  }
+                  setReturnToManageWorkspacesOnClose(true)
+                  workspaceSettings.openWorkspaceSettingsForPath?.(selected)
+                  setShowManageWorkspacesModal(false)
                 }}
               >
                 Add Workspace...

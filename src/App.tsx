@@ -2385,7 +2385,7 @@ export default function App() {
               ...x,
               historyLocked: false,
               status: 'Continue prompt queued to run next.',
-              pendingInputs: [continuePrompt, ...x.pendingInputs],
+              pendingInputs: [{ text: continuePrompt }, ...x.pendingInputs],
               messages: [
                 ...x.messages,
                 {
@@ -2538,6 +2538,20 @@ export default function App() {
       if (!ws) return prev
       const existing = ws.promptShortcuts ?? []
       const next = existing.filter((_, i) => i !== index)
+      const updated = { ...ws, promptShortcuts: next }
+      queueMicrotask(() => void api.writeWorkspaceConfig?.(workspaceRoot, updated).catch(() => {}))
+      return { ...prev, [workspaceRoot]: updated }
+    })
+  }
+
+  function editPromptShortcut(index: number, text: string) {
+    const trimmed = text.trim().slice(0, 80)
+    if (!trimmed) return
+    setWorkspaceSettingsByPath((prev) => {
+      const ws = prev[workspaceRoot]
+      if (!ws) return prev
+      const existing = ws.promptShortcuts ?? []
+      const next = existing.map((s, i) => (i === index ? trimmed : s))
       const updated = { ...ws, promptShortcuts: next }
       queueMicrotask(() => void api.writeWorkspaceConfig?.(workspaceRoot, updated).catch(() => {}))
       return { ...prev, [workspaceRoot]: updated }
@@ -3516,6 +3530,10 @@ export default function App() {
               workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, systemPrompt: value }))
             }
             onTextDraftChange={workspaceSettings.updateDockedWorkspaceTextDraft}
+            promptShortcuts={activePromptShortcuts}
+            onAddShortcut={addPromptShortcut}
+            onDeleteShortcut={deletePromptShortcut}
+            onEditShortcut={editPromptShortcut}
             onClose={() => closeDockPanel('workspace-settings')}
           />
         )
@@ -3980,6 +3998,10 @@ export default function App() {
                   workspaceSettings.updateDockedWorkspaceForm((prev) => ({ ...prev, systemPrompt: value }))
                 }
                 onTextDraftChange={workspaceSettings.updateDockedWorkspaceTextDraft}
+                promptShortcuts={activePromptShortcuts}
+                onAddShortcut={addPromptShortcut}
+                onDeleteShortcut={deletePromptShortcut}
+                onEditShortcut={editPromptShortcut}
                 onClose={() => setShowWorkspaceWindow(false)}
               />
             )
@@ -4242,14 +4264,15 @@ export default function App() {
         if (x.id !== winId) return x
         if (x.streaming || x.pendingInputs.length === 0) return x
         const [head, ...rest] = x.pendingInputs
-        nextText = head
+        nextText = head.text
         const queuedUserMessage: ChatMessage = {
           id: newId(),
           role: 'user',
-          content: head,
+          content: head.text,
           interactionMode: x.interactionMode,
           format: 'text',
           createdAt: Date.now(),
+          hidden: head.hidden,
         }
         lastScrollToUserMessageRef.current = { panelId: winId, messageId: queuedUserMessage.id }
         const updated: AgentPanelState = {
@@ -4339,7 +4362,7 @@ export default function App() {
             p.provider = getModelProvider(p.model)
             p.messages = withModelBanner(p.messages, p.model)
             p.title = title
-            p.pendingInputs = [injectedPrompt]
+            p.pendingInputs = [{ text: injectedPrompt, hidden: true }]
             setPanels((prev) => {
               if (prev.length >= MAX_PANELS) return prev
               return [...prev, p]
@@ -4347,6 +4370,7 @@ export default function App() {
             setActivePanelId(id)
             setShowWorkspaceWindow(true)
             setFocusedEditorId(null)
+            queueMicrotask(() => kickQueuedMessage(id))
             return id
           }}
           orchestratorSettings={orchestratorSettings}

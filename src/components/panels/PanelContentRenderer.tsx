@@ -16,7 +16,7 @@ export function PanelContentRenderer({ panel: w, ctx }: PanelContentRendererProp
   const hasInput = Boolean(w.input.trim()) || w.attachments.length > 0
   const inputLocked = Boolean(w.historyLocked)
   const isBusy = w.streaming
-  const queueCount = w.pendingInputs.length
+  const queueCount = w.pendingInputs.filter((p) => !p.hidden).length
   const isIdle = !w.streaming && queueCount === 0
   const panelFontSizePx = 14 * w.fontScale
   const panelLineHeightPx = 24 * w.fontScale

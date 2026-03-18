@@ -790,7 +790,7 @@ export function AppModals(props: AppModalsProps) {
 
       {showWorkspaceModal && (
         <div className={MODAL_BACKDROP_CLASS}>
-          <div className={`w-full max-w-2xl ${MODAL_CARD_CLASS}`}>
+          <div className={`w-full max-w-2xl overflow-hidden ${MODAL_CARD_CLASS}`}>
             <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
               <div className="font-medium">
                 {workspaceModalMode === 'new' ? 'New workspace settings' : 'Edit workspace settings'}
@@ -834,7 +834,7 @@ export function AppModals(props: AppModalsProps) {
               <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                 <span className="text-neutral-600 dark:text-neutral-300">Default model</span>
                 <select
-                  className={UI_SELECT_CLASS}
+                  className={`w-full ${UI_SELECT_CLASS}`}
                   value={workspaceForm.defaultModel}
                   onChange={(e) =>
                     workspaceSettings.updateWorkspaceModalForm((prev: any) => ({ ...prev, defaultModel: e.target.value }))
@@ -975,7 +975,7 @@ export function AppModals(props: AppModalsProps) {
                   <span className="text-neutral-600 dark:text-neutral-300 pt-1">Permissions</span>
                   <div className="space-y-1">
                     <select
-                      className={UI_SELECT_CLASS}
+                      className={`w-full ${UI_SELECT_CLASS}`}
                       value={workspaceForm.permissionMode}
                       onChange={(e) =>
                         workspaceSettings.updateWorkspaceModalForm((prev: any) => ({

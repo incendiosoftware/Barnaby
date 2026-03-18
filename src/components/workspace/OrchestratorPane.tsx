@@ -1635,7 +1635,7 @@ export function OrchestratorPane({
             )}
 
             {/* Idle state - show welcome */}
-            {phase === 'idle' && !goalText && (
+            {phase === 'idle' && !goalText && mode !== 'task-list' && (
               <div className="py-6 text-center">
                 <p className="text-sm text-neutral-500 dark:text-neutral-400 leading-relaxed">
                   {mode === 'goal-run'

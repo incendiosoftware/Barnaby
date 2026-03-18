@@ -90,7 +90,7 @@ export function estimatePanelContextUsage(
   }
   for (const queued of panel.pendingInputs) {
     estimatedInputTokens += TOKEN_ESTIMATE_MESSAGE_OVERHEAD
-    estimatedInputTokens += estimateTokenCountFromText(queued)
+    estimatedInputTokens += estimateTokenCountFromText(queued.text)
   }
   const draft = panel.input.trim()
   if (draft) {

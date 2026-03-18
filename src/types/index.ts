@@ -43,7 +43,11 @@ export type ChatMessage = {
   format?: MessageFormat
   attachments?: PastedImageAttachment[]
   createdAt?: number
+  /** If true, this message is not rendered in the chat timeline (e.g. orchestrator-injected prompts). */
+  hidden?: boolean
 }
+
+export type PendingInput = { text: string; hidden?: boolean }
 
 export type PermissionMode = 'verify-first' | 'proceed-always'
 export type SandboxMode = 'read-only' | 'workspace-write'
@@ -114,7 +118,7 @@ export type AgentPanelState = {
   messages: ChatMessage[]
   attachments: PastedImageAttachment[]
   input: string
-  pendingInputs: string[]
+  pendingInputs: PendingInput[]
   fontScale: number
   /** Plugin-injected additional system prompt (overrides workspace-level when set). */
   pluginSystemPrompt?: string

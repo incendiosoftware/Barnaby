@@ -4420,9 +4420,13 @@ let aboutWindow: BrowserWindow | null = null
 
 function createAboutWindow() {
   if (aboutWindow) {
-    if (aboutWindow.isMinimized()) aboutWindow.restore()
-    aboutWindow.focus()
-    return
+    if (aboutWindow.isDestroyed()) {
+      aboutWindow = null
+    } else {
+      if (aboutWindow.isMinimized()) aboutWindow.restore()
+      aboutWindow.focus()
+      return
+    }
   }
 
   const publicRoot = process.env.VITE_PUBLIC ?? ''

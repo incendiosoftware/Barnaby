@@ -2,7 +2,7 @@
  * Workspace settings pane - folder path, default model, sandbox, permissions.
  */
 
-import React from 'react'
+import React, { useState } from 'react'
 import type { PermissionMode, SandboxMode, WorkspaceSettings, WorkspaceSettingsTextDraft } from '../types'
 import { UI_CLOSE_ICON_BUTTON_CLASS, UI_INPUT_CLASS, UI_SELECT_CLASS } from '../constants'
 
@@ -27,6 +27,10 @@ export interface WorkspaceSettingsPaneProps {
   onShowWorkspaceContextInPromptChange: (value: boolean) => void
   onSystemPromptChange: (value: string) => void
   onTextDraftChange: (field: keyof WorkspaceSettingsTextDraft, value: string) => void
+  promptShortcuts?: string[]
+  onAddShortcut?: (text: string) => void
+  onDeleteShortcut?: (index: number) => void
+  onEditShortcut?: (index: number, text: string) => void
   onClose?: () => void
 }
 
@@ -46,8 +50,21 @@ export function WorkspaceSettingsPane({
   onShowWorkspaceContextInPromptChange,
   onSystemPromptChange,
   onTextDraftChange,
+  promptShortcuts,
+  onAddShortcut,
+  onDeleteShortcut,
+  onEditShortcut,
   onClose,
 }: WorkspaceSettingsPaneProps) {
+  const [newShortcutText, setNewShortcutText] = useState('')
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [editingText, setEditingText] = useState('')
+
+  function commitEdit(idx: number) {
+    if (editingText.trim()) onEditShortcut?.(idx, editingText)
+    setEditingIndex(null)
+  }
+
   return (
     <div className="h-full min-h-0 flex flex-col bg-neutral-50 dark:bg-neutral-900">
       <div className="px-3 py-3 border-b border-neutral-200/80 dark:border-neutral-800 flex items-center justify-between gap-2">
@@ -231,6 +248,86 @@ export function WorkspaceSettingsPane({
               </div>
             </>
           )}
+          <div className="min-w-0 space-y-1.5">
+            <label className="text-neutral-600 dark:text-neutral-300">Prompt shortcuts</label>
+            {(promptShortcuts ?? []).length > 0 && (
+              <div className="space-y-1">
+                {(promptShortcuts ?? []).map((text, idx) =>
+                  editingIndex === idx ? (
+                    <div key={idx} className="flex gap-1 items-center">
+                      <input
+                        className={`flex-1 min-w-0 ${UI_INPUT_CLASS} text-xs`}
+                        value={editingText}
+                        maxLength={80}
+                        autoFocus
+                        onChange={(e) => setEditingText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') commitEdit(idx)
+                          if (e.key === 'Escape') setEditingIndex(null)
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="h-7 px-2 rounded-md bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 text-[11px]"
+                        onClick={() => commitEdit(idx)}
+                      >Save</button>
+                      <button
+                        type="button"
+                        className="h-7 px-2 rounded-md bg-neutral-100 text-neutral-500 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700 text-[11px]"
+                        onClick={() => setEditingIndex(null)}
+                      >Cancel</button>
+                    </div>
+                  ) : (
+                    <div key={idx} className="flex gap-1 items-center group min-w-0">
+                      <span
+                        className="flex-1 min-w-0 truncate text-[11px] text-neutral-700 dark:text-neutral-200 cursor-pointer"
+                        title={text}
+                        onClick={() => { setEditingIndex(idx); setEditingText(text) }}
+                      >{text}</span>
+                      <button
+                        type="button"
+                        className="shrink-0 h-6 px-1.5 rounded text-[10px] text-neutral-500 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:bg-neutral-700 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={() => { setEditingIndex(idx); setEditingText(text) }}
+                        title="Edit"
+                      >Edit</button>
+                      <button
+                        type="button"
+                        className="shrink-0 h-6 px-1.5 rounded text-[10px] text-red-500 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={() => onDeleteShortcut?.(idx)}
+                        title="Delete"
+                      >Delete</button>
+                    </div>
+                  )
+                )}
+              </div>
+            )}
+            <div className="flex gap-1.5 items-center">
+              <input
+                className={`flex-1 min-w-0 ${UI_INPUT_CLASS} text-xs`}
+                value={newShortcutText}
+                maxLength={80}
+                placeholder="Add a new shortcut..."
+                onChange={(e) => setNewShortcutText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newShortcutText.trim()) {
+                    onAddShortcut?.(newShortcutText)
+                    setNewShortcutText('')
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="shrink-0 h-8 px-2.5 rounded-md bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 text-[11px]"
+                disabled={!newShortcutText.trim()}
+                onClick={() => {
+                  if (newShortcutText.trim()) {
+                    onAddShortcut?.(newShortcutText)
+                    setNewShortcutText('')
+                  }
+                }}
+              >Add</button>
+            </div>
+          </div>
           <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
             Changes in this panel are saved immediately.
           </p>

@@ -321,13 +321,13 @@ export function useAppRuntimeEvents(ctx: any) {
               snapshotForHistory = updated
               return updated
             }
-            let pendingInputs: string[] = w.pendingInputs
+            let pendingInputs: typeof w.pendingInputs = w.pendingInputs
             let nextMessages: any[] = [...msgs.slice(0, lastAssistantIdx), { ...lastAssistant, format: 'markdown' as const }, ...msgs.slice(lastAssistantIdx + 1)]
             if (looksIncomplete(lastAssistant.content)) {
               const count = autoContinueCountRef.current.get(agentWindowId) ?? 0
               if (count < MAX_AUTO_CONTINUE && w.pendingInputs.length === 0) {
                 autoContinueCountRef.current.set(agentWindowId, count + 1)
-                pendingInputs = [...w.pendingInputs, AUTO_CONTINUE_PROMPT]
+                pendingInputs = [...w.pendingInputs, { text: AUTO_CONTINUE_PROMPT }]
                 shouldKeepPromptTimer = true
               }
             } else {

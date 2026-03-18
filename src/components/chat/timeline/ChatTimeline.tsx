@@ -69,7 +69,7 @@ export interface ChatTimelineProps {
   completedPromptTimestamp: number | null
   resendingPanelId: string | null
   queueCount: number
-  pendingInputs: string[]
+  pendingInputs: Array<{ text: string; hidden?: boolean }>
   editingQueuedIndex: number | null
   formatToolTrace: (raw: string) => string
   onChatLinkClick: (href: string) => void
@@ -114,7 +114,9 @@ export function ChatTimeline(props: ChatTimelineProps) {
           >
             {queueCount} queued - will run after current turn
           </div>
-          {pendingInputs.map((text, i) => {
+          {pendingInputs.map((item, i) => {
+            if (item.hidden) return null
+            const text = item.text
             const preview = text.length > 80 ? text.slice(0, 80) + '...' : text
             const isEditingThisQueueItem = editingQueuedIndex === i
             return (

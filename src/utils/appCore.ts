@@ -1100,7 +1100,11 @@ export function parsePersistedAgentPanel(
     attachments: parsePanelAttachments(rec.attachments),
     input: typeof rec.input === 'string' ? rec.input : '',
     pendingInputs: Array.isArray(rec.pendingInputs)
-      ? rec.pendingInputs.filter((x): x is string => typeof x === 'string')
+      ? rec.pendingInputs.flatMap((x) => {
+          if (typeof x === 'string') return [{ text: x }]
+          if (x && typeof x === 'object' && typeof (x as any).text === 'string') return [x as { text: string; hidden?: boolean }]
+          return []
+        })
       : [],
     fontScale: clampFontScale(rec.fontScale),
     usage: undefined,

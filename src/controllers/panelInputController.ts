@@ -76,7 +76,8 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
       prev.map((x) => {
         if (x.id !== winId) return x
         if (index < 0 || index >= x.pendingInputs.length) return x
-        textToInject = x.pendingInputs[index]
+        const pendingItem = x.pendingInputs[index]
+        textToInject = pendingItem.text
         const nextPending = x.pendingInputs.filter((_, j) => j !== index)
         const queuedUserMessage: ChatMessage = {
           id: newId(),
@@ -85,6 +86,7 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
           interactionMode: x.interactionMode,
           format: 'text',
           createdAt: Date.now(),
+          hidden: pendingItem.hidden,
         }
         ctx.lastScrollToUserMessageRef.current = { panelId: winId, messageId: queuedUserMessage.id }
         const updated: AgentPanelState = {
@@ -112,7 +114,7 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
       prev.map((x) => {
         if (x.id !== winId) return x
         if (index < 0 || index >= x.pendingInputs.length) return x
-        queuedText = x.pendingInputs[index]
+        queuedText = x.pendingInputs[index].text
         return {
           ...x,
           input: queuedText,
@@ -261,10 +263,10 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
           if (draftEdit?.kind === 'queued') {
             const nextPending = [...x.pendingInputs]
             if (draftEdit.index >= 0 && draftEdit.index < nextPending.length) {
-              nextPending[draftEdit.index] = text
+              nextPending[draftEdit.index] = { text }
               ctx.appendPanelDebug(winId, 'queue', `Updated queued message #${draftEdit.index + 1} (${text.length} chars)`)
             } else {
-              nextPending.push(text)
+              nextPending.push({ text })
               ctx.appendPanelDebug(winId, 'queue', `Queued edited message at end (${text.length} chars)`)
             }
             const updated: AgentPanelState = {
@@ -281,7 +283,7 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
             const updated: AgentPanelState = {
               ...x,
               input: '',
-              pendingInputs: [text, ...x.pendingInputs],
+              pendingInputs: [{ text }, ...x.pendingInputs],
               status: 'Correction queued to run next.',
             }
             snapshotForHistory = updated
@@ -291,7 +293,7 @@ export function createPanelInputController(ctx: PanelInputControllerContext): Pa
           const updated: AgentPanelState = {
             ...x,
             input: '',
-            pendingInputs: [...x.pendingInputs, text],
+            pendingInputs: [...x.pendingInputs, { text }],
           }
           snapshotForHistory = updated
           return updated

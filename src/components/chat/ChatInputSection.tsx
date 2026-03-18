@@ -598,6 +598,7 @@ export function ChatInputSection({
           )}
           {shortcutContextMenu && createPortal(
             <div
+              data-settings-popover-root="true"
               className="fixed z-[250] rounded-md border p-1 shadow-lg backdrop-blur"
               style={{
                 top: shortcutContextMenu.y,

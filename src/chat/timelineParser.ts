@@ -108,6 +108,7 @@ export function buildTimelineForPanel(input: BuildTimelineInput): TimelineUnit[]
 
   for (let i = 0; i < input.messages.length; i += 1) {
     const message = input.messages[i]
+    if (message.hidden) continue
     const messageCreatedAt = typeof message.createdAt === 'number' && Number.isFinite(message.createdAt) ? message.createdAt : i
     
     if (message.role === 'assistant' && /<(?:think|thought)>[\s\S]*?/i.test(message.content)) {

@@ -16,11 +16,7 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: windows-latest
 
     steps:
       - name: Checkout Code
@@ -42,6 +38,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release_on_${{ matrix. os }}
+          name: release_windows
           path: release/
           retention-days: 5

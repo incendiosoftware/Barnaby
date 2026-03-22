@@ -1,14 +1,16 @@
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { app, BrowserWindow, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'
 import {
   getMainWindow,
   setMainWindow,
   getSplashWindow,
   setSplashWindow,
   setMainWindowReadyToShow,
+  setRendererStartupReady,
   maybeRevealMainWindow,
   createSplashWindow,
+  closeSplashWindow,
   readStartupWorkspaceRoot,
   getMainWindowTitle,
   setStartupRevealTimer,
@@ -43,6 +45,9 @@ import { CodexAppServerClient, FireHarnessCodexEvent } from './codexAppServerCli
 import { getProviderApiKey } from './providerSecrets'
 import { STARTUP_SPLASH_TIMEOUT_MS } from './constants'
 import type { AgentClient, AgentEvent, ConnectOptions } from './types'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 // Handlers
 import { registerChatHandlers } from './ipcHandlers/chat'
@@ -227,7 +232,6 @@ export async function createWindow() {
     // skip splash
   } else {
     const timer = setTimeout(() => {
-      const { setRendererStartupReady, maybeRevealMainWindow } = require('./windowManager')
       setRendererStartupReady(true)
       maybeRevealMainWindow()
     }, STARTUP_SPLASH_TIMEOUT_MS)
@@ -262,13 +266,11 @@ export async function createWindow() {
   })
 
   win.once('ready-to-show', () => {
-    const { setMainWindowReadyToShow, maybeRevealMainWindow } = require('./windowManager')
     setMainWindowReadyToShow(true)
     maybeRevealMainWindow()
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    const { shell } = require('electron')
     if (url.startsWith('https:')) shell.openExternal(url)
     return { action: 'deny' }
   })
@@ -354,32 +356,27 @@ app.whenReady().then(async () => {
   }
 })
 
-app.on('window-all-closed', () => {
-  setMainWindow(null)
-  setDebugLogWindow(null)
-  const { closeSplashWindow, clearStartupRevealTimer } = require('./windowManager')
+function cleanupOnExit() {
   closeSplashWindow()
   clearStartupRevealTimer()
   releaseAllWorkspaceLocks()
   shutdownPluginHost().catch(() => { })
-  mcpServerManager.stopAll().catch(() => { })
   for (const client of agentClients.values()) {
     (client as { close: () => Promise<void> }).close().catch(() => { })
   }
   agentClients.clear()
+}
+
+app.on('window-all-closed', () => {
+  setMainWindow(null)
+  setDebugLogWindow(null)
+  mcpServerManager.stopAll().catch(() => { })
+  cleanupOnExit()
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
-  const { closeSplashWindow, clearStartupRevealTimer } = require('./windowManager')
-  closeSplashWindow()
-  clearStartupRevealTimer()
-  releaseAllWorkspaceLocks()
-  shutdownPluginHost().catch(() => { })
-  for (const client of agentClients.values()) {
-    (client as { close: () => Promise<void> }).close().catch(() => { })
-  }
-  agentClients.clear()
+  cleanupOnExit()
 })
 
 app.on('activate', () => {

@@ -421,6 +421,25 @@ export async function shutdownPluginHost(): Promise<void> {
   panelTurnCompleteHandlers.clear()
 }
 
-export function getLoadedPlugins(): Map<PluginId, PluginEntry> {
-  return loadedPlugins
+export function getLoadedPlugins() {
+  return Array.from(loadedPlugins.values()).map((entry) => ({
+    pluginId: entry.plugin.pluginId,
+    displayName: entry.plugin.displayName,
+    version: entry.plugin.version,
+    active: entry.active,
+  }))
+}
+
+export async function openPluginsFolder() {
+  const { shell } = require('electron')
+  const homePluginDir = path.join(os.homedir(), '.barnaby', 'plugins')
+  fs.mkdirSync(homePluginDir, { recursive: true })
+  return shell.openPath(homePluginDir)
+}
+
+export async function reloadLocalPlugins() {
+  const appRoot = app.getAppPath()
+  await shutdownPluginHost()
+  await initializePluginHost(appRoot, appStorageDirGetter ?? undefined)
+  return { ok: true, count: loadedPlugins.size }
 }

@@ -643,6 +643,8 @@ export function releaseAllWorkspaceLocks() {
     releaseWorkspaceLock(workspaceRoot)
   }
 }
+
+export function forceClaimWorkspace(workspaceRoot: string) {
   let root = ''
   try {
     root = resolveWorkspaceRootPath(resolveWorkspaceRootFromAnyPath(workspaceRoot))

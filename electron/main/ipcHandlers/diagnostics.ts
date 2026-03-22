@@ -6,7 +6,7 @@ import {
   writeDiagnosticsFile,
 } from '../diagnostics'
 import { getLoadedPlugins, openPluginsFolder, reloadLocalPlugins } from '../pluginHost'
-import { getRuntimeLogFilePath } from '../storageUtils'
+import { getRuntimeLogFilePath } from '../logger'
 import { getMainWindow } from '../windowManager'
 import fs from 'node:fs'
 
@@ -39,7 +39,7 @@ export function registerDiagnosticsHandlers() {
   })
 
   ipcMain.handle('agentorchestrator:getDebugLogContent', async () => {
-    const { getDebugLogFilePath } = require('../storageUtils')
+    const { getDebugLogFilePath } = require('../logger')
     const logPath = getDebugLogFilePath()
     if (fs.existsSync(logPath)) {
       return fs.readFileSync(logPath, 'utf8')

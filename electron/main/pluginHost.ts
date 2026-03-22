@@ -9,7 +9,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { ipcMain, BrowserWindow } from 'electron'
+import { app, ipcMain, BrowserWindow } from 'electron'
 import type {
   BarnabyPlugin,
   BarnabyPluginHostApi,

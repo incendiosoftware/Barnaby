@@ -17,13 +17,13 @@ export function registerAgentHandlers(
   ipcMain.handle('agentorchestrator:sendMessage', async (_evt, agentWindowId: string, text: string, attachments?: any[]) => {
     const client = agentClients.get(agentWindowId)
     if (!client) throw new Error('Agent not connected.')
-    return client.sendMessage(text, attachments)
+    return client.sendUserMessage(text)
   })
 
   ipcMain.handle('agentorchestrator:interrupt', async (_evt, agentWindowId: string) => {
     const client = agentClients.get(agentWindowId)
     if (!client) return { ok: false, error: 'Agent not connected.' }
-    await client.interrupt()
+    await client.interruptActiveTurn()
     return { ok: true }
   })
 

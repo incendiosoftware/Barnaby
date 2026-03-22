@@ -2,13 +2,10 @@ import { app, shell } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import {
-  getAppStorageDirPath,
   getChatHistoryFilePath,
   getAppStateFilePath,
-  getRuntimeLogFilePath,
-  getDebugLogFilePath,
 } from './storageUtils'
-import { appendRuntimeLog, errorMessage } from './logger'
+import { appendRuntimeLog, errorMessage, getAppStorageDirPath, getRuntimeLogFilePath, getDebugLogFilePath } from './logger'
 import type { DiagnosticsFileTarget, DiagnosticsPathTarget } from './types'
 
 export function getDiagnosticsInfo() {

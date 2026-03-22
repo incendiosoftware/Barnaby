@@ -16,12 +16,12 @@ import {
 } from './windowManager'
 import {
   appendRuntimeLog,
-  setDebugLogWindow
+  setDebugLogWindow,
+  getAppStorageDirPath
 } from './logger'
 import {
   isDirectory,
   migrateLegacyLocalStorageIfNeeded,
-  getAppStorageDirPath
 } from './storageUtils'
 import {
   registerRuntimeDiagnosticsLogging
@@ -65,7 +65,7 @@ let editorMenuState = { canSave: false, canClose: false }
 let dockPanelMenuState: any = {}
 let recentWorkspaces: string[] = []
 
-const mcpServerManager = new McpServerManager(path.join(app.getPath('userData'), 'mcp-servers.json'))
+const mcpServerManager = new McpServerManager()
 
 // Environment
 process.env.DIST_ELECTRON = path.join(__dirname, '../')

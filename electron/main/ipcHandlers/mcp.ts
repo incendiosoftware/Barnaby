@@ -3,11 +3,11 @@ import type { McpServerManager } from '../mcpClient'
 
 export function registerMcpHandlers(mcpServerManager: McpServerManager) {
   ipcMain.handle('agentorchestrator:getMcpServers', async () => {
-    return mcpServerManager.getServers()
+    return mcpServerManager.getStatuses()
   })
 
   ipcMain.handle('agentorchestrator:addMcpServer', async (_evt, server: any) => {
-    return mcpServerManager.addServer(server)
+    return mcpServerManager.addServer(server.name, server)
   })
 
   ipcMain.handle('agentorchestrator:updateMcpServer', async (_evt, serverId: string, updates: any) => {
@@ -23,6 +23,6 @@ export function registerMcpHandlers(mcpServerManager: McpServerManager) {
   })
 
   ipcMain.handle('agentorchestrator:getMcpServerTools', async (_evt, serverId: string) => {
-    return mcpServerManager.getServerTools(serverId)
+    return mcpServerManager.getStatuses().find(s => s.name === serverId)?.tools ?? []
   })
 }

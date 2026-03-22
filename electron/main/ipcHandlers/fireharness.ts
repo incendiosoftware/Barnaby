@@ -15,7 +15,7 @@ export function registerFireHarnessHandlers(
   ipcMain.handle('fireharness:sendMessage', async (_evt, agentWindowId: string, message: any) => {
     const client = agentClients.get(agentWindowId) as CodexAppServerClient | undefined
     if (!client) throw new Error('FireHarness not connected.')
-    return client.sendMessage(message.text, message.attachments)
+    return client.sendUserMessage(message.text)
   })
 
   ipcMain.handle('fireharness:disconnect', async (_evt, agentWindowId: string) => {

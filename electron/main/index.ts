@@ -1,3 +1,4 @@
+import './esmShim'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'

@@ -1,6 +1,7 @@
 import './esmShim'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { existsSync } from 'node:fs'
 import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'
 import {
   getMainWindow,
@@ -82,10 +83,15 @@ process.env.VITE_PUBLIC = process.env.VITE_DEV_SERVER_URL
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 const indexHtml = path.join(process.env.DIST, 'index.html')
-const preload = path.join(__dirname, '../preload/index.js')
+// Vite production build emits preload as index.mjs (ESM); dev may use index.js
+const _preloadDir = path.join(__dirname, '../preload')
+const preload = existsSync(path.join(_preloadDir, 'index.mjs'))
+  ? path.join(_preloadDir, 'index.mjs')
+  : path.join(_preloadDir, 'index.js')
 
 function isBareElectronHostLaunch() {
-  const args = process.argv.slice(process.defaultApp ? 2 : 1)
+  if (!process.defaultApp) return false
+  const args = process.argv.slice(2)
   return args.length === 0 && !process.env.VITE_DEV_SERVER_URL
 }
 

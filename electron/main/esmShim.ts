@@ -1,10 +1,12 @@
 /**
- * Must be imported first. Defines __dirname/__filename globally so any
- * bundled CJS code or dependencies that reference them work in ESM context.
- * Uses var so they become properties of the global object (same as CJS).
+ * Must be imported first. Defines __dirname/__filename on globalThis so any
+ * bundled code that expects Node CJS globals works in ESM context.
+ * (Top-level `var` in an ES module is module-scoped, not global.)
  */
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
-var __filename = fileURLToPath(import.meta.url)
-var __dirname = path.dirname(__filename)
+const _filename = fileURLToPath(import.meta.url)
+const _dirname = path.dirname(_filename)
+;(globalThis as typeof globalThis & { __filename: string; __dirname: string }).__filename = _filename
+;(globalThis as typeof globalThis & { __filename: string; __dirname: string }).__dirname = _dirname

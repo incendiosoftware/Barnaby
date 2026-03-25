@@ -36,7 +36,7 @@ import {
   releaseAllWorkspaceLocks,
   ensureWorkspaceLockHeartbeatTimer
 } from './workspaceManager'
-import { setAppMenu } from './menu'
+import { setAppMenu, setMenuCreateWindowFn } from './menu'
 import { McpServerManager } from './mcpClient'
 import { initializePluginHost, shutdownPluginHost, setPluginHostWindow, setWorkspaceRootGetter, notifyPluginPanelEvent, notifyPluginPanelTurnComplete } from './pluginHost'
 import { GeminiClient, GeminiClientEvent } from './geminiClient'
@@ -60,7 +60,7 @@ import { registerProviderHandlers } from './ipcHandlers/provider'
 import { registerDiagnosticsHandlers } from './ipcHandlers/diagnostics'
 import { registerWorkspaceHandlers } from './ipcHandlers/workspace'
 import { registerAgentHandlers } from './ipcHandlers/agent'
-import { registerAppHandlers } from './ipcHandlers/app'
+import { registerAppHandlers, setCreateWindowFn } from './ipcHandlers/app'
 import { registerOrchestratorHandlers } from './ipcHandlers/orchestrator'
 
 // Global State
@@ -321,6 +321,8 @@ registerAppHandlers((list) => {
   updateAppMenu()
 })
 registerOrchestratorHandlers()
+setCreateWindowFn(() => { createWindow() })
+setMenuCreateWindowFn(() => { createWindow() })
 
 // App Lifecycle
 app.whenReady().then(async () => {

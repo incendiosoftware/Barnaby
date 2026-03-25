@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain, shell } from 'electron'
 import {
   getDiagnosticsInfo,
   openDiagnosticsPath,
@@ -6,7 +6,7 @@ import {
   writeDiagnosticsFile,
 } from '../diagnostics'
 import { getLoadedPlugins, openPluginsFolder, reloadLocalPlugins } from '../pluginHost'
-import { getRuntimeLogFilePath } from '../logger'
+import { getRuntimeLogFilePath, getDebugLogFilePath } from '../logger'
 import { getMainWindow } from '../windowManager'
 import fs from 'node:fs'
 
@@ -29,7 +29,6 @@ export function registerDiagnosticsHandlers() {
 
   ipcMain.handle('agentorchestrator:openRuntimeLog', async () => {
     const logPath = getRuntimeLogFilePath()
-    const { shell } = require('electron')
     return shell.openPath(logPath)
   })
 
@@ -39,7 +38,6 @@ export function registerDiagnosticsHandlers() {
   })
 
   ipcMain.handle('agentorchestrator:getDebugLogContent', async () => {
-    const { getDebugLogFilePath } = require('../logger')
     const logPath = getDebugLogFilePath()
     if (fs.existsSync(logPath)) {
       return fs.readFileSync(logPath, 'utf8')

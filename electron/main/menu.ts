@@ -1,4 +1,4 @@
-import { app, Menu, shell, BrowserWindow } from 'electron'
+import { app, Menu, shell, dialog, BrowserWindow } from 'electron'
 import { getReleaseVersion } from './utils'
 import {
   revealMainWindow,
@@ -8,6 +8,9 @@ import {
 } from './windowManager'
 import { releaseWorkspaceLock } from './workspaceManager'
 import { openAgentHistoryFolder, openRuntimeLogFile } from './diagnostics'
+
+let _createWindow: (() => void) | null = null
+export function setMenuCreateWindowFn(fn: () => void) { _createWindow = fn }
 
 export function setAppMenu(
   currentWorkspaceRoot: string,
@@ -47,8 +50,7 @@ export function setAppMenu(
           label: 'New Window',
           accelerator: 'CmdOrCtrl+Shift+N',
           click: () => {
-            const { createWindow } = require('./index')
-            createWindow()
+            _createWindow?.()
           },
         },
         { type: 'separator' },
@@ -79,7 +81,6 @@ export function setAppMenu(
         {
           label: 'Open Workspace...',
           click: async () => {
-            const { dialog } = require('electron')
             const result = await dialog.showOpenDialog(getMainWindow()!, {
               properties: ['openDirectory'],
             })
@@ -100,8 +101,7 @@ export function setAppMenu(
           label: 'Close Workspace',
           click: () => {
             releaseWorkspaceLock(currentWorkspaceRoot)
-            const { createWindow } = require('./index')
-            createWindow() // Relaunch without workspace
+            _createWindow?.()
           },
         },
         { type: 'separator' },

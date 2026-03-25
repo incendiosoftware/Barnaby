@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain, nativeTheme } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import {
@@ -8,10 +8,11 @@ import {
   forceClaimWorkspace,
   syncWorkspaceBundleFromState,
   withWorkspaceBundleSelection,
-  resolveWorkspaceRootFromAnyPath
+  resolveWorkspaceRootFromAnyPath,
+  sanitizeWorkspaceConfigSettings
 } from '../workspaceManager'
 import { readPersistedAppState, writePersistedAppState, isDirectory } from '../storageUtils'
-import { getMainWindow, getMainWindowTitle, openWorkspaceInNewBarnabyInstance } from '../windowManager'
+import { getMainWindow, getMainWindowTitle, openWorkspaceInNewBarnabyInstance, setRendererStartupReady, maybeRevealMainWindow } from '../windowManager'
 import { WORKSPACE_CONFIG_FILENAME } from '../constants'
 
 export function registerWorkspaceHandlers(
@@ -33,7 +34,6 @@ export function registerWorkspaceHandlers(
   })
 
   ipcMain.handle('agentorchestrator:setWindowTheme', (_evt, theme: 'dark' | 'light') => {
-    const { nativeTheme } = require('electron')
     nativeTheme.themeSource = theme
   })
 
@@ -46,13 +46,11 @@ export function registerWorkspaceHandlers(
   })
 
   ipcMain.handle('agentorchestrator:rendererReady', () => {
-    const { setRendererStartupReady, maybeRevealMainWindow } = require('../windowManager')
     setRendererStartupReady(true)
     maybeRevealMainWindow()
   })
 
   ipcMain.handle('agentorchestrator:writeWorkspaceConfig', async (_evt, folderPath: string, settings?: any) => {
-    const { sanitizeWorkspaceConfigSettings } = require('../workspaceManager')
     const trimmedFolder = typeof folderPath === 'string' ? folderPath.trim() : ''
     if (!trimmedFolder) throw new Error('Workspace folder path is required.')
     const resolvedFolder = resolveWorkspaceRootFromAnyPath(trimmedFolder)

@@ -1,14 +1,12 @@
 import { ipcMain } from 'electron'
-import type { CodexAppServerClient } from '../codexAppServerClient'
+import { CodexAppServerClient } from '../codexAppServerClient'
 
 export function registerFireHarnessHandlers(
-  agentClients: Map<string, any>
+  agentClients: Map<string, any>,
+  forwardEvent: (agentWindowId: string, evt: any) => void
 ) {
   ipcMain.handle('fireharness:connect', async (_evt, agentWindowId: string, options: any) => {
-    const { CodexAppServerClient } = require('../codexAppServerClient')
-    const { forwardEvent } = require('../index') // This might be circular, better pass it in
     const client = new CodexAppServerClient()
-    // Need to handle event forwarding correctly
     return client.connect(options)
   })
 

@@ -9,7 +9,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { app, ipcMain, BrowserWindow } from 'electron'
+import { app, ipcMain, shell, BrowserWindow } from 'electron'
 import type {
   BarnabyPlugin,
   BarnabyPluginHostApi,
@@ -431,7 +431,6 @@ export function getLoadedPlugins() {
 }
 
 export async function openPluginsFolder() {
-  const { shell } = require('electron')
   const homePluginDir = path.join(os.homedir(), '.barnaby', 'plugins')
   fs.mkdirSync(homePluginDir, { recursive: true })
   return shell.openPath(homePluginDir)

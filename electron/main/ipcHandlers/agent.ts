@@ -4,6 +4,7 @@ import {
   getAvailableModels,
   getGeminiAvailableModels
 } from '../modelManager'
+import { getProviderAuthStatus } from '../providerManager'
 import type { AgentClient, ConnectOptions } from '../types'
 
 export function registerAgentHandlers(
@@ -49,7 +50,6 @@ export function registerAgentHandlers(
   })
 
   ipcMain.handle('agentorchestrator:pingProvider', async (_evt, config: any) => {
-    const { getProviderAuthStatus } = require('../providerManager')
     return getProviderAuthStatus(config)
   })
 }

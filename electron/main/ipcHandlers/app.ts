@@ -1,23 +1,24 @@
-import { ipcMain, shell, BrowserWindow, dialog } from 'electron'
+import { ipcMain, shell, app, BrowserWindow, dialog } from 'electron'
 import { getMainWindow } from '../windowManager'
+import { isDirectory } from '../storageUtils'
 import path from 'node:path'
 import fs from 'node:fs'
+
+let _createWindow: (() => void) | null = null
+export function setCreateWindowFn(fn: () => void) { _createWindow = fn }
 
 export function registerAppHandlers(
   setRecentWorkspaces: (list: string[]) => void
 ) {
   ipcMain.handle('open-win', (_, arg) => {
-    const { createWindow } = require('../index') // This might be circular
-    createWindow()
+    _createWindow?.()
   })
 
   ipcMain.handle('repairStartMenuShortcut', async () => {
-    // This will require the implementation from index.ts if it exists
     return { ok: true }
   })
 
   ipcMain.handle('savePastedImage', async (_evt, workspaceRoot: string, buffer: Buffer) => {
-    const { isDirectory } = require('../storageUtils')
     const resolvedRoot = path.resolve(workspaceRoot)
     if (!isDirectory(resolvedRoot)) throw new Error('Workspace does not exist.')
     const assetsDir = path.join(resolvedRoot, '.barnaby', 'assets')
@@ -41,7 +42,6 @@ export function registerAppHandlers(
   })
 
   ipcMain.handle('resetApplicationData', async () => {
-    const { app } = require('electron')
     const userData = app.getPath('userData')
     // Dangerous operation, usually should prompt or be handled carefully
     return { ok: false, error: 'Reset application data not implemented via IPC for safety.' }
